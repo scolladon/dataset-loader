@@ -1,0 +1,35 @@
+---
+name: Build Checks
+on:
+  workflow_call:
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - uses: google/wireit@setup-github-actions-caching/v2
+
+      - name: Setup dependencies, cache and install
+        uses: ./.github/actions/install
+
+      - name: Build plugin
+        run: npm pack
+
+      - name: Unit test
+        run: npm run test:unit
+
+      - name: Integration test
+        run: npm run test:integration
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: coverage-test-report
+          path: coverage

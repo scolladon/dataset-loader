@@ -1,0 +1,99 @@
+---
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+
+permissions:
+  contents: 'read'
+
+# Manage concurrency to stop running jobs and start new ones in case of new commit pushed
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  commit-lint:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Setup dependencies, cache and install
+        uses: ./.github/actions/install
+
+      - name: Lint commits
+        uses: wagoid/commitlint-github-action@v6
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
+        continue-on-error: true
+
+  pull-request-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lint PR
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  npm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Setup dependencies, cache and install
+        uses: ./.github/actions/install
+
+      - name: Check outdated dependencies
+        run: npm outdated
+
+      - name: Audit dependencies
+        run: npm audit
+
+  megalinter:
+    runs-on: ubuntu-latest
+    steps:
+      # Git Checkout
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      # MegaLinter
+      - name: MegaLinter
+        # You can override MegaLinter flavor used to have faster performances
+        # More info at https://megalinter.io/latest/flavors/
+        uses: oxsecurity/megalinter/flavors/javascript@v9
+        env:
+          # All available variables are described in documentation
+          # https://megalinter.io/latest/config-file/
+          APPLY_FIXES: all
+          VALIDATE_ALL_CODEBASE: true
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: megalinter-reports
+          path: |
+            megalinter-reports
+            mega-linter.log
+
+  build:
+    uses: ./.github/workflows/reusable-build.yml
+    secrets: inherit

@@ -1,0 +1,266 @@
+{
+  "name": "crma-data-loader",
+  "version": "0.0.0",
+  "description": "SF CLI plugin to load Event Log Files and SObject data into CRMA datasets",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "author": "Sébastien Colladon (colladonsebastien@gmail.com)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scolladon/crma-data-loader.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "sf",
+    "sf-plugin",
+    "crma",
+    "elf",
+    "event-log-files",
+    "analytics",
+    "dataset"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "oclif": {
+    "commands": "./lib/commands",
+    "bin": "sf",
+    "topicSeparator": " ",
+    "flexibleTaxonomy": true,
+    "topics": {
+      "crma": {
+        "description": "CRMA data loading commands"
+      }
+    },
+    "devPlugins": [
+      "@oclif/plugin-help"
+    ]
+  },
+  "scripts": {
+    "build": "wireit",
+    "clean": "wireit",
+    "clean:build": "wireit",
+    "clean:package-manager": "wireit",
+    "compile": "wireit",
+    "lint": "wireit",
+    "lint:fix": "wireit",
+    "lint:staged": "wireit",
+    "lint:dependencies": "wireit",
+    "lint:duplicates": "wireit",
+    "postpack": "shx rm -f oclif.manifest.json && shx sed -i 'blob/v[^/]*/' 'blob/main/' README.md",
+    "prepack": "wireit",
+    "prepare": "husky",
+    "prepublishOnly": "npm shrinkwrap",
+    "test": "wireit",
+    "test:build": "wireit",
+    "test:unit": "wireit",
+    "test:unit:coverage": "wireit",
+    "test:integration": "wireit",
+    "test:watch": "vitest"
+  },
+  "wireit": {
+    "build": {
+      "dependencies": [
+        "compile",
+        "lint"
+      ]
+    },
+    "clean": {
+      "command": "shx rm -rf 'reports/*' oclif.manifest.json package.tgz 'crma-data-loader-*.tgz'",
+      "files": [
+        "lib",
+        "reports/*",
+        "oclif.manifest.json",
+        "package.tgz",
+        "crma-data-loader-*.tgz"
+      ],
+      "dependencies": [
+        "clean:build"
+      ]
+    },
+    "clean:build": {
+      "command": "shx rm -rf lib",
+      "files": [
+        "lib/*"
+      ]
+    },
+    "clean:package-manager": {
+      "command": "shx rm -rf node_modules tsconfig.tsbuildinfo .wireit",
+      "files": [
+        "node_modules/*"
+      ]
+    },
+    "compile": {
+      "command": "tsc -p . --pretty --incremental",
+      "files": [
+        "src/**/*.ts",
+        "**/tsconfig.json",
+        "messages/**"
+      ],
+      "output": [
+        "lib/**",
+        "*.tsbuildinfo"
+      ],
+      "clean": "if-file-deleted"
+    },
+    "lint": {
+      "command": "npx @biomejs/biome check --error-on-warnings --no-errors-on-unmatched src test",
+      "files": [
+        "src/**",
+        "test/**/*.ts",
+        "messages/**",
+        "**/biome.json",
+        "**/tsconfig.json"
+      ],
+      "output": []
+    },
+    "lint:fix": {
+      "command": "npx @biomejs/biome check --error-on-warnings --no-errors-on-unmatched src test --fix --unsafe",
+      "files": [
+        "src/**",
+        "test/**/*.ts",
+        "messages/**",
+        "**/biome.json",
+        "**/tsconfig.json"
+      ],
+      "output": []
+    },
+    "lint:staged": {
+      "command": "npx @biomejs/biome check --error-on-warnings --no-errors-on-unmatched --staged src test",
+      "files": [
+        "src/**",
+        "test/**/*.ts",
+        "messages/**",
+        "**/biome.json",
+        "**/tsconfig.json"
+      ],
+      "output": []
+    },
+    "lint:dependencies": {
+      "command": "knip",
+      "files": [
+        "src/**/*.ts",
+        "test/**/*.ts",
+        "messages/**",
+        "**/tsconfig.json",
+        "knip.config.ts"
+      ],
+      "output": [],
+      "dependencies": [
+        "lint"
+      ]
+    },
+    "lint:duplicates": {
+      "command": "npx jscpd src",
+      "files": [
+        "src/**/*.ts"
+      ],
+      "output": [
+        "reports/cpd/**"
+      ],
+      "dependencies": [
+        "lint"
+      ]
+    },
+    "prepack": {
+      "command": "oclif manifest && oclif readme",
+      "files": [
+        "src/commands/**/*.ts",
+        "messages/**",
+        "README.md"
+      ],
+      "dependencies": [
+        "build"
+      ],
+      "output": [
+        "README.md"
+      ],
+      "clean": false
+    },
+    "test": {
+      "dependencies": [
+        "build",
+        "lint",
+        "test:unit",
+        "test:integration"
+      ]
+    },
+    "test:build": {
+      "command": "npm install && npm pack && npm run test",
+      "dependencies": [
+        "clean",
+        "clean:package-manager"
+      ]
+    },
+    "test:unit": {
+      "command": "vitest run test/unit/",
+      "files": [
+        "src/**/*.ts",
+        "test/unit/**/*.test.ts",
+        "vitest.config.ts",
+        "tsconfig.json"
+      ],
+      "output": []
+    },
+    "test:unit:coverage": {
+      "command": "vitest run test/unit/ --coverage",
+      "files": [
+        "src/**/*.ts",
+        "test/unit/**/*.test.ts",
+        "vitest.config.ts",
+        "tsconfig.json"
+      ],
+      "output": [
+        "coverage/**"
+      ]
+    },
+    "test:integration": {
+      "command": "vitest run test/nut/",
+      "files": [
+        "src/**/*.ts",
+        "test/nut/**/*.nut.ts",
+        "vitest.config.ts",
+        "tsconfig.json"
+      ],
+      "output": []
+    }
+  },
+  "dependencies": {
+    "@salesforce/core": "^8.0.0",
+    "@salesforce/sf-plugins-core": "^12.0.0",
+    "cli-progress": "^3.12.0",
+    "csv-parse": "^5.6.0",
+    "csv-stringify": "^6.5.0",
+    "p-limit": "^6.2.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.4",
+    "@commitlint/config-conventional": "^20.4.2",
+    "@oclif/plugin-help": "^6.2.37",
+    "@salesforce/cli-plugins-testkit": "^5.3.41",
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^22.0.0",
+    "@types/sinon": "^21.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "husky": "^9.1.7",
+    "knip": "^5.84.1",
+    "oclif": "^4.22.79",
+    "shx": "^0.4.0",
+    "sinon": "^21.0.2",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "wireit": "^0.14.12"
+  },
+  "files": [
+    "/lib",
+    "/messages",
+    "/oclif.manifest.json",
+    "/npm-shrinkwrap.json",
+    "/oclif.lock"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,28 @@
+---
+name: Published release communication
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: apexskier/github-release-commenter@v1
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          comment-template: |
+            Shipped in [release `{release_tag}`]({release_link}).
+            Version `{release_tag}` will be assigned to the `latest` npm channel soon
+            Install it using either `{release_tag}` or the `latest-rc` npm channel
+            ```sh
+            $ sf plugins install crma-data-loader@latest-rc
+            # Or
+            $ sf plugins install crma-data-loader@{release_tag}
+            ```
