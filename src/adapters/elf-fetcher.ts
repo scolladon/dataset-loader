@@ -1,7 +1,12 @@
-import { parse } from 'csv-parse/sync'
-import { stringify } from 'csv-stringify/sync'
-import { type SfClient, type QueryResult } from '../core/sf-client.js'
-import { type FetchResult } from '../types.js'
+import { type Readable } from 'node:stream'
+import { Watermark } from '../domain/watermark.js'
+import {
+  type FetchPort,
+  type FetchResult,
+  type QueryResult,
+  type SalesforcePort,
+} from '../ports/types.js'
+import { queryPages } from './query-pages.js'
 
 interface EventLogFileRecord {
   Id: string
@@ -9,48 +14,60 @@ interface EventLogFileRecord {
   LogFile: string
 }
 
-export async function fetchElf(
-  client: SfClient,
-  eventType: string,
-  interval: string,
-  watermark?: string
-): Promise<FetchResult | null> {
-  const watermarkClause = watermark ? ` AND LogDate > ${watermark}` : ''
-  const soql = `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE EventType = '${eventType}' AND Interval = '${interval}'${watermarkClause} ORDER BY LogDate ASC`
-
-  let result: QueryResult<EventLogFileRecord> = await client.query(soql)
-  const records: EventLogFileRecord[] = [...result.records]
-
-  while (!result.done && result.nextRecordsUrl) {
-    result = await client.queryMore(result.nextRecordsUrl)
-    records.push(...result.records)
-  }
-
-  if (records.length === 0) return null
-
-  const blobs = await Promise.all(
-    records.map((record) =>
-      client.getBlob(`/services/data/v${client.apiVersion}/sobjects/EventLogFile/${record.Id}/LogFile`)
-    )
-  )
-
-  let header: string[] | undefined
-  const allDataRows: string[][] = []
-
-  for (const blob of blobs) {
-    const parsed: string[][] = parse(blob, { relax_column_count: true })
-    if (parsed.length === 0) continue
-
-    if (!header) {
-      header = parsed[0]
+export class ElfFetcher implements FetchPort {
+  constructor(
+    private readonly sfPort: SalesforcePort,
+    private readonly eventType: string,
+    private readonly interval: string
+  ) {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(eventType)) {
+      throw new Error(`Invalid eventType: '${eventType}'`)
     }
-    allDataRows.push(...parsed.slice(1))
+    if (!['Daily', 'Hourly'].includes(interval)) {
+      throw new Error(`Invalid interval: '${interval}'`)
+    }
   }
 
-  if (!header) return null
+  async fetch(watermark?: Watermark): Promise<FetchResult> {
+    const watermarkClause = watermark
+      ? ` AND LogDate > ${watermark.toSoqlLiteral()}`
+      : ''
+    const soql = `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE EventType = '${this.eventType}' AND Interval = '${this.interval}'${watermarkClause} ORDER BY LogDate ASC`
 
-  const csv = stringify([header, ...allDataRows], { quoted: true, quoted_empty: true }).trimEnd()
-  const newWatermark = records[records.length - 1].LogDate
+    const firstPage: QueryResult<EventLogFileRecord> =
+      await this.sfPort.query(soql)
+    const records: EventLogFileRecord[] = []
+    for await (const page of queryPages(firstPage, (url: string) =>
+      this.sfPort.queryMore<EventLogFileRecord>(url)
+    )) {
+      for (const record of page.records) {
+        records.push(record)
+      }
+    }
 
-  return { csv, newWatermark }
+    if (records.length === 0) {
+      return {
+        streams: (async function* () {
+          /* empty */
+        })(),
+        totalHint: 0,
+        watermark: () => undefined,
+      }
+    }
+
+    const sfPort = this.sfPort
+    const blobUrl = (record: EventLogFileRecord): string =>
+      `/services/data/v${sfPort.apiVersion}/sobjects/EventLogFile/${record.Id}/LogFile`
+
+    return {
+      streams: (async function* (): AsyncGenerator<Readable> {
+        for (const record of records) {
+          yield await sfPort.getBlobStream(blobUrl(record))
+        }
+      })(),
+      totalHint: records.length,
+      watermark: () =>
+        Watermark.fromString(records[records.length - 1].LogDate),
+    }
+  }
 }

@@ -1,14 +1,33 @@
-import { SfCommand, Flags } from '@salesforce/sf-plugins-core'
 import { Org } from '@salesforce/core'
-import { SfClient } from '../../core/sf-client.js'
-import { parseConfig, resolveConfig } from '../../core/config-loader.js'
-import { readState, writeState } from '../../core/state-manager.js'
-import { augment } from '../../core/augmenter.js'
-import { group } from '../../core/grouper.js'
-import { fetchElf } from '../../adapters/elf-fetcher.js'
-import { fetchSObject } from '../../adapters/sobject-fetcher.js'
-import { upload } from '../../adapters/uploader.js'
-import { type ConfigEntry, type FetchResult, type GroupInput, type ResolvedEntry, watermarkKey, groupKey } from '../../types.js'
+import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
+import {
+  type ConfigEntry,
+  parseConfig,
+  resolveConfig,
+} from '../../adapters/config-loader.js'
+import { ElfFetcher } from '../../adapters/elf-fetcher.js'
+import { ProgressReporter } from '../../adapters/progress-reporter.js'
+import { SalesforceClient } from '../../adapters/sf-client.js'
+import { SObjectFetcher } from '../../adapters/sobject-fetcher.js'
+import { FileStateManager } from '../../adapters/state-manager.js'
+import { UploadSinkFactory } from '../../adapters/upload-sink.js'
+import { buildAuditChecks, runAudit } from '../../domain/auditor.js'
+import { DatasetKey } from '../../domain/dataset-key.js'
+import { executePipeline, type PipelineEntry } from '../../domain/pipeline.js'
+import { WatermarkKey } from '../../domain/watermark-key.js'
+import {
+  type CreateUploaderPort,
+  type LoggerPort,
+  type Operation,
+  type SalesforcePort,
+} from '../../ports/types.js'
+
+function entryLabel(entry: ConfigEntry): string {
+  if (entry.name) return entry.name
+  return entry.type === 'elf'
+    ? `elf:${entry.eventType}`
+    : `sobject:${entry.sobject}`
+}
 
 export interface CrmaLoadResult {
   entriesProcessed: number
@@ -18,7 +37,8 @@ export interface CrmaLoadResult {
 }
 
 export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
-  public static readonly summary = 'Load Event Log Files and SObject data into CRMA datasets'
+  public static readonly summary =
+    'Load Event Log Files and SObject data into CRMA datasets'
   public static readonly examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --config-file my-config.json --dry-run',
@@ -43,230 +63,147 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       summary: 'Show plan without executing',
       default: false,
     }),
-    entry: Flags.integer({
-      summary: 'Process only entry at this 0-based index',
+    entry: Flags.string({
+      summary: 'Process only the entry with this name',
     }),
   }
 
   public async run(): Promise<CrmaLoadResult> {
     const { flags } = await this.parse(CrmaLoad)
-    const configPath = flags['config-file']
-    const statePath = flags['state-file']
-    const audit = flags['audit']
-    const dryRun = flags['dry-run']
-    const entryIndex = flags['entry']
+    const sfPorts = new Map<string, SalesforcePort>()
 
-    const clientsByOrg = new Map<string, SfClient>()
-
-    const getClient = async (orgAlias: string): Promise<SfClient> => {
-      if (!clientsByOrg.has(orgAlias)) {
+    const getSfPort = async (orgAlias: string): Promise<SalesforcePort> => {
+      if (!sfPorts.has(orgAlias)) {
         const org = await Org.create({ aliasOrUsername: orgAlias })
-        const connection = org.getConnection()
-        clientsByOrg.set(orgAlias, new SfClient(connection))
+        sfPorts.set(orgAlias, new SalesforceClient(org.getConnection()))
       }
-      return clientsByOrg.get(orgAlias)!
+      return sfPorts.get(orgAlias)!
     }
 
-    let resolvedEntries: ResolvedEntry[]
+    const logger: LoggerPort = {
+      info: msg => this.log(msg),
+      warn: msg => this.warn(msg),
+      debug: msg => this.debug(msg),
+    }
+
+    let resolvedEntries
     try {
-      const config = await parseConfig(configPath)
+      const config = await parseConfig(flags['config-file'])
       const allOrgs = new Set<string>()
-      for (const entry of config.entries) {
-        allOrgs.add(entry.sourceOrg)
-        allOrgs.add(entry.analyticOrg)
+      for (const e of config.entries) {
+        allOrgs.add(e.sourceOrg)
+        allOrgs.add(e.analyticOrg)
       }
-      await Promise.all([...allOrgs].map((alias) => getClient(alias)))
-      resolvedEntries = await resolveConfig(config, clientsByOrg)
+      await Promise.all([...allOrgs].map(alias => getSfPort(alias)))
+      resolvedEntries = await resolveConfig(config, sfPorts)
     } catch (error) {
-      this.error(`Config loading failed: ${error instanceof Error ? error.message : error}`)
+      this.error(
+        `Config loading failed: ${error instanceof Error ? error.message : error}`
+      )
     }
 
-    if (entryIndex !== undefined) {
-      resolvedEntries = resolvedEntries.filter((e) => e.index === entryIndex)
+    if (flags['entry'] !== undefined) {
+      const hasAnyName = resolvedEntries.some(e => e.entry.name)
+      resolvedEntries = resolvedEntries.filter(
+        e => e.entry.name === flags['entry']
+      )
       if (resolvedEntries.length === 0) {
-        this.error(`Entry index ${entryIndex} not found`)
+        const hint = hasAnyName
+          ? ''
+          : ' Ensure your config entries have a "name" field.'
+        this.error(`Entry '${flags['entry']}' not found.${hint}`)
       }
     }
 
-    if (audit) {
-      return this.runAudit(resolvedEntries, clientsByOrg)
+    if (flags['audit']) {
+      const auditEntries = resolvedEntries.map(({ entry }) => ({
+        type: entry.type,
+        sourceOrg: entry.sourceOrg,
+        analyticOrg: entry.analyticOrg,
+      }))
+      logger.info('Audit — pre-flight checks:')
+      const checks = buildAuditChecks(auditEntries, sfPorts)
+      const auditResult = await runAudit(checks, logger)
+      if (!auditResult.passed) process.exitCode = 2
+      return {
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: auditResult.passed ? 0 : 1,
+        groupsUploaded: 0,
+      }
     }
 
-    const state = await readState(statePath)
+    const state = new FileStateManager(flags['state-file'])
+    const watermarks = await state.read()
 
-    if (dryRun) {
+    if (flags['dry-run']) {
       this.log('Dry run — planned entries:')
-      for (const { entry, index } of resolvedEntries) {
-        const wk = watermarkKey(entry)
-        const wm = state.watermarks[wk] ?? '(none)'
-        this.log(`  [${index}] ${entry.type} → ${entry.analyticOrg}:${entry.dataset} (watermark: ${wm})`)
+      for (const { entry } of resolvedEntries) {
+        const wk = WatermarkKey.fromEntry(entry)
+        const wm = watermarks.get(wk)?.toString() ?? '(none)'
+        this.log(
+          `  ${entryLabel(entry)} → ${entry.analyticOrg}:${entry.dataset} (watermark: ${wm})`
+        )
       }
-      return { entriesProcessed: 0, entriesSkipped: 0, entriesFailed: 0, groupsUploaded: 0 }
+      return {
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      }
     }
 
-    // Fetch phase: all entries in parallel
-    const fetchResults = await Promise.allSettled(
-      resolvedEntries.map(async ({ entry, index, augmentColumns }) => {
-        const client = await getClient(entry.sourceOrg)
-        const wk = watermarkKey(entry)
-        const wm = state.watermarks[wk]
-
-        let result: FetchResult | null
-        if (entry.type === 'elf') {
-          result = await fetchElf(client, entry.eventType, entry.interval, wm)
-        } else {
-          result = await fetchSObject(client, entry.sobject, entry.fields, entry.dateField ?? 'LastModifiedDate', wm, entry.where)
+    const pipelineEntries: PipelineEntry[] = resolvedEntries.map(
+      ({ entry, index, augmentColumns }) => {
+        const srcPort = sfPorts.get(entry.sourceOrg)!
+        return {
+          index,
+          label: entryLabel(entry),
+          watermarkKey: WatermarkKey.fromEntry(entry),
+          datasetKey: DatasetKey.fromEntry(entry),
+          operation: entry.operation as Operation,
+          augmentColumns,
+          fetcher:
+            entry.type === 'elf'
+              ? new ElfFetcher(srcPort, entry.eventType, entry.interval)
+              : new SObjectFetcher(
+                  srcPort,
+                  entry.sobject,
+                  entry.fields,
+                  entry.dateField!,
+                  entry.where,
+                  entry.limit
+                ),
         }
-
-        if (!result) {
-          this.log(`  [${index}] No new records, skipping`)
-          return null
-        }
-
-        const augmentedCsv = augment(result.csv, augmentColumns)
-        return { entry, index, csv: augmentedCsv, newWatermark: result.newWatermark }
-      })
+      }
     )
 
-    // Collect successful fetches
-    const successfulFetches: { entry: ConfigEntry; index: number; csv: string; newWatermark: string }[] = []
-    let entriesFailed = 0
-    let entriesSkipped = 0
-
-    for (const result of fetchResults) {
-      if (result.status === 'rejected') {
-        entriesFailed++
-        this.warn(`Fetch failed: ${result.reason instanceof Error ? result.reason.message : 'unknown error'}`)
-      } else if (result.value === null) {
-        entriesSkipped++
-      } else {
-        successfulFetches.push(result.value)
-      }
+    const createUploader: CreateUploaderPort = {
+      create(dataset, operation) {
+        const factory = new UploadSinkFactory(sfPorts.get(dataset.org)!)
+        return factory.create(dataset, operation)
+      },
     }
 
-    if (successfulFetches.length === 0) {
-      this.log('No data to upload')
-      return { entriesProcessed: 0, entriesSkipped, entriesFailed, groupsUploaded: 0 }
-    }
+    const result = await executePipeline({
+      entries: pipelineEntries,
+      watermarks,
+      createUploader,
+      state,
+      progress: new ProgressReporter(),
+      logger,
+    })
 
-    // Group phase
-    const groupInputs: GroupInput[] = successfulFetches.map((f) => ({
-      key: groupKey(f.entry),
-      csv: f.csv,
-      operation: f.entry.operation ?? 'Append',
-    }))
-
-    const groups = group(groupInputs)
-
-    // Upload phase
-    let groupsUploaded = 0
-    const uploadResults = await Promise.allSettled(
-      [...groups.entries()].map(async ([key, { csv, operation }]) => {
-        const [analyticOrg] = key.split(':')
-        const dataset = key.slice(analyticOrg.length + 1)
-        const client = await getClient(analyticOrg)
-        await upload(client, dataset, csv, operation)
-        return key
-      })
+    this.log(
+      `Done: ${result.entriesProcessed} processed, ${result.entriesSkipped} skipped, ${result.entriesFailed} failed, ${result.groupsUploaded} groups uploaded`
     )
+    if (result.exitCode > 0) process.exitCode = result.exitCode
 
-    // Update watermarks for successfully uploaded groups
-    const uploadedKeys = new Set<string>()
-    for (const result of uploadResults) {
-      if (result.status === 'fulfilled') {
-        uploadedKeys.add(result.value)
-        groupsUploaded++
-      } else {
-        entriesFailed++
-        this.warn(`Upload failed: ${result.reason instanceof Error ? result.reason.message : 'unknown error'}`)
-      }
+    return {
+      entriesProcessed: result.entriesProcessed,
+      entriesSkipped: result.entriesSkipped,
+      entriesFailed: result.entriesFailed,
+      groupsUploaded: result.groupsUploaded,
     }
-
-    // Only update watermarks for entries whose groups uploaded successfully
-    for (const fetch of successfulFetches) {
-      const gk = groupKey(fetch.entry)
-      if (uploadedKeys.has(gk)) {
-        state.watermarks[watermarkKey(fetch.entry)] = fetch.newWatermark
-      }
-    }
-
-    await writeState(statePath, state)
-
-    const entriesProcessed = successfulFetches.filter((f) => uploadedKeys.has(groupKey(f.entry))).length
-    this.log(`Done: ${entriesProcessed} processed, ${entriesSkipped} skipped, ${entriesFailed} failed, ${groupsUploaded} groups uploaded`)
-
-    if (entriesFailed > 0 && entriesProcessed > 0) process.exitCode = 1
-    if (entriesFailed > 0 && entriesProcessed === 0) process.exitCode = 2
-
-    return { entriesProcessed, entriesSkipped, entriesFailed, groupsUploaded }
-  }
-
-  private async runAudit(
-    resolvedEntries: ResolvedEntry[],
-    clientsByOrg: Map<string, SfClient>
-  ): Promise<CrmaLoadResult> {
-    this.log('Audit — pre-flight checks:')
-
-    const uniqueOrgs = new Set<string>()
-    for (const { entry } of resolvedEntries) {
-      uniqueOrgs.add(entry.sourceOrg)
-      uniqueOrgs.add(entry.analyticOrg)
-    }
-
-    const authResults = await Promise.allSettled(
-      [...uniqueOrgs].map(async (orgAlias) => {
-        const client = clientsByOrg.get(orgAlias)
-        if (!client) return { orgAlias, passed: false, message: 'no authenticated connection' }
-
-        try {
-          await client.query('SELECT Id FROM Organization LIMIT 1')
-          return { orgAlias, passed: true, message: 'auth and connectivity OK' }
-        } catch (err) {
-          return { orgAlias, passed: false, message: err instanceof Error ? err.message : String(err) }
-        }
-      })
-    )
-
-    let allPassed = true
-    for (const result of authResults) {
-      if (result.status === 'rejected') {
-        allPassed = false
-        continue
-      }
-      const { orgAlias, passed, message } = result.value
-      this.log(`  [${passed ? 'PASS' : 'FAIL'}] ${orgAlias}: ${message}`)
-      if (!passed) allPassed = false
-    }
-
-    const analyticOrgs = new Set(resolvedEntries.map(({ entry }) => entry.analyticOrg))
-    const insightsResults = await Promise.allSettled(
-      [...analyticOrgs].map(async (orgAlias) => {
-        const client = clientsByOrg.get(orgAlias)
-        if (!client) return null
-
-        try {
-          await client.query("SELECT Id FROM InsightsExternalData LIMIT 1")
-          return { orgAlias, passed: true, message: 'InsightsExternalData access OK' }
-        } catch (err) {
-          return { orgAlias, passed: false, message: `InsightsExternalData access — ${err instanceof Error ? err.message : err}` }
-        }
-      })
-    )
-
-    for (const result of insightsResults) {
-      if (result.status === 'rejected') {
-        allPassed = false
-        continue
-      }
-      if (!result.value) continue
-      const { orgAlias, passed, message } = result.value
-      this.log(`  [${passed ? 'PASS' : 'FAIL'}] ${orgAlias}: ${message}`)
-      if (!passed) allPassed = false
-    }
-
-    this.log(allPassed ? 'All checks passed' : 'Some checks failed')
-    if (!allPassed) process.exitCode = 2
-
-    return { entriesProcessed: 0, entriesSkipped: 0, entriesFailed: allPassed ? 0 : 1, groupsUploaded: 0 }
   }
 }

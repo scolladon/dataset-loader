@@ -1,0 +1,1372 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import { join } from 'node:path'
+import { MockTestOrgData, TestContext } from '@salesforce/core/testSetup'
+import { ensureJsonMap, ensureString } from '@salesforce/ts-types'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import CrmaLoad from '../../src/commands/crma/load.js'
+import {
+  FakeConnectionBuilder,
+  type RequestHandler,
+} from '../fixtures/fake-connection-builder.js'
+
+const OCLIF_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const
+
+function captureSignalListeners(): Map<string, NodeJS.SignalsListener[]> {
+  const snapshot = new Map<string, NodeJS.SignalsListener[]>()
+  for (const signal of OCLIF_SIGNALS) {
+    snapshot.set(signal, [
+      ...(process.listeners(signal) as NodeJS.SignalsListener[]),
+    ])
+  }
+  return snapshot
+}
+
+function removeLeakedSignalListeners(
+  before: Map<string, NodeJS.SignalsListener[]>
+): void {
+  for (const signal of OCLIF_SIGNALS) {
+    const previous = new Set(before.get(signal) ?? [])
+    for (const listener of process.listeners(
+      signal
+    ) as NodeJS.SignalsListener[]) {
+      if (!previous.has(listener)) {
+        process.removeListener(signal, listener)
+      }
+    }
+  }
+}
+
+async function runCommand(argv: string[]): Promise<unknown> {
+  const before = captureSignalListeners()
+  try {
+    return await CrmaLoad.run(argv, process.cwd())
+  } finally {
+    removeLeakedSignalListeners(before)
+  }
+}
+
+function elfEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    type: 'elf' as const,
+    sourceOrg: 'src-org',
+    analyticOrg: 'ana-org',
+    dataset: 'DS',
+    eventType: 'Login',
+    interval: 'Daily' as const,
+    ...overrides,
+  }
+}
+
+function sobjectEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    type: 'sobject' as const,
+    sourceOrg: 'src-org',
+    analyticOrg: 'ana-org',
+    dataset: 'DS2',
+    sobject: 'Account',
+    fields: ['Id', 'Name'],
+    dateField: 'LastModifiedDate',
+    ...overrides,
+  }
+}
+
+function csvContent(headers: string[], rows: string[][]): string {
+  const headerLine = headers.map(h => `"${h}"`).join(',')
+  const dataLines = rows.map(r => r.map(c => `"${c}"`).join(','))
+  return [headerLine, ...dataLines].join('\n') + '\n'
+}
+
+function makeConfigJson(entries: Record<string, unknown>[]): string {
+  return JSON.stringify({ entries })
+}
+
+interface TempFiles {
+  dir: string
+  configPath: string
+  statePath: string
+}
+
+function createTempFiles(configContent: string): TempFiles {
+  const dir = mkdtempSync(join(os.tmpdir(), 'nut-'))
+  const configPath = join(dir, 'config.json')
+  const statePath = join(dir, 'state.json')
+  writeFileSync(configPath, configContent)
+  return { dir, configPath, statePath }
+}
+
+function readState(statePath: string): Record<string, string> {
+  try {
+    const raw = JSON.parse(readFileSync(statePath, 'utf-8'))
+    return raw.watermarks ?? {}
+  } catch {
+    return {}
+  }
+}
+
+describe('CrmaLoad NUT', () => {
+  const $$ = new TestContext({ setup: false })
+  const sourceOrg = new MockTestOrgData('src-test-id', { username: 'src-org' })
+  const analyticOrg = new MockTestOrgData('ana-test-id', {
+    username: 'ana-org',
+  })
+  const secondSourceOrg = new MockTestOrgData('src2-test-id', {
+    username: 'src2-org',
+  })
+  const secondAnalyticOrg = new MockTestOrgData('ana2-test-id', {
+    username: 'ana2-org',
+  })
+
+  let savedExitCode: number | undefined
+  let tmp: TempFiles | undefined
+
+  beforeEach(async () => {
+    $$.init()
+    await $$.stubAuths(
+      sourceOrg,
+      analyticOrg,
+      secondSourceOrg,
+      secondAnalyticOrg
+    )
+    $$.stubAliases({
+      'src-org': sourceOrg.username,
+      'ana-org': analyticOrg.username,
+      'src2-org': secondSourceOrg.username,
+      'ana2-org': secondAnalyticOrg.username,
+    })
+
+    savedExitCode = process.exitCode
+    process.exitCode = undefined
+  })
+
+  afterEach(() => {
+    process.exitCode = savedExitCode
+    globalThis.fetch = originalFetch
+    $$.restore()
+    if (tmp) {
+      rmSync(tmp.dir, { recursive: true, force: true })
+      tmp = undefined
+    }
+  })
+
+  // ── Response factories ──────────────────────────────────────────────
+
+  function defaultOrgResponse() {
+    return {
+      totalSize: 1,
+      done: true,
+      records: [{ Id: '00D000000000001', Name: 'TestOrg' }],
+    }
+  }
+
+  function defaultElfQueryResponse(logDates: string[]) {
+    return {
+      totalSize: logDates.length,
+      done: true,
+      records: logDates.map((d, i) => ({
+        Id: `07l000000000${String(i).padStart(3, '0')}`,
+        LogDate: d,
+        LogFile: `/logfile${i}`,
+      })),
+    }
+  }
+
+  function defaultSObjectQueryResponse(
+    records: Record<string, unknown>[],
+    done = true,
+    nextRecordsUrl?: string
+  ) {
+    return { totalSize: records.length, done, nextRecordsUrl, records }
+  }
+
+  function defaultInsightsQueryResponse() {
+    return { totalSize: 0, done: true, records: [] }
+  }
+
+  function defaultCreateResponse(prefix: string) {
+    return { id: `${prefix}000000000001` }
+  }
+
+  // ── Connection bridge ───────────────────────────────────────────────
+
+  const originalFetch = globalThis.fetch
+
+  function applyConnection(handler: RequestHandler): void {
+    $$.fakeConnectionRequest = request => {
+      const reqMap = ensureJsonMap(request)
+      const url = ensureString(reqMap.url)
+      const method = ensureString(reqMap.method ?? 'GET')
+      const body = reqMap.body as string | undefined
+      const value = handler(url, method, body)
+      return Promise.resolve(value) as Promise<
+        ReturnType<typeof $$.fakeConnectionRequest>
+      >
+    }
+    // Mock fetch for getBlobStream (true HTTP streaming bypasses jsforce)
+    globalThis.fetch = async (input: string | URL | Request) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+      const path = new URL(url).pathname
+      const value = handler(path, 'GET', undefined)
+      const text = typeof value === 'string' ? value : JSON.stringify(value)
+      return new Response(text, { status: 200 })
+    }
+  }
+
+  // ── Scenario helpers ────────────────────────────────────────────────
+
+  function orgOnlyConnection(): void {
+    applyConnection(
+      new FakeConnectionBuilder().withFallback(defaultOrgResponse()).build()
+    )
+  }
+
+  function elfPipeline(elfResponse: unknown, elfCsv: string): void {
+    applyConnection(
+      new FakeConnectionBuilder()
+        .onQuery('Organization')
+        .returns(defaultOrgResponse())
+        .onQuery('EventLogFile')
+        .excluding('InsightsExternalData')
+        .returns(elfResponse)
+        .onGet('/sobjects/EventLogFile/')
+        .including('/LogFile')
+        .returns(elfCsv)
+        .onQuery('InsightsExternalData')
+        .including('EdgemartAlias')
+        .returns(defaultInsightsQueryResponse())
+        .onPost('InsightsExternalData')
+        .excluding('Part')
+        .returns(defaultCreateResponse('0Ib'))
+        .onPost('InsightsExternalDataPart')
+        .returns(defaultCreateResponse('0Ic'))
+        .onPatch('InsightsExternalData')
+        .returns({ success: true })
+        .build()
+    )
+  }
+
+  function sobjectPipeline(
+    sobjectName: string,
+    sobjectResponse: unknown
+  ): void {
+    applyConnection(
+      new FakeConnectionBuilder()
+        .onQuery('Organization')
+        .returns(defaultOrgResponse())
+        .onQuery(sobjectName)
+        .returns(sobjectResponse)
+        .onQuery('InsightsExternalData')
+        .including('EdgemartAlias')
+        .returns(defaultInsightsQueryResponse())
+        .onPost('InsightsExternalData')
+        .excluding('Part')
+        .returns(defaultCreateResponse('0Ib'))
+        .onPost('InsightsExternalDataPart')
+        .returns(defaultCreateResponse('0Ic'))
+        .onPatch('InsightsExternalData')
+        .returns({ success: true })
+        .build()
+    )
+  }
+
+  // ── Tests ───────────────────────────────────────────────────────────
+
+  describe('help output', () => {
+    it('given command class, when inspecting summary, then summary describes the command purpose', () => {
+      // Act
+      const sut = CrmaLoad.summary
+
+      // Assert
+      expect(sut).toBeDefined()
+      expect(sut).toContain('Load')
+      expect(sut).toContain('CRMA')
+    })
+
+    it('given command class, when inspecting flags, then all expected flags are defined', () => {
+      // Act
+      const sut = CrmaLoad.flags
+
+      // Assert
+      expect(sut).toHaveProperty('config-file')
+      expect(sut).toHaveProperty('state-file')
+      expect(sut).toHaveProperty('audit')
+      expect(sut).toHaveProperty('dry-run')
+      expect(sut).toHaveProperty('entry')
+    })
+
+    it('given command class, when inspecting examples, then examples are provided', () => {
+      // Act
+      const sut = CrmaLoad.examples
+
+      // Assert
+      expect(sut).toBeDefined()
+      expect(sut.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('command validation', () => {
+    it('given invalid org alias in config, when running command, then produces config loading error', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([elfEntry({ sourceOrg: 'org:with:colons' })])
+      )
+
+      // Act
+      const sut = runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      await expect(sut).rejects.toThrow('Config loading failed')
+    })
+
+    it('given invalid config JSON file, when running command, then produces config loading error', async () => {
+      // Arrange
+      tmp = createTempFiles('{ not valid json }}}')
+
+      // Act
+      const sut = runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      await expect(sut).rejects.toThrow('Config loading failed')
+    })
+
+    it('given nonexistent config file path, when running command, then produces config loading error', async () => {
+      // Act
+      const sut = runCommand(['--config-file', '/nonexistent/path/config.json'])
+
+      // Assert
+      await expect(sut).rejects.toThrow('Config loading failed')
+    })
+
+    it('given valid config with entries, when specifying nonexistent entry name, then produces entry not found error', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      orgOnlyConnection()
+
+      // Act
+      const sut = runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--entry',
+        'nonexistent',
+      ])
+
+      // Assert
+      await expect(sut).rejects.toThrow(
+        'Entry \'nonexistent\' not found. Ensure your config entries have a "name" field.'
+      )
+    })
+  })
+
+  describe('dry-run', () => {
+    it('given valid config with entries, when running with dry-run flag, then returns zero counts without executing', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      orgOnlyConnection()
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--dry-run',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given existing watermark in state file, when running with dry-run, then returns zero counts preserving state', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      writeFileSync(
+        tmp.statePath,
+        JSON.stringify({
+          watermarks: { 'src-org:elf:Login:Daily': '2026-03-01T00:00:00.000Z' },
+        })
+      )
+      orgOnlyConnection()
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--dry-run',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given valid config with multiple named entries, when running with dry-run and entry filter by name, then returns zero counts for filtered entry', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry({ name: 'login-events', dataset: 'DS1' }),
+          sobjectEntry({ name: 'accounts', dataset: 'DS2' }),
+        ])
+      )
+      orgOnlyConnection()
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--dry-run',
+        '--entry',
+        'accounts',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+  })
+
+  describe('audit', () => {
+    it('given audit flag with all checks passing, when running command, then returns zero failures', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      orgOnlyConnection()
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--audit',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given audit flag with Organization query failing, when running command, then reports one failure with exit code 2', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .throws('AUTH_FAILED')
+          .withFallback(defaultOrgResponse())
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--audit',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+
+    it('given audit flag with EventLogFile permission failing, when running command, then reports one failure with exit code 2', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('EventLogFile')
+          .throws('INSUFFICIENT_ACCESS')
+          .withFallback(defaultOrgResponse())
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--audit',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+
+    it('given audit flag with InsightsExternalData permission failing, when running command, then reports one failure with exit code 2', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('InsightsExternalData')
+          .throws('INSUFFICIENT_ACCESS')
+          .withFallback(defaultOrgResponse())
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--audit',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+  })
+
+  describe('e2e pipeline - ELF', () => {
+    it('given valid ELF config with one log record, when running full pipeline, then processes one entry and persists watermark', async () => {
+      // Arrange
+      const logDate = '2026-03-01T00:00:00.000+0000'
+      const elfCsv = csvContent(
+        ['EVENT_TYPE', 'USER_ID'],
+        [
+          ['Login', '005xx0000001'],
+          ['Login', '005xx0000002'],
+        ]
+      )
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      elfPipeline(defaultElfQueryResponse([logDate]), elfCsv)
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(readState(tmp.statePath)['src-org:elf:Login:Daily']).toBe(logDate)
+    })
+
+    it('given ELF query returns no records, when running pipeline, then skips entry with zero groups uploaded', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      elfPipeline({ totalSize: 0, done: true, records: [] }, '')
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 1,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given ELF query throws error, when running pipeline, then marks entry as failed with exit code 2', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .throws('ELF_QUERY_FAILED')
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+  })
+
+  describe('e2e pipeline - SObject', () => {
+    it('given valid SObject config with two records, when running full pipeline, then processes one entry and persists latest watermark', async () => {
+      // Arrange
+      const records = [
+        {
+          Id: '001000000000001',
+          Name: 'Acme',
+          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+        },
+        {
+          Id: '001000000000002',
+          Name: 'Beta',
+          LastModifiedDate: '2026-03-02T00:00:00.000+0000',
+        },
+      ]
+      tmp = createTempFiles(makeConfigJson([sobjectEntry()]))
+      sobjectPipeline('Account', defaultSObjectQueryResponse(records))
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(readState(tmp.statePath)['src-org:sobject:Account']).toBe(
+        '2026-03-02T00:00:00.000+0000'
+      )
+    })
+
+    it('given SObject query returns no records, when running pipeline, then skips entry with zero groups uploaded', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([sobjectEntry()]))
+      sobjectPipeline('Account', defaultSObjectQueryResponse([]))
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 1,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given paginated SObject results across two pages, when running pipeline, then processes all pages and persists latest watermark', async () => {
+      // Arrange
+      const page1Records = [
+        {
+          Id: '001000000000001',
+          Name: 'Acme',
+          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+        },
+      ]
+      const page2Records = [
+        {
+          Id: '001000000000002',
+          Name: 'Beta',
+          LastModifiedDate: '2026-03-02T00:00:00.000+0000',
+        },
+      ]
+      const nextUrl = '/services/data/v65.0/query/01g000000000001-2000'
+      tmp = createTempFiles(makeConfigJson([sobjectEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('Account')
+          .returns(defaultSObjectQueryResponse(page1Records, false, nextUrl))
+          .onGet('query/01g000000000001-2000')
+          .returns(defaultSObjectQueryResponse(page2Records, true))
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse('0Ib'))
+          .onPost('InsightsExternalDataPart')
+          .returns(defaultCreateResponse('0Ic'))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(readState(tmp.statePath)['src-org:sobject:Account']).toBe(
+        '2026-03-02T00:00:00.000+0000'
+      )
+    })
+  })
+
+  describe('multi-entry scenarios', () => {
+    it('given ELF and SObject entries both succeeding, when running pipeline, then processes both with no exit code', async () => {
+      // Arrange
+      const elfCsv = csvContent(
+        ['EVENT_TYPE', 'USER_ID'],
+        [['Login', '005xx0000001']]
+      )
+      const sobjectRecords = [
+        {
+          Id: '001000000000001',
+          Name: 'Acme',
+          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+        },
+      ]
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry({ dataset: 'DS1' }),
+          sobjectEntry({ dataset: 'DS2' }),
+        ])
+      )
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(elfCsv)
+          .onQuery('Account')
+          .returns(defaultSObjectQueryResponse(sobjectRecords))
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse('0Ib'))
+          .onPost('InsightsExternalDataPart')
+          .returns(defaultCreateResponse('0Ic'))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 2,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 2,
+      })
+      expect(process.exitCode).toBeUndefined()
+    })
+
+    it('given ELF succeeds and SObject throws, when running pipeline, then reports one failure with exit code >= 1', async () => {
+      // Arrange
+      const elfCsv = csvContent(
+        ['EVENT_TYPE', 'USER_ID'],
+        [['Login', '005xx0000001']]
+      )
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry({ dataset: 'DS1' }),
+          sobjectEntry({ dataset: 'DS2' }),
+        ])
+      )
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(elfCsv)
+          .onQuery('Account')
+          .throws('SOBJECT_QUERY_FAILED')
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse('0Ib'))
+          .onPost('InsightsExternalDataPart')
+          .returns(defaultCreateResponse('0Ic'))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 1,
+      })
+      expect(process.exitCode).toBe(1)
+    })
+
+    it('given both ELF and SObject throw errors, when running pipeline, then reports two failures with exit code 2', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry({ dataset: 'DS1' }),
+          sobjectEntry({ dataset: 'DS2' }),
+        ])
+      )
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .throws('ELF_FAILED')
+          .onQuery('Account')
+          .throws('SOBJECT_FAILED')
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 2,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+
+    it('given two entries with entry filter selecting second by name, when running pipeline, then only named entry runs', async () => {
+      // Arrange
+      const sobjectRecords = [
+        {
+          Id: '001000000000001',
+          Name: 'Acme',
+          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+        },
+      ]
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry({ dataset: 'DS1' }),
+          sobjectEntry({ name: 'my-sobject', dataset: 'DS2' }),
+        ])
+      )
+      sobjectPipeline('Account', defaultSObjectQueryResponse(sobjectRecords))
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--entry',
+        'my-sobject',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+    })
+
+    it('given two named entries, when filtering by name, then only matching entry runs', async () => {
+      // Arrange
+      const sobjectRecords = [
+        {
+          Id: '001000000000001',
+          Name: 'Acme',
+          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+        },
+      ]
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry({ name: 'login-events', dataset: 'DS1' }),
+          sobjectEntry({ name: 'accounts', dataset: 'DS2' }),
+        ])
+      )
+      sobjectPipeline('Account', defaultSObjectQueryResponse(sobjectRecords))
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--entry',
+        'accounts',
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+    })
+
+    it('given entries with names, when filtering by nonexistent name, then throws entry not found', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([elfEntry({ name: 'login-events' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      const sut = runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--entry',
+        'nonexistent',
+      ])
+
+      // Assert
+      await expect(sut).rejects.toThrow("Entry 'nonexistent' not found.")
+    })
+  })
+
+  describe('multi-config complex scenario', () => {
+    it('given five entries across four orgs with mixed types, when running pipeline, then all five succeed with correct watermarks', async () => {
+      // Arrange
+      const largeRowCount = 5000
+      const largeRows: string[][] = []
+      for (let i = 0; i < largeRowCount; i++) {
+        largeRows.push([`Login`, `005xx${String(i).padStart(7, '0')}`])
+      }
+      const largeCsv = csvContent(['EVENT_TYPE', 'USER_ID'], largeRows)
+      const sobjectRecordsPage1: Record<string, unknown>[] = []
+      for (let i = 0; i < 2000; i++) {
+        sobjectRecordsPage1.push({
+          Id: `001${String(i).padStart(12, '0')}`,
+          Name: `Account_${i}`,
+          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+        })
+      }
+      const sobjectRecordsPage2: Record<string, unknown>[] = []
+      for (let i = 2000; i < 3500; i++) {
+        sobjectRecordsPage2.push({
+          Id: `001${String(i).padStart(12, '0')}`,
+          Name: `Account_${i}`,
+          LastModifiedDate: '2026-03-02T00:00:00.000+0000',
+        })
+      }
+      const entries = [
+        elfEntry({
+          sourceOrg: 'src-org',
+          analyticOrg: 'ana-org',
+          dataset: 'ElfDS1',
+          eventType: 'Login',
+        }),
+        elfEntry({
+          sourceOrg: 'src-org',
+          analyticOrg: 'ana-org',
+          dataset: 'ElfDS2',
+          eventType: 'API',
+        }),
+        sobjectEntry({
+          sourceOrg: 'src-org',
+          analyticOrg: 'ana2-org',
+          dataset: 'AcctDS',
+          sobject: 'Account',
+          fields: ['Id', 'Name'],
+        }),
+        sobjectEntry({
+          sourceOrg: 'src2-org',
+          analyticOrg: 'ana-org',
+          dataset: 'CaseDS',
+          sobject: 'Case',
+          fields: ['Id', 'Subject'],
+          dateField: 'LastModifiedDate',
+        }),
+        elfEntry({
+          sourceOrg: 'src2-org',
+          analyticOrg: 'ana2-org',
+          dataset: 'ElfDS3',
+          eventType: 'Report',
+        }),
+      ]
+      tmp = createTempFiles(makeConfigJson(entries))
+      const nextUrl = '/services/data/v65.0/query/sobject-page2'
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .calls(url => {
+            if (url.includes('Login'))
+              return defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000'])
+            if (url.includes('API'))
+              return defaultElfQueryResponse(['2026-03-02T00:00:00.000+0000'])
+            if (url.includes('Report'))
+              return defaultElfQueryResponse(['2026-03-03T00:00:00.000+0000'])
+            return defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000'])
+          })
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(largeCsv)
+          .onQuery('Account')
+          .returns(
+            defaultSObjectQueryResponse(sobjectRecordsPage1, false, nextUrl)
+          )
+          .onGet('query/sobject-page2')
+          .returns(defaultSObjectQueryResponse(sobjectRecordsPage2, true))
+          .onQuery('Case')
+          .returns(
+            defaultSObjectQueryResponse([
+              {
+                Id: '500000000000001',
+                Subject: 'Test Case',
+                LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+              },
+            ])
+          )
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse('0Ib'))
+          .onPost('InsightsExternalDataPart')
+          .returns(defaultCreateResponse('0Ic'))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 5,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 5,
+      })
+      expect(process.exitCode).toBeUndefined()
+      const watermarks = readState(tmp.statePath)
+      expect(watermarks['src-org:elf:Login:Daily']).toBe(
+        '2026-03-01T00:00:00.000+0000'
+      )
+      expect(watermarks['src-org:elf:API:Daily']).toBe(
+        '2026-03-02T00:00:00.000+0000'
+      )
+      expect(watermarks['src-org:sobject:Account']).toBe(
+        '2026-03-02T00:00:00.000+0000'
+      )
+      expect(watermarks['src2-org:sobject:Case']).toBe(
+        '2026-03-01T00:00:00.000+0000'
+      )
+      expect(watermarks['src2-org:elf:Report:Daily']).toBe(
+        '2026-03-03T00:00:00.000+0000'
+      )
+    })
+
+    it('given large CSV exceeding part size threshold, when running pipeline, then uploads multiple parts successfully', async () => {
+      // Arrange
+      const { randomBytes } = await import('node:crypto')
+      const rowCount = 4000
+      const largeRows: string[][] = []
+      for (let i = 0; i < rowCount; i++) {
+        largeRows.push([`Login`, randomBytes(4096).toString('base64')])
+      }
+      const largeCsv = csvContent(['EVENT_TYPE', 'USER_ID'], largeRows)
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      let partCount = 0
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(largeCsv)
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse('0Ib'))
+          .onPost('InsightsExternalDataPart')
+          .calls(() => {
+            partCount++
+            return defaultCreateResponse('0Ic')
+          })
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(partCount).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  describe('watermark persistence', () => {
+    it('given successful first run writes watermark, when second run finds no new records, then entry is skipped', async () => {
+      // Arrange
+      const logDate = '2026-03-01T00:00:00.000+0000'
+      const elfCsv = csvContent(
+        ['EVENT_TYPE', 'USER_ID'],
+        [['Login', '005xx0000001']]
+      )
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      elfPipeline(defaultElfQueryResponse([logDate]), elfCsv)
+
+      // Act (first run — writes watermark)
+      await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert (watermark persisted)
+      expect(readState(tmp.statePath)['src-org:elf:Login:Daily']).toBe(logDate)
+
+      // Arrange (second run — no new records)
+      elfPipeline({ totalSize: 0, done: true, records: [] }, '')
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 1,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+  })
+
+  describe('error handling', () => {
+    it('given SF API connection error during ELF fetch, when running pipeline, then marks entry as failed with exit code', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .throws('API_ERROR: Connection refused')
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+
+    it('given InsightsExternalData POST fails during upload, when running pipeline, then marks entry as failed with exit code', async () => {
+      // Arrange
+      const elfCsv = csvContent(
+        ['EVENT_TYPE', 'USER_ID'],
+        [['Login', '005xx0000001']]
+      )
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(elfCsv)
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .throws('UPLOAD_FAILED: Insufficient storage')
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 1,
+        groupsUploaded: 0,
+      })
+      expect(process.exitCode).toBe(2)
+    })
+
+    it('given corrupted state file with invalid JSON, when running pipeline, then throws error', async () => {
+      // Arrange
+      tmp = createTempFiles(makeConfigJson([elfEntry()]))
+      writeFileSync(tmp.statePath, '{ corrupted json !!!')
+      orgOnlyConnection()
+
+      // Act
+      const sut = runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      await expect(sut).rejects.toThrow()
+    })
+  })
+})
