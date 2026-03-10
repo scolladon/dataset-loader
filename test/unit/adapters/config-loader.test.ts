@@ -1,9 +1,21 @@
 import * as fs from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadConfig, parseConfig } from '../../../src/adapters/config-loader.js'
+import {
+  parseConfig,
+  type ResolvedEntry,
+  resolveConfig,
+} from '../../../src/adapters/config-loader.js'
 import { type SalesforcePort } from '../../../src/ports/types.js'
 
 vi.mock('node:fs/promises')
+
+async function loadConfig(
+  configPath: string,
+  sfPorts: ReadonlyMap<string, SalesforcePort>
+): Promise<ResolvedEntry[]> {
+  const config = await parseConfig(configPath)
+  return resolveConfig(config, sfPorts)
+}
 
 function makeSfPort(
   orgInfo = { Id: '00D000000000001', Name: 'TestOrg' }

@@ -6,7 +6,9 @@ import {
   type Operation,
   type QueryResult,
   type SalesforcePort,
+  SF_IDENTIFIER_PATTERN,
   type Uploader,
+  type UploadListener,
   type UploadResult,
 } from '../ports/types.js'
 
@@ -90,91 +92,20 @@ class GzipCompressor {
   }
 }
 
-class CrmaUploadSink implements Uploader {
-  private readonly basePath: string
-  private readonly datasetName: string
-  private parentId: string | undefined
-  private initPromise: Promise<void> | null = null
-  private partNumber = 0
-  private headers: string[] | undefined
-  private readonly partIds: string[] = []
-  private aborted = false
-  private readonly compressor = new GzipCompressor()
-
+class MetadataInitializer {
   constructor(
     private readonly sfPort: SalesforcePort,
-    dataset: DatasetKey,
+    private readonly basePath: string,
+    private readonly datasetName: string,
     private readonly operation: Operation
-  ) {
-    this.basePath = `/services/data/v${sfPort.apiVersion}/sobjects`
-    this.datasetName = dataset.name
-  }
+  ) {}
 
-  async write(csvLine: string): Promise<void> {
-    if (this.aborted) throw new Error('Sink has been aborted')
-
-    if (!this.headers) {
-      const [parsed] = parse(csvLine) as string[][]
-      this.headers = parsed
-      await this.ensureInitialized()
-    }
-
-    if (
-      this.compressor.size > 0 &&
-      base64Length(this.compressor.size + Buffer.byteLength(csvLine)) >=
-        PART_MAX_BYTES
-    ) {
-      await this.uploadPart()
-    }
-    this.compressor.write(csvLine)
-    await this.compressor.flush()
-  }
-
-  async process(): Promise<UploadResult> {
-    if (!this.parentId) throw new Error('No data was written to the sink')
-    if (this.compressor.size > 0) {
-      await this.uploadPart()
-    }
-    await this.sfPort.patch(
-      `${this.basePath}/InsightsExternalData/${this.parentId}`,
-      {
-        Action: 'Process',
-        Mode: 'Incremental',
-      }
-    )
-    return { parentId: this.parentId, partIds: this.partIds }
-  }
-
-  async abort(): Promise<void> {
-    this.aborted = true
-    if (this.parentId) {
-      await this.sfPort.del(
-        `${this.basePath}/InsightsExternalData/${this.parentId}`
-      )
-    }
-  }
-
-  private async initialize(): Promise<void> {
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(this.datasetName)) {
+  async createParent(headers: readonly string[]): Promise<string> {
+    if (!SF_IDENTIFIER_PATTERN.test(this.datasetName)) {
       throw new Error(`Invalid dataset name: '${this.datasetName}'`)
     }
 
-    const existingResult: QueryResult<InsightsExternalData> =
-      await this.sfPort.query(
-        `SELECT Id, MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${this.datasetName}' AND Status = 'Completed' ORDER BY CreatedDate DESC LIMIT 1`
-      )
-
-    let metadataJson: string
-    const metadataBlobUrl =
-      existingResult.records.length > 0
-        ? existingResult.records[0].MetadataJson
-        : null
-    if (metadataBlobUrl) {
-      const blob = await this.sfPort.getBlob(metadataBlobUrl)
-      metadataJson = typeof blob === 'string' ? blob : JSON.stringify(blob)
-    } else {
-      metadataJson = generateMetadataJson(this.headers!)
-    }
+    const metadataJson = await this.resolveMetadata(headers)
 
     const headerRecord = await this.sfPort.post<CreateResponse>(
       `${this.basePath}/InsightsExternalData`,
@@ -186,14 +117,57 @@ class CrmaUploadSink implements Uploader {
         MetadataJson: Buffer.from(metadataJson, 'utf-8').toString('base64'),
       }
     )
-    this.parentId = headerRecord.id
+    return headerRecord.id
   }
 
-  private ensureInitialized(): Promise<void> {
-    if (!this.initPromise) {
-      this.initPromise = this.initialize()
+  private async resolveMetadata(headers: readonly string[]): Promise<string> {
+    const existingResult: QueryResult<InsightsExternalData> =
+      await this.sfPort.query(
+        `SELECT Id, MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${this.datasetName}' AND Status = 'Completed' ORDER BY CreatedDate DESC LIMIT 1`
+      )
+
+    const metadataBlobUrl =
+      existingResult.records.length > 0
+        ? existingResult.records[0].MetadataJson
+        : null
+
+    if (metadataBlobUrl) {
+      const blob = await this.sfPort.getBlob(metadataBlobUrl)
+      return typeof blob === 'string' ? blob : JSON.stringify(blob)
     }
-    return this.initPromise
+    return generateMetadataJson(headers)
+  }
+}
+
+class PartUploader {
+  private readonly compressor = new GzipCompressor()
+  private partNumber = 0
+  private readonly partIds: string[] = []
+
+  constructor(
+    private readonly sfPort: SalesforcePort,
+    private readonly basePath: string,
+    private readonly parentId: string,
+    private readonly listener?: UploadListener
+  ) {}
+
+  async addLine(csvLine: string): Promise<void> {
+    if (
+      this.compressor.size > 0 &&
+      base64Length(this.compressor.size + Buffer.byteLength(csvLine)) >=
+        PART_MAX_BYTES
+    ) {
+      await this.uploadPart()
+    }
+    this.compressor.write(csvLine)
+    await this.compressor.flush()
+  }
+
+  async flushRemaining(): Promise<readonly string[]> {
+    if (this.compressor.size > 0) {
+      await this.uploadPart()
+    }
+    return this.partIds
   }
 
   private async uploadPart(): Promise<void> {
@@ -203,19 +177,91 @@ class CrmaUploadSink implements Uploader {
     const result = await this.sfPort.post<CreateResponse>(
       `${this.basePath}/InsightsExternalDataPart`,
       {
-        InsightsExternalDataId: this.parentId!,
+        InsightsExternalDataId: this.parentId,
         PartNumber: pn,
         DataFile: compressed.toString('base64'),
       }
     )
     this.partIds.push(result.id)
+    this.listener?.onPartUploaded()
+  }
+}
+
+class CrmaUploadSink implements Uploader {
+  private readonly basePath: string
+  private readonly datasetName: string
+  private readonly initializer: MetadataInitializer
+  private parentId: string | undefined
+  private partUploader: PartUploader | undefined
+  private aborted = false
+
+  constructor(
+    private readonly sfPort: SalesforcePort,
+    dataset: DatasetKey,
+    operation: Operation,
+    private readonly listener?: UploadListener
+  ) {
+    this.basePath = `/services/data/v${sfPort.apiVersion}/sobjects`
+    this.datasetName = dataset.name
+    this.initializer = new MetadataInitializer(
+      sfPort,
+      this.basePath,
+      this.datasetName,
+      operation
+    )
+  }
+
+  async write(csvLine: string): Promise<void> {
+    if (this.aborted) throw new Error('Sink has been aborted')
+
+    if (!this.partUploader) {
+      const [parsed] = parse(csvLine) as string[][]
+      this.parentId = await this.initializer.createParent(parsed)
+      this.listener?.onParentCreated(this.parentId)
+      this.partUploader = new PartUploader(
+        this.sfPort,
+        this.basePath,
+        this.parentId,
+        this.listener
+      )
+    }
+
+    await this.partUploader.addLine(csvLine)
+  }
+
+  async process(): Promise<UploadResult> {
+    if (!this.parentId || !this.partUploader) {
+      throw new Error('No data was written to the sink')
+    }
+    const partIds = await this.partUploader.flushRemaining()
+    await this.sfPort.patch(
+      `${this.basePath}/InsightsExternalData/${this.parentId}`,
+      {
+        Action: 'Process',
+        Mode: 'Incremental',
+      }
+    )
+    return { parentId: this.parentId, partIds }
+  }
+
+  async abort(): Promise<void> {
+    this.aborted = true
+    if (this.parentId) {
+      await this.sfPort.del(
+        `${this.basePath}/InsightsExternalData/${this.parentId}`
+      )
+    }
   }
 }
 
 export class UploadSinkFactory implements CreateUploaderPort {
   constructor(private readonly sfPort: SalesforcePort) {}
 
-  create(dataset: DatasetKey, operation: Operation): Uploader {
-    return new CrmaUploadSink(this.sfPort, dataset, operation)
+  create(
+    dataset: DatasetKey,
+    operation: Operation,
+    listener?: UploadListener
+  ): Uploader {
+    return new CrmaUploadSink(this.sfPort, dataset, operation, listener)
   }
 }

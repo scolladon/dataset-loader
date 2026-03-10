@@ -29,7 +29,7 @@ async function collectStreams(
 }
 
 describe('ElfFetcher', () => {
-  it('given records exist, when fetching, then yields one Readable per record', async () => {
+  it('given records exist with watermark, when fetching, then yields one Readable per record', async () => {
     // Arrange
     const sfPort = makeSfPort({
       query: vi.fn().mockResolvedValue({
@@ -48,12 +48,13 @@ describe('ElfFetcher', () => {
 
     // Act
     const sut = new ElfFetcher(sfPort, 'LightningPageView', 'Daily')
-    const result = await sut.fetch()
+    const result = await sut.fetch(
+      Watermark.fromString('2026-02-28T00:00:00.000Z')
+    )
     const streams = await collectStreams(result.streams)
 
     // Assert
     expect(streams).toHaveLength(2)
-    expect(result.totalHint).toBe(2)
     expect(result.watermark()?.toString()).toBe('2026-03-02T00:00:00.000Z')
   })
 
@@ -72,7 +73,6 @@ describe('ElfFetcher', () => {
 
     // Assert
     expect(streams).toHaveLength(0)
-    expect(result.totalHint).toBe(0)
     expect(result.watermark()).toBeUndefined()
   })
 
@@ -138,6 +138,49 @@ describe('ElfFetcher', () => {
     // Assert
     expect(streams).toHaveLength(2)
     expect(result.watermark()?.toString()).toBe('2026-03-02T00:00:00.000Z')
+  })
+
+  it('given no watermark, when fetching, then queries only the latest record', async () => {
+    // Arrange
+    const querySpy = vi.fn().mockResolvedValue({
+      totalSize: 1,
+      done: true,
+      records: [
+        { Id: '0AT1', LogDate: '2026-03-05T00:00:00.000Z', LogFile: '' },
+      ],
+    })
+    const sfPort = makeSfPort({
+      query: querySpy,
+      getBlobStream: vi
+        .fn()
+        .mockResolvedValue(Readable.from(Buffer.from('data'))),
+    })
+
+    // Act
+    const sut = new ElfFetcher(sfPort, 'Login', 'Daily')
+    await sut.fetch()
+
+    // Assert
+    const soql: string = querySpy.mock.calls[0][0]
+    expect(soql).toContain('ORDER BY LogDate DESC')
+    expect(soql).toContain('LIMIT 1')
+  })
+
+  it('given watermark, when fetching, then queries all records ascending without limit', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new ElfFetcher(sfPort, 'Login', 'Daily')
+    await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
+
+    // Assert
+    const soql: string = querySpy.mock.calls[0][0]
+    expect(soql).toContain('ORDER BY LogDate ASC')
+    expect(soql).not.toContain('LIMIT')
   })
 
   it('given getBlobStream rejects on second blob, when fetching, then first stream is yielded before error', async () => {

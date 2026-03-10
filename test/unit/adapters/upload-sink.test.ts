@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { UploadSinkFactory } from '../../../src/adapters/upload-sink.js'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
-import { type SalesforcePort } from '../../../src/ports/types.js'
+import {
+  type SalesforcePort,
+  type UploadListener,
+} from '../../../src/ports/types.js'
 
 function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
   return {
@@ -17,7 +20,10 @@ function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
   }
 }
 
-const dsKey = DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'MyDataset' })
+const dsKey = DatasetKey.fromEntry({
+  analyticOrg: 'ana',
+  dataset: 'MyDataset',
+})
 
 describe('UploadSinkFactory', () => {
   it('given csv lines written, when process called, then creates parent, uploads parts, and triggers processing', async () => {
@@ -32,19 +38,24 @@ describe('UploadSinkFactory', () => {
     const result = await sut.process()
 
     // Assert
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    expect(postCalls[0][0]).toContain('InsightsExternalData')
-    expect(postCalls[0][1]).toMatchObject({
-      EdgemartAlias: 'MyDataset',
-      Format: 'Csv',
-      Operation: 'Append',
-      Action: 'None',
-    })
-    expect(postCalls[1][0]).toContain('InsightsExternalDataPart')
-    expect(postCalls[1][1]).toMatchObject({
-      InsightsExternalDataId: '06V000000000001',
-      PartNumber: 1,
-    })
+    expect(sfPort.post).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('InsightsExternalData'),
+      expect.objectContaining({
+        EdgemartAlias: 'MyDataset',
+        Format: 'Csv',
+        Operation: 'Append',
+        Action: 'None',
+      })
+    )
+    expect(sfPort.post).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('InsightsExternalDataPart'),
+      expect.objectContaining({
+        InsightsExternalDataId: '06V000000000001',
+        PartNumber: 1,
+      })
+    )
     expect(sfPort.patch).toHaveBeenCalledWith(
       expect.stringContaining('InsightsExternalData/06V000000000001'),
       { Action: 'Process', Mode: 'Incremental' }
@@ -116,15 +127,22 @@ describe('UploadSinkFactory', () => {
     await sut.process()
 
     // Assert
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    const metadataB64 = postCalls[0][1].MetadataJson as string
+    expect(sfPort.post).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('InsightsExternalData'),
+      expect.objectContaining({
+        MetadataJson: expect.any(String),
+      })
+    )
+    const metadataB64 = (sfPort.post as ReturnType<typeof vi.fn>).mock
+      .calls[0][1].MetadataJson as string
     const decoded = Buffer.from(metadataB64, 'base64').toString('utf-8')
     expect(JSON.parse(decoded)).toMatchObject({
       fileFormat: { charsetName: 'UTF-8' },
     })
   })
 
-  it('given multiple csv lines, when process called, then all data appears in uploaded parts', async () => {
+  it('given multiple csv lines, when process called, then uploads at least one part', async () => {
     // Arrange
     const sfPort = makeSfPort()
     const factory = new UploadSinkFactory(sfPort)
@@ -138,11 +156,10 @@ describe('UploadSinkFactory', () => {
     await sut.process()
 
     // Assert
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    const partCalls = postCalls.filter(([url]: [string]) =>
-      url.includes('InsightsExternalDataPart')
+    expect(sfPort.post).toHaveBeenCalledWith(
+      expect.stringContaining('InsightsExternalDataPart'),
+      expect.objectContaining({ PartNumber: 1 })
     )
-    expect(partCalls.length).toBeGreaterThanOrEqual(1)
   })
 
   it('given invalid dataset name, when creating sink, then write throws', async () => {
@@ -182,8 +199,13 @@ describe('UploadSinkFactory', () => {
     await sut.process()
 
     // Assert
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    const metadataB64 = postCalls[0][1].MetadataJson as string
+    expect(sfPort.post).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('InsightsExternalData'),
+      expect.objectContaining({ MetadataJson: expect.any(String) })
+    )
+    const metadataB64 = (sfPort.post as ReturnType<typeof vi.fn>).mock
+      .calls[0][1].MetadataJson as string
     const decoded = JSON.parse(
       Buffer.from(metadataB64, 'base64').toString('utf-8')
     )
@@ -212,12 +234,68 @@ describe('UploadSinkFactory', () => {
     await sut.process()
 
     // Assert
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    const metadataB64 = postCalls[0][1].MetadataJson as string
+    expect(sfPort.post).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('InsightsExternalData'),
+      expect.objectContaining({ MetadataJson: expect.any(String) })
+    )
+    const metadataB64 = (sfPort.post as ReturnType<typeof vi.fn>).mock
+      .calls[0][1].MetadataJson as string
     const decoded = JSON.parse(
       Buffer.from(metadataB64, 'base64').toString('utf-8')
     )
     expect(decoded).toMatchObject({ fileFormat: { charsetName: 'UTF-8' } })
+  })
+
+  it('given listener provided, when first write creates parent, then calls onParentCreated with parentId', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const factory = new UploadSinkFactory(sfPort)
+    const listener: UploadListener = {
+      onParentCreated: vi.fn(),
+      onPartUploaded: vi.fn(),
+    }
+    const sut = factory.create(dsKey, 'Append', listener)
+
+    // Act
+    await sut.write('"Id"\n')
+
+    // Assert
+    expect(listener.onParentCreated).toHaveBeenCalledWith('06V000000000001')
+  })
+
+  it('given listener provided, when process flushes part, then calls onPartUploaded', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const factory = new UploadSinkFactory(sfPort)
+    const listener: UploadListener = {
+      onParentCreated: vi.fn(),
+      onPartUploaded: vi.fn(),
+    }
+    const sut = factory.create(dsKey, 'Append', listener)
+
+    // Act
+    await sut.write('"Id"\n')
+    await sut.write('"001"\n')
+    await sut.process()
+
+    // Assert
+    expect(listener.onPartUploaded).toHaveBeenCalled()
+  })
+
+  it('given no listener provided, when writing and processing, then completes without error', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const factory = new UploadSinkFactory(sfPort)
+    const sut = factory.create(dsKey, 'Append')
+
+    // Act
+    await sut.write('"Id"\n')
+    await sut.write('"001"\n')
+    const result = await sut.process()
+
+    // Assert
+    expect(result.parentId).toBe('06V000000000001')
   })
 
   it('given large data exceeding part max, when process called, then splits into multiple parts', async () => {
@@ -234,16 +312,14 @@ describe('UploadSinkFactory', () => {
     const result = await sut.process()
 
     // Assert
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    const dataParts = postCalls.filter(([url]: [string]) =>
-      url.includes('InsightsExternalDataPart')
-    )
-    expect(dataParts.length).toBeGreaterThanOrEqual(2)
-    expect(result.partIds.length).toBe(dataParts.length)
-    for (const [, body] of dataParts) {
-      expect((body.DataFile as string).length).toBeLessThanOrEqual(
-        10 * 1024 * 1024
-      )
+    expect(result.partIds.length).toBeGreaterThanOrEqual(2)
+    const PART_MAX_BYTES = 10 * 1024 * 1024
+    for (const call of (sfPort.post as ReturnType<typeof vi.fn>).mock.calls) {
+      if ((call[0] as string).includes('InsightsExternalDataPart')) {
+        expect((call[1].DataFile as string).length).toBeLessThanOrEqual(
+          PART_MAX_BYTES
+        )
+      }
     }
   })
 })

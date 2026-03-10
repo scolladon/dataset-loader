@@ -385,10 +385,4 @@ describe('SalesforceClient', () => {
       expect(sut.apiVersion).toBe('62.0')
     })
   })
-
-  describe('apiVersion', () => {
-    it('given a connection, when reading apiVersion, then returns connection version', () => {
-      expect(sut.apiVersion).toBe('62.0')
-    })
-  })
 })

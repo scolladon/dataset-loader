@@ -1,9 +1,11 @@
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
+import { DatasetKey } from '../domain/dataset-key.js'
 import {
   type EntryType,
   type Operation,
   type SalesforcePort,
+  SF_IDENTIFIER_PATTERN,
 } from '../ports/types.js'
 
 export interface BaseEntry {
@@ -11,7 +13,7 @@ export interface BaseEntry {
   sourceOrg: string
   analyticOrg: string
   dataset: string
-  operation?: Operation
+  operation: Operation
   augmentColumns?: Record<string, string>
 }
 
@@ -25,7 +27,7 @@ export interface SObjectEntry extends BaseEntry {
   type: Extract<EntryType, 'sobject'>
   sobject: string
   fields: string[]
-  dateField?: string
+  dateField: string
   where?: string
   limit?: number
 }
@@ -51,7 +53,7 @@ const DYNAMIC_EXPRESSIONS = [
 
 const sfIdentifier = z
   .string()
-  .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, 'Must be a valid Salesforce identifier')
+  .regex(SF_IDENTIFIER_PATTERN, 'Must be a valid Salesforce identifier')
 const orgAlias = z
   .string()
   .regex(/^[a-zA-Z0-9_.-]+$/, 'Must be a valid org alias (no colons)')
@@ -111,35 +113,48 @@ function collectUniqueOrgs(entries: ConfigEntry[]): Set<string> {
   return orgs
 }
 
-function validateOperationConsistency(entries: ConfigEntry[]): void {
-  const groups = new Map<string, { operation: string; indices: number[] }[]>()
+function groupEntriesByDatasetKey(
+  entries: ConfigEntry[]
+): Map<
+  string,
+  { datasetKey: DatasetKey; ops: { operation: string; indices: number[] }[] }
+> {
+  const groups = new Map<
+    string,
+    { datasetKey: DatasetKey; ops: { operation: string; indices: number[] }[] }
+  >()
 
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]
-    const key = `${entry.analyticOrg}:${entry.dataset}`
-    const operation = entry.operation!
+    const datasetKey = DatasetKey.fromEntry(entry)
+    const mapKey = datasetKey.toString()
+    const operation = entry.operation
 
-    if (!groups.has(key)) {
-      groups.set(key, [])
+    if (!groups.has(mapKey)) {
+      groups.set(mapKey, { datasetKey, ops: [] })
     }
-    const group = groups.get(key)!
-    const existing = group.find(g => g.operation === operation)
+    const group = groups.get(mapKey)!
+    const existing = group.ops.find(g => g.operation === operation)
     if (existing) {
       existing.indices.push(i)
     } else {
-      group.push({ operation, indices: [i] })
+      group.ops.push({ operation, indices: [i] })
     }
   }
 
-  for (const [key, ops] of groups) {
+  return groups
+}
+
+function validateOperationConsistency(entries: ConfigEntry[]): void {
+  const groups = groupEntriesByDatasetKey(entries)
+
+  for (const [, { datasetKey, ops }] of groups) {
     if (ops.length > 1) {
       const details = ops
         .map(o => `'${o.operation}' (entries ${o.indices.join(', ')})`)
         .join(' vs ')
-      const [analyticOrg] = key.split(':')
-      const dataset = key.slice(analyticOrg.length + 1)
       throw new Error(
-        `Entries target dataset '${dataset}' on org '${analyticOrg}' but specify conflicting operations: ${details}`
+        `Entries target dataset '${datasetKey.name}' on org '${datasetKey.org}' but specify conflicting operations: ${details}`
       )
     }
   }
@@ -222,10 +237,9 @@ export async function resolveConfig(
   }))
 }
 
-export async function loadConfig(
-  configPath: string,
-  sfPorts: ReadonlyMap<string, SalesforcePort>
-): Promise<ResolvedEntry[]> {
-  const config = await parseConfig(configPath)
-  return resolveConfig(config, sfPorts)
+export function entryLabel(entry: ConfigEntry): string {
+  if (entry.name) return entry.name
+  return entry.type === 'elf'
+    ? `elf:${entry.eventType}`
+    : `sobject:${entry.sobject}`
 }

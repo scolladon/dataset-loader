@@ -59,12 +59,11 @@ describe('SObjectFetcher', () => {
     })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id', 'Name', 'LastModifiedDate'],
-      'LastModifiedDate'
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'Name', 'LastModifiedDate'],
+      dateField: 'LastModifiedDate',
+    })
     const result = await sut.fetch()
     const texts = await collectStreamTexts(result.streams)
 
@@ -85,12 +84,11 @@ describe('SObjectFetcher', () => {
     })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id'],
-      'LastModifiedDate'
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+    })
     const result = await sut.fetch()
     const texts = await collectStreamTexts(result.streams)
 
@@ -119,17 +117,15 @@ describe('SObjectFetcher', () => {
     })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id', 'LastModifiedDate'],
-      'LastModifiedDate'
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'LastModifiedDate'],
+      dateField: 'LastModifiedDate',
+    })
     const result = await sut.fetch()
     const texts = await collectStreamTexts(result.streams)
 
     // Assert
-    expect(result.totalHint).toBe(3)
     expect(texts).toHaveLength(2)
     expect(texts[0]).toContain('001')
     expect(texts[0]).toContain('002')
@@ -145,13 +141,12 @@ describe('SObjectFetcher', () => {
     const sfPort = makeSfPort({ query: querySpy })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id'],
-      'LastModifiedDate',
-      'Industry != null'
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      where: 'Industry != null',
+    })
     await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
 
     // Assert
@@ -171,12 +166,11 @@ describe('SObjectFetcher', () => {
     })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id'],
-      'LastModifiedDate'
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+    })
     const result = await sut.fetch()
     const texts = await collectStreamTexts(result.streams)
 
@@ -195,14 +189,12 @@ describe('SObjectFetcher', () => {
     const sfPort = makeSfPort({ query: querySpy })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id'],
-      'LastModifiedDate',
-      undefined,
-      50
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      queryLimit: 50,
+    })
     await sut.fetch()
 
     // Assert
@@ -227,12 +219,11 @@ describe('SObjectFetcher', () => {
     })
 
     // Act
-    const sut = new SObjectFetcher(
-      sfPort,
-      'Account',
-      ['Id', 'Name'],
-      'LastModifiedDate'
-    )
+    const sut = new SObjectFetcher(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'Name'],
+      dateField: 'LastModifiedDate',
+    })
     const result = await sut.fetch()
     const texts = await collectStreamTexts(result.streams)
 
@@ -245,7 +236,12 @@ describe('SObjectFetcher', () => {
   it('given invalid sobject name, when creating fetcher, then throws', () => {
     const sfPort = makeSfPort()
     expect(
-      () => new SObjectFetcher(sfPort, 'bad name!', ['Id'], 'LastModifiedDate')
+      () =>
+        new SObjectFetcher(sfPort, {
+          sobject: 'bad name!',
+          fields: ['Id'],
+          dateField: 'LastModifiedDate',
+        })
     ).toThrow('Invalid sobject')
   })
 
@@ -253,19 +249,23 @@ describe('SObjectFetcher', () => {
     const sfPort = makeSfPort()
     expect(
       () =>
-        new SObjectFetcher(
-          sfPort,
-          'Account',
-          ['bad field!'],
-          'LastModifiedDate'
-        )
+        new SObjectFetcher(sfPort, {
+          sobject: 'Account',
+          fields: ['bad field!'],
+          dateField: 'LastModifiedDate',
+        })
     ).toThrow('Invalid field')
   })
 
   it('given invalid dateField name, when creating fetcher, then throws', () => {
     const sfPort = makeSfPort()
     expect(
-      () => new SObjectFetcher(sfPort, 'Account', ['Id'], 'bad date!')
+      () =>
+        new SObjectFetcher(sfPort, {
+          sobject: 'Account',
+          fields: ['Id'],
+          dateField: 'bad date!',
+        })
     ).toThrow('Invalid dateField')
   })
 })

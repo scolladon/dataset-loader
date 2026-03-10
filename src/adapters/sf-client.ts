@@ -39,24 +39,23 @@ async function withRetry<T>(
   fn: () => Promise<T>,
   baseDelayMs: number
 ): Promise<T> {
+  let lastError: unknown
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       return await fn()
     } catch (err: unknown) {
-      if (
-        isHttpError(err) &&
-        err.statusCode === 429 &&
-        attempt < MAX_RETRIES - 1
-      ) {
-        const halfDelay = (baseDelayMs * Math.pow(2, attempt)) / 2
-        const delay = halfDelay + Math.random() * halfDelay
-        await new Promise(resolve => setTimeout(resolve, delay))
-        continue
+      lastError = err
+      const isRetryable =
+        isHttpError(err) && err.statusCode === 429 && attempt < MAX_RETRIES - 1
+      if (!isRetryable) {
+        throw formatError(err)
       }
-      throw formatError(err)
+      const halfDelay = (baseDelayMs * Math.pow(2, attempt)) / 2
+      const delay = halfDelay + Math.random() * halfDelay
+      await new Promise(resolve => setTimeout(resolve, delay))
     }
   }
-  throw new Error('Unreachable')
+  throw formatError(lastError)
 }
 
 export class SalesforceClient implements SalesforcePort {

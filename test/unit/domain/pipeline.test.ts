@@ -12,6 +12,7 @@ import {
   type CreateUploaderPort,
   type FetchPort,
   type FetchResult,
+  type GroupTracker,
   type LoggerPort,
   type ProgressPort,
   type StatePort,
@@ -26,8 +27,26 @@ function createMockLogger(): LoggerPort {
   return { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
 }
 
-function createMockProgress(): ProgressPort {
-  return { create: vi.fn(() => ({ tick: vi.fn(), stop: vi.fn() })) }
+function createMockGroupTracker(): GroupTracker {
+  return {
+    updateParentId: vi.fn(),
+    incrementParts: vi.fn(),
+    addFiles: vi.fn(),
+    addRows: vi.fn(),
+    stop: vi.fn(),
+  }
+}
+
+function createMockProgress(
+  tracker: GroupTracker = createMockGroupTracker()
+): ProgressPort {
+  return {
+    create: vi.fn(() => ({
+      tick: vi.fn(),
+      trackGroup: vi.fn(() => tracker),
+      stop: vi.fn(),
+    })),
+  }
 }
 
 function createMockState(
@@ -67,7 +86,6 @@ function createFetchResult(
         yield csvReadable(csv)
       }
     })(),
-    totalHint: csvStreams.length,
     watermark: () => watermark,
   }
 }
@@ -502,6 +520,132 @@ describe('executePipeline (streaming)', () => {
     )
   })
 
+  it('given entries with data, when executing, then creates group tracker and stops it after finalization', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"H"\n"v"\n'], watermark)
+    )
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    const phase = (progress.create as ReturnType<typeof vi.fn>).mock.results[0]
+      .value
+    expect(phase.trackGroup).toHaveBeenCalledWith('DS')
+    expect(tracker.stop).toHaveBeenCalled()
+  })
+
+  it('given entries with data, when executing, then passes upload listener to uploader factory', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"H"\n"v"\n'], watermark)
+    )
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(createUploader.create).toHaveBeenCalledWith(
+      expect.anything(),
+      'Append',
+      expect.objectContaining({
+        onParentCreated: expect.any(Function),
+        onPartUploaded: expect.any(Function),
+      })
+    )
+  })
+
+  it('given upload listener wired, when onParentCreated called, then updates tracker parentId', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"H"\n"v"\n'], watermark)
+    )
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+    let capturedListener: { onParentCreated: (id: string) => void } | undefined
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn((_ds, _op, listener) => {
+        capturedListener = listener
+        return createMockUploader()
+      }),
+    }
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+    capturedListener!.onParentCreated('06Vxxx')
+
+    // Assert
+    expect(tracker.updateParentId).toHaveBeenCalledWith('06Vxxx')
+  })
+
+  it('given upload listener wired, when onPartUploaded called, then increments tracker parts', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"H"\n"v"\n'], watermark)
+    )
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+    let capturedListener: { onPartUploaded: () => void } | undefined
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn((_ds, _op, listener) => {
+        capturedListener = listener
+        return createMockUploader()
+      }),
+    }
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+    capturedListener!.onPartUploaded()
+
+    // Assert
+    expect(tracker.incrementParts).toHaveBeenCalled()
+  })
+
   it('given non-Error rejection in entry fetch, when executing, then logs unknown error', async () => {
     // Arrange
     const fetcher = mockFetcher(async () => {
@@ -526,6 +670,88 @@ describe('executePipeline (streaming)', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('unknown error')
     )
+  })
+
+  it('given entries with data, when executing, then reports files and rows progressively to tracker', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"H"\n"r1"\n"r2"\n'], watermark)
+    )
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.addFiles).toHaveBeenCalledWith(1)
+    expect(tracker.addFiles).toHaveBeenCalledTimes(1)
+    expect(tracker.addRows).toHaveBeenCalledWith(1)
+    expect(tracker.addRows).toHaveBeenCalledTimes(2)
+  })
+
+  it('given empty source (skipped entry), when executing, then does not report fetch stats to tracker', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => createFetchResult([]))
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.addFiles).not.toHaveBeenCalled()
+    expect(tracker.addRows).not.toHaveBeenCalled()
+  })
+
+  it('given fetch error, when executing, then does not report fetch stats to tracker', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => {
+      throw new Error('network error')
+    })
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.addFiles).not.toHaveBeenCalled()
+    expect(tracker.addRows).not.toHaveBeenCalled()
   })
 
   it('given partial failure within group with two entries, when executing, then aborts entire group', async () => {

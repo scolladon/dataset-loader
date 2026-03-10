@@ -22,6 +22,7 @@ function createMockSfPort(queryResult: 'ok' | 'fail' = 'ok'): SalesforcePort {
     getBlobStream: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
+    del: vi.fn(),
     apiVersion: '62.0',
   }
 }
@@ -208,6 +209,29 @@ describe('runAudit', () => {
 
     expect(sut.passed).toBe(true)
     expect(logger.info).toHaveBeenCalled()
+  })
+
+  it('given check that throws, when running audit, then logs FAIL with check label', async () => {
+    // Arrange
+    const checks = [
+      {
+        org: 'src',
+        label: 'src: exploding check',
+        execute: async () => {
+          throw new Error('unexpected failure')
+        },
+      },
+    ]
+    const logger = createMockLogger()
+
+    // Act
+    await runAudit(checks, logger)
+
+    // Assert
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('[FAIL]'))
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('src: exploding check')
+    )
   })
 
   it('given check that throws, when running audit, then audit marks it as failed', async () => {

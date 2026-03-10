@@ -14,8 +14,8 @@ const DEFAULT_FALLBACK = { totalSize: 0, done: true, records: [] }
 export class RouteAction {
   private readonly commit: (route: Route) => FakeConnectionBuilder
   private readonly methodCheck: ((method: string) => boolean) | null
-  private readonly urlIncludes: string[]
-  private readonly urlExcludes: string[]
+  private readonly urlIncludes: readonly string[]
+  private readonly urlExcludes: readonly string[]
   private readonly customPredicate:
     | ((url: string, method: string) => boolean)
     | null
@@ -25,24 +25,33 @@ export class RouteAction {
     options: {
       methodCheck?: (method: string) => boolean
       urlIncludes?: string[]
+      urlExcludes?: string[]
       predicate?: (url: string, method: string) => boolean
     }
   ) {
     this.commit = commit
     this.methodCheck = options.methodCheck ?? null
     this.urlIncludes = [...(options.urlIncludes ?? [])]
-    this.urlExcludes = []
+    this.urlExcludes = [...(options.urlExcludes ?? [])]
     this.customPredicate = options.predicate ?? null
   }
 
   including(urlContains: string): RouteAction {
-    this.urlIncludes.push(urlContains)
-    return this
+    return new RouteAction(this.commit, {
+      methodCheck: this.methodCheck ?? undefined,
+      urlIncludes: [...this.urlIncludes, urlContains],
+      urlExcludes: [...this.urlExcludes],
+      predicate: this.customPredicate ?? undefined,
+    })
   }
 
   excluding(urlContains: string): RouteAction {
-    this.urlExcludes.push(urlContains)
-    return this
+    return new RouteAction(this.commit, {
+      methodCheck: this.methodCheck ?? undefined,
+      urlIncludes: [...this.urlIncludes],
+      urlExcludes: [...this.urlExcludes, urlContains],
+      predicate: this.customPredicate ?? undefined,
+    })
   }
 
   returns(response: unknown): FakeConnectionBuilder {

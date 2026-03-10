@@ -13,6 +13,21 @@ import {
 
 const OCLIF_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const
 
+// ── Test data constants ───────────────────────────────────────────────
+const INSIGHTS_DATA_PREFIX = '0Ib'
+const INSIGHTS_PART_PREFIX = '0Ic'
+const LOG_DATE_MAR_01 = '2026-03-01T00:00:00.000+0000'
+const LOG_DATE_MAR_02 = '2026-03-02T00:00:00.000+0000'
+const LOG_DATE_MAR_03 = '2026-03-03T00:00:00.000+0000'
+const WATERMARK_DATE = '2026-03-01T00:00:00.000Z'
+const ELF_CSV_HEADERS = ['EVENT_TYPE', 'USER_ID']
+const LARGE_ROW_COUNT = 5000
+const SOBJECT_PAGE_SIZE = 2000
+const SOBJECT_PAGE2_START = 2000
+const SOBJECT_PAGE2_END = 3500
+const LARGE_PART_ROW_COUNT = 4000
+const LARGE_PART_RANDOM_BYTES = 4096
+
 function captureSignalListeners(): Map<string, NodeJS.SignalsListener[]> {
   const snapshot = new Map<string, NodeJS.SignalsListener[]>()
   for (const signal of OCLIF_SIGNALS) {
@@ -100,8 +115,15 @@ function readState(statePath: string): Record<string, string> {
   try {
     const raw = JSON.parse(readFileSync(statePath, 'utf-8'))
     return raw.watermarks ?? {}
-  } catch {
-    return {}
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ENOENT'
+    ) {
+      return {}
+    }
+    throw error
   }
 }
 
@@ -242,9 +264,9 @@ describe('CrmaLoad NUT', () => {
         .returns(defaultInsightsQueryResponse())
         .onPost('InsightsExternalData')
         .excluding('Part')
-        .returns(defaultCreateResponse('0Ib'))
+        .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
         .onPost('InsightsExternalDataPart')
-        .returns(defaultCreateResponse('0Ic'))
+        .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
         .onPatch('InsightsExternalData')
         .returns({ success: true })
         .build()
@@ -266,9 +288,9 @@ describe('CrmaLoad NUT', () => {
         .returns(defaultInsightsQueryResponse())
         .onPost('InsightsExternalData')
         .excluding('Part')
-        .returns(defaultCreateResponse('0Ib'))
+        .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
         .onPost('InsightsExternalDataPart')
-        .returns(defaultCreateResponse('0Ic'))
+        .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
         .onPatch('InsightsExternalData')
         .returns({ success: true })
         .build()
@@ -405,7 +427,7 @@ describe('CrmaLoad NUT', () => {
       writeFileSync(
         tmp.statePath,
         JSON.stringify({
-          watermarks: { 'src-org:elf:Login:Daily': '2026-03-01T00:00:00.000Z' },
+          watermarks: { 'src-org:elf:Login:Daily': WATERMARK_DATE },
         })
       )
       orgOnlyConnection()
@@ -577,16 +599,12 @@ describe('CrmaLoad NUT', () => {
   describe('e2e pipeline - ELF', () => {
     it('given valid ELF config with one log record, when running full pipeline, then processes one entry and persists watermark', async () => {
       // Arrange
-      const logDate = '2026-03-01T00:00:00.000+0000'
-      const elfCsv = csvContent(
-        ['EVENT_TYPE', 'USER_ID'],
-        [
-          ['Login', '005xx0000001'],
-          ['Login', '005xx0000002'],
-        ]
-      )
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [
+        ['Login', '005xx0000001'],
+        ['Login', '005xx0000002'],
+      ])
       tmp = createTempFiles(makeConfigJson([elfEntry()]))
-      elfPipeline(defaultElfQueryResponse([logDate]), elfCsv)
+      elfPipeline(defaultElfQueryResponse([LOG_DATE_MAR_01]), elfCsv)
 
       // Act
       const sut = await runCommand([
@@ -603,7 +621,9 @@ describe('CrmaLoad NUT', () => {
         entriesFailed: 0,
         groupsUploaded: 1,
       })
-      expect(readState(tmp.statePath)['src-org:elf:Login:Daily']).toBe(logDate)
+      expect(readState(tmp.statePath)['src-org:elf:Login:Daily']).toBe(
+        LOG_DATE_MAR_01
+      )
     })
 
     it('given ELF query returns no records, when running pipeline, then skips entry with zero groups uploaded', async () => {
@@ -667,12 +687,12 @@ describe('CrmaLoad NUT', () => {
         {
           Id: '001000000000001',
           Name: 'Acme',
-          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_01,
         },
         {
           Id: '001000000000002',
           Name: 'Beta',
-          LastModifiedDate: '2026-03-02T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_02,
         },
       ]
       tmp = createTempFiles(makeConfigJson([sobjectEntry()]))
@@ -694,7 +714,7 @@ describe('CrmaLoad NUT', () => {
         groupsUploaded: 1,
       })
       expect(readState(tmp.statePath)['src-org:sobject:Account']).toBe(
-        '2026-03-02T00:00:00.000+0000'
+        LOG_DATE_MAR_02
       )
     })
 
@@ -726,14 +746,14 @@ describe('CrmaLoad NUT', () => {
         {
           Id: '001000000000001',
           Name: 'Acme',
-          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_01,
         },
       ]
       const page2Records = [
         {
           Id: '001000000000002',
           Name: 'Beta',
-          LastModifiedDate: '2026-03-02T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_02,
         },
       ]
       const nextUrl = '/services/data/v65.0/query/01g000000000001-2000'
@@ -751,9 +771,9 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
           .excluding('Part')
-          .returns(defaultCreateResponse('0Ib'))
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
           .onPost('InsightsExternalDataPart')
-          .returns(defaultCreateResponse('0Ic'))
+          .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
           .onPatch('InsightsExternalData')
           .returns({ success: true })
           .build()
@@ -775,7 +795,7 @@ describe('CrmaLoad NUT', () => {
         groupsUploaded: 1,
       })
       expect(readState(tmp.statePath)['src-org:sobject:Account']).toBe(
-        '2026-03-02T00:00:00.000+0000'
+        LOG_DATE_MAR_02
       )
     })
   })
@@ -783,15 +803,12 @@ describe('CrmaLoad NUT', () => {
   describe('multi-entry scenarios', () => {
     it('given ELF and SObject entries both succeeding, when running pipeline, then processes both with no exit code', async () => {
       // Arrange
-      const elfCsv = csvContent(
-        ['EVENT_TYPE', 'USER_ID'],
-        [['Login', '005xx0000001']]
-      )
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])
       const sobjectRecords = [
         {
           Id: '001000000000001',
           Name: 'Acme',
-          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_01,
         },
       ]
       tmp = createTempFiles(
@@ -806,7 +823,7 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultOrgResponse())
           .onQuery('EventLogFile')
           .excluding('InsightsExternalData')
-          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
           .returns(elfCsv)
@@ -817,9 +834,9 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
           .excluding('Part')
-          .returns(defaultCreateResponse('0Ib'))
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
           .onPost('InsightsExternalDataPart')
-          .returns(defaultCreateResponse('0Ic'))
+          .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
           .onPatch('InsightsExternalData')
           .returns({ success: true })
           .build()
@@ -845,10 +862,7 @@ describe('CrmaLoad NUT', () => {
 
     it('given ELF succeeds and SObject throws, when running pipeline, then reports one failure with exit code >= 1', async () => {
       // Arrange
-      const elfCsv = csvContent(
-        ['EVENT_TYPE', 'USER_ID'],
-        [['Login', '005xx0000001']]
-      )
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])
       tmp = createTempFiles(
         makeConfigJson([
           elfEntry({ dataset: 'DS1' }),
@@ -861,7 +875,7 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultOrgResponse())
           .onQuery('EventLogFile')
           .excluding('InsightsExternalData')
-          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
           .returns(elfCsv)
@@ -872,9 +886,9 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
           .excluding('Part')
-          .returns(defaultCreateResponse('0Ib'))
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
           .onPost('InsightsExternalDataPart')
-          .returns(defaultCreateResponse('0Ic'))
+          .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
           .onPatch('InsightsExternalData')
           .returns({ success: true })
           .build()
@@ -945,7 +959,7 @@ describe('CrmaLoad NUT', () => {
         {
           Id: '001000000000001',
           Name: 'Acme',
-          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_01,
         },
       ]
       tmp = createTempFiles(
@@ -981,7 +995,7 @@ describe('CrmaLoad NUT', () => {
         {
           Id: '001000000000001',
           Name: 'Acme',
-          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_01,
         },
       ]
       tmp = createTempFiles(
@@ -1036,26 +1050,25 @@ describe('CrmaLoad NUT', () => {
   describe('multi-config complex scenario', () => {
     it('given five entries across four orgs with mixed types, when running pipeline, then all five succeed with correct watermarks', async () => {
       // Arrange
-      const largeRowCount = 5000
       const largeRows: string[][] = []
-      for (let i = 0; i < largeRowCount; i++) {
+      for (let i = 0; i < LARGE_ROW_COUNT; i++) {
         largeRows.push([`Login`, `005xx${String(i).padStart(7, '0')}`])
       }
-      const largeCsv = csvContent(['EVENT_TYPE', 'USER_ID'], largeRows)
+      const largeCsv = csvContent(ELF_CSV_HEADERS, largeRows)
       const sobjectRecordsPage1: Record<string, unknown>[] = []
-      for (let i = 0; i < 2000; i++) {
+      for (let i = 0; i < SOBJECT_PAGE_SIZE; i++) {
         sobjectRecordsPage1.push({
           Id: `001${String(i).padStart(12, '0')}`,
           Name: `Account_${i}`,
-          LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_01,
         })
       }
       const sobjectRecordsPage2: Record<string, unknown>[] = []
-      for (let i = 2000; i < 3500; i++) {
+      for (let i = SOBJECT_PAGE2_START; i < SOBJECT_PAGE2_END; i++) {
         sobjectRecordsPage2.push({
           Id: `001${String(i).padStart(12, '0')}`,
           Name: `Account_${i}`,
-          LastModifiedDate: '2026-03-02T00:00:00.000+0000',
+          LastModifiedDate: LOG_DATE_MAR_02,
         })
       }
       const entries = [
@@ -1103,12 +1116,12 @@ describe('CrmaLoad NUT', () => {
           .excluding('InsightsExternalData')
           .calls(url => {
             if (url.includes('Login'))
-              return defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000'])
+              return defaultElfQueryResponse([LOG_DATE_MAR_01])
             if (url.includes('API'))
-              return defaultElfQueryResponse(['2026-03-02T00:00:00.000+0000'])
+              return defaultElfQueryResponse([LOG_DATE_MAR_02])
             if (url.includes('Report'))
-              return defaultElfQueryResponse(['2026-03-03T00:00:00.000+0000'])
-            return defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000'])
+              return defaultElfQueryResponse([LOG_DATE_MAR_03])
+            return defaultElfQueryResponse([LOG_DATE_MAR_01])
           })
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
@@ -1125,7 +1138,7 @@ describe('CrmaLoad NUT', () => {
               {
                 Id: '500000000000001',
                 Subject: 'Test Case',
-                LastModifiedDate: '2026-03-01T00:00:00.000+0000',
+                LastModifiedDate: LOG_DATE_MAR_01,
               },
             ])
           )
@@ -1134,9 +1147,9 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
           .excluding('Part')
-          .returns(defaultCreateResponse('0Ib'))
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
           .onPost('InsightsExternalDataPart')
-          .returns(defaultCreateResponse('0Ic'))
+          .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
           .onPatch('InsightsExternalData')
           .returns({ success: true })
           .build()
@@ -1159,32 +1172,24 @@ describe('CrmaLoad NUT', () => {
       })
       expect(process.exitCode).toBeUndefined()
       const watermarks = readState(tmp.statePath)
-      expect(watermarks['src-org:elf:Login:Daily']).toBe(
-        '2026-03-01T00:00:00.000+0000'
-      )
-      expect(watermarks['src-org:elf:API:Daily']).toBe(
-        '2026-03-02T00:00:00.000+0000'
-      )
-      expect(watermarks['src-org:sobject:Account']).toBe(
-        '2026-03-02T00:00:00.000+0000'
-      )
-      expect(watermarks['src2-org:sobject:Case']).toBe(
-        '2026-03-01T00:00:00.000+0000'
-      )
-      expect(watermarks['src2-org:elf:Report:Daily']).toBe(
-        '2026-03-03T00:00:00.000+0000'
-      )
+      expect(watermarks['src-org:elf:Login:Daily']).toBe(LOG_DATE_MAR_01)
+      expect(watermarks['src-org:elf:API:Daily']).toBe(LOG_DATE_MAR_02)
+      expect(watermarks['src-org:sobject:Account']).toBe(LOG_DATE_MAR_02)
+      expect(watermarks['src2-org:sobject:Case']).toBe(LOG_DATE_MAR_01)
+      expect(watermarks['src2-org:elf:Report:Daily']).toBe(LOG_DATE_MAR_03)
     })
 
     it('given large CSV exceeding part size threshold, when running pipeline, then uploads multiple parts successfully', async () => {
       // Arrange
       const { randomBytes } = await import('node:crypto')
-      const rowCount = 4000
       const largeRows: string[][] = []
-      for (let i = 0; i < rowCount; i++) {
-        largeRows.push([`Login`, randomBytes(4096).toString('base64')])
+      for (let i = 0; i < LARGE_PART_ROW_COUNT; i++) {
+        largeRows.push([
+          `Login`,
+          randomBytes(LARGE_PART_RANDOM_BYTES).toString('base64'),
+        ])
       }
-      const largeCsv = csvContent(['EVENT_TYPE', 'USER_ID'], largeRows)
+      const largeCsv = csvContent(ELF_CSV_HEADERS, largeRows)
       tmp = createTempFiles(makeConfigJson([elfEntry()]))
       let partCount = 0
       applyConnection(
@@ -1193,7 +1198,7 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultOrgResponse())
           .onQuery('EventLogFile')
           .excluding('InsightsExternalData')
-          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
           .returns(largeCsv)
@@ -1202,11 +1207,11 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
           .excluding('Part')
-          .returns(defaultCreateResponse('0Ib'))
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
           .onPost('InsightsExternalDataPart')
           .calls(() => {
             partCount++
-            return defaultCreateResponse('0Ic')
+            return defaultCreateResponse(INSIGHTS_PART_PREFIX)
           })
           .onPatch('InsightsExternalData')
           .returns({ success: true })
@@ -1235,13 +1240,9 @@ describe('CrmaLoad NUT', () => {
   describe('watermark persistence', () => {
     it('given successful first run writes watermark, when second run finds no new records, then entry is skipped', async () => {
       // Arrange
-      const logDate = '2026-03-01T00:00:00.000+0000'
-      const elfCsv = csvContent(
-        ['EVENT_TYPE', 'USER_ID'],
-        [['Login', '005xx0000001']]
-      )
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])
       tmp = createTempFiles(makeConfigJson([elfEntry()]))
-      elfPipeline(defaultElfQueryResponse([logDate]), elfCsv)
+      elfPipeline(defaultElfQueryResponse([LOG_DATE_MAR_01]), elfCsv)
 
       // Act (first run — writes watermark)
       await runCommand([
@@ -1252,7 +1253,9 @@ describe('CrmaLoad NUT', () => {
       ])
 
       // Assert (watermark persisted)
-      expect(readState(tmp.statePath)['src-org:elf:Login:Daily']).toBe(logDate)
+      expect(readState(tmp.statePath)['src-org:elf:Login:Daily']).toBe(
+        LOG_DATE_MAR_01
+      )
 
       // Arrange (second run — no new records)
       elfPipeline({ totalSize: 0, done: true, records: [] }, '')
@@ -1309,10 +1312,7 @@ describe('CrmaLoad NUT', () => {
 
     it('given InsightsExternalData POST fails during upload, when running pipeline, then marks entry as failed with exit code', async () => {
       // Arrange
-      const elfCsv = csvContent(
-        ['EVENT_TYPE', 'USER_ID'],
-        [['Login', '005xx0000001']]
-      )
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])
       tmp = createTempFiles(makeConfigJson([elfEntry()]))
       applyConnection(
         new FakeConnectionBuilder()
@@ -1320,7 +1320,7 @@ describe('CrmaLoad NUT', () => {
           .returns(defaultOrgResponse())
           .onQuery('EventLogFile')
           .excluding('InsightsExternalData')
-          .returns(defaultElfQueryResponse(['2026-03-01T00:00:00.000+0000']))
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
           .returns(elfCsv)

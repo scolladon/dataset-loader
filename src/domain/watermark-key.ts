@@ -1,19 +1,4 @@
-interface ElfShape {
-  readonly name?: string
-  readonly type: 'elf'
-  readonly sourceOrg: string
-  readonly eventType: string
-  readonly interval: string
-}
-
-interface SObjectShape {
-  readonly name?: string
-  readonly type: 'sobject'
-  readonly sourceOrg: string
-  readonly sobject: string
-}
-
-type EntryShape = ElfShape | SObjectShape
+import { type EntryShape } from '../ports/types.js'
 
 export class WatermarkKey {
   private constructor(private readonly value: string) {}

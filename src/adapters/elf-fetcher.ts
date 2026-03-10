@@ -5,6 +5,7 @@ import {
   type FetchResult,
   type QueryResult,
   type SalesforcePort,
+  SF_IDENTIFIER_PATTERN,
 } from '../ports/types.js'
 import { queryPages } from './query-pages.js'
 
@@ -20,7 +21,7 @@ export class ElfFetcher implements FetchPort {
     private readonly eventType: string,
     private readonly interval: string
   ) {
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(eventType)) {
+    if (!SF_IDENTIFIER_PATTERN.test(eventType)) {
       throw new Error(`Invalid eventType: '${eventType}'`)
     }
     if (!['Daily', 'Hourly'].includes(interval)) {
@@ -29,10 +30,10 @@ export class ElfFetcher implements FetchPort {
   }
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {
-    const watermarkClause = watermark
-      ? ` AND LogDate > ${watermark.toSoqlLiteral()}`
-      : ''
-    const soql = `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE EventType = '${this.eventType}' AND Interval = '${this.interval}'${watermarkClause} ORDER BY LogDate ASC`
+    const baseWhere = `EventType = '${this.eventType}' AND Interval = '${this.interval}'`
+    const soql = watermark
+      ? `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE ${baseWhere} AND LogDate > ${watermark.toSoqlLiteral()} ORDER BY LogDate ASC`
+      : `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE ${baseWhere} ORDER BY LogDate DESC LIMIT 1`
 
     const firstPage: QueryResult<EventLogFileRecord> =
       await this.sfPort.query(soql)
@@ -50,7 +51,6 @@ export class ElfFetcher implements FetchPort {
         streams: (async function* () {
           /* empty */
         })(),
-        totalHint: 0,
         watermark: () => undefined,
       }
     }
@@ -65,7 +65,6 @@ export class ElfFetcher implements FetchPort {
           yield await sfPort.getBlobStream(blobUrl(record))
         }
       })(),
-      totalHint: records.length,
       watermark: () =>
         Watermark.fromString(records[records.length - 1].LogDate),
     }

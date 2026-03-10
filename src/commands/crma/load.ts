@@ -2,7 +2,9 @@ import { Org } from '@salesforce/core'
 import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
 import {
   type ConfigEntry,
+  entryLabel,
   parseConfig,
+  type ResolvedEntry,
   resolveConfig,
 } from '../../adapters/config-loader.js'
 import { ElfFetcher } from '../../adapters/elf-fetcher.js'
@@ -15,19 +17,16 @@ import { buildAuditChecks, runAudit } from '../../domain/auditor.js'
 import { DatasetKey } from '../../domain/dataset-key.js'
 import { executePipeline, type PipelineEntry } from '../../domain/pipeline.js'
 import { WatermarkKey } from '../../domain/watermark-key.js'
+import { type WatermarkStore } from '../../domain/watermark-store.js'
 import {
   type CreateUploaderPort,
+  type EntryType,
+  type FetchPort,
+  formatErrorMessage,
   type LoggerPort,
-  type Operation,
   type SalesforcePort,
+  type StatePort,
 } from '../../ports/types.js'
-
-function entryLabel(entry: ConfigEntry): string {
-  if (entry.name) return entry.name
-  return entry.type === 'elf'
-    ? `elf:${entry.eventType}`
-    : `sobject:${entry.sobject}`
-}
 
 export interface CrmaLoadResult {
   entriesProcessed: number
@@ -71,117 +70,151 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
   public async run(): Promise<CrmaLoadResult> {
     const { flags } = await this.parse(CrmaLoad)
     const sfPorts = new Map<string, SalesforcePort>()
+    const logger = this.createLogger()
 
-    const getSfPort = async (orgAlias: string): Promise<SalesforcePort> => {
-      if (!sfPorts.has(orgAlias)) {
-        const org = await Org.create({ aliasOrUsername: orgAlias })
-        sfPorts.set(orgAlias, new SalesforceClient(org.getConnection()))
-      }
-      return sfPorts.get(orgAlias)!
+    const resolvedEntries = await this.loadAndResolveConfig(
+      flags['config-file'],
+      sfPorts
+    )
+    const filtered = this.filterByEntry(resolvedEntries, flags['entry'])
+
+    if (flags['audit']) return this.handleAudit(filtered, sfPorts, logger)
+
+    const state = new FileStateManager(flags['state-file'])
+    const watermarks = await state.read()
+
+    if (flags['dry-run']) return this.handleDryRun(filtered, watermarks)
+
+    return this.handlePipeline(filtered, sfPorts, watermarks, state, logger)
+  }
+
+  private createLogger(): LoggerPort {
+    return {
+      info: (msg: string) => this.log(msg),
+      warn: (msg: string) => this.warn(msg),
+      debug: (msg: string) => this.debug(msg),
     }
+  }
 
-    const logger: LoggerPort = {
-      info: msg => this.log(msg),
-      warn: msg => this.warn(msg),
-      debug: msg => this.debug(msg),
-    }
+  private async ensureSfPort(
+    orgAlias: string,
+    sfPorts: Map<string, SalesforcePort>
+  ): Promise<void> {
+    if (sfPorts.has(orgAlias)) return
+    const org = await Org.create({ aliasOrUsername: orgAlias })
+    sfPorts.set(orgAlias, new SalesforceClient(org.getConnection()))
+  }
 
-    let resolvedEntries
+  private async loadAndResolveConfig(
+    configPath: string,
+    sfPorts: Map<string, SalesforcePort>
+  ): Promise<ResolvedEntry[]> {
     try {
-      const config = await parseConfig(flags['config-file'])
+      const config = await parseConfig(configPath)
       const allOrgs = new Set<string>()
       for (const e of config.entries) {
         allOrgs.add(e.sourceOrg)
         allOrgs.add(e.analyticOrg)
       }
-      await Promise.all([...allOrgs].map(alias => getSfPort(alias)))
-      resolvedEntries = await resolveConfig(config, sfPorts)
-    } catch (error) {
-      this.error(
-        `Config loading failed: ${error instanceof Error ? error.message : error}`
-      )
-    }
-
-    if (flags['entry'] !== undefined) {
-      const hasAnyName = resolvedEntries.some(e => e.entry.name)
-      resolvedEntries = resolvedEntries.filter(
-        e => e.entry.name === flags['entry']
-      )
-      if (resolvedEntries.length === 0) {
-        const hint = hasAnyName
-          ? ''
-          : ' Ensure your config entries have a "name" field.'
-        this.error(`Entry '${flags['entry']}' not found.${hint}`)
+      const ensurePromises: Promise<void>[] = []
+      for (const alias of allOrgs) {
+        ensurePromises.push(this.ensureSfPort(alias, sfPorts))
       }
+      await Promise.all(ensurePromises)
+      return await resolveConfig(config, sfPorts)
+    } catch (error) {
+      this.error(`Config loading failed: ${formatErrorMessage(error)}`)
     }
+  }
 
-    if (flags['audit']) {
-      const auditEntries = resolvedEntries.map(({ entry }) => ({
+  private filterByEntry(
+    entries: ResolvedEntry[],
+    entryName: string | undefined
+  ): ResolvedEntry[] {
+    if (entryName === undefined) return entries
+
+    const hasAnyName = entries.some(e => e.entry.name)
+    const filtered: ResolvedEntry[] = []
+    for (const e of entries) {
+      if (e.entry.name === entryName) filtered.push(e)
+    }
+    if (filtered.length === 0) {
+      const hint = hasAnyName
+        ? ''
+        : ' Ensure your config entries have a "name" field.'
+      this.error(`Entry '${entryName}' not found.${hint}`)
+    }
+    return filtered
+  }
+
+  private async handleAudit(
+    entries: ResolvedEntry[],
+    sfPorts: Map<string, SalesforcePort>,
+    logger: LoggerPort
+  ): Promise<CrmaLoadResult> {
+    const auditEntries: {
+      type: EntryType
+      sourceOrg: string
+      analyticOrg: string
+    }[] = []
+    for (const { entry } of entries) {
+      auditEntries.push({
         type: entry.type,
         sourceOrg: entry.sourceOrg,
         analyticOrg: entry.analyticOrg,
-      }))
-      logger.info('Audit — pre-flight checks:')
-      const checks = buildAuditChecks(auditEntries, sfPorts)
-      const auditResult = await runAudit(checks, logger)
-      if (!auditResult.passed) process.exitCode = 2
-      return {
-        entriesProcessed: 0,
-        entriesSkipped: 0,
-        entriesFailed: auditResult.passed ? 0 : 1,
-        groupsUploaded: 0,
-      }
+      })
     }
-
-    const state = new FileStateManager(flags['state-file'])
-    const watermarks = await state.read()
-
-    if (flags['dry-run']) {
-      this.log('Dry run — planned entries:')
-      for (const { entry } of resolvedEntries) {
-        const wk = WatermarkKey.fromEntry(entry)
-        const wm = watermarks.get(wk)?.toString() ?? '(none)'
-        this.log(
-          `  ${entryLabel(entry)} → ${entry.analyticOrg}:${entry.dataset} (watermark: ${wm})`
-        )
-      }
-      return {
-        entriesProcessed: 0,
-        entriesSkipped: 0,
-        entriesFailed: 0,
-        groupsUploaded: 0,
-      }
+    logger.info('Audit — pre-flight checks:')
+    const checks = buildAuditChecks(auditEntries, sfPorts)
+    const auditResult = await runAudit(checks, logger)
+    if (!auditResult.passed) process.exitCode = 2
+    return {
+      entriesProcessed: 0,
+      entriesSkipped: 0,
+      entriesFailed: auditResult.passed ? 0 : 1,
+      groupsUploaded: 0,
     }
+  }
 
-    const pipelineEntries: PipelineEntry[] = resolvedEntries.map(
-      ({ entry, index, augmentColumns }) => {
-        const srcPort = sfPorts.get(entry.sourceOrg)!
-        return {
-          index,
-          label: entryLabel(entry),
-          watermarkKey: WatermarkKey.fromEntry(entry),
-          datasetKey: DatasetKey.fromEntry(entry),
-          operation: entry.operation as Operation,
-          augmentColumns,
-          fetcher:
-            entry.type === 'elf'
-              ? new ElfFetcher(srcPort, entry.eventType, entry.interval)
-              : new SObjectFetcher(
-                  srcPort,
-                  entry.sobject,
-                  entry.fields,
-                  entry.dateField!,
-                  entry.where,
-                  entry.limit
-                ),
-        }
-      }
-    )
+  private handleDryRun(
+    entries: ResolvedEntry[],
+    watermarks: WatermarkStore
+  ): CrmaLoadResult {
+    this.log('Dry run — planned entries:')
+    for (const { entry } of entries) {
+      const wk = WatermarkKey.fromEntry(entry)
+      const wm = watermarks.get(wk)?.toString() ?? '(none)'
+      this.log(
+        `  ${entryLabel(entry)} → ${entry.analyticOrg}:${entry.dataset} (watermark: ${wm})`
+      )
+    }
+    return {
+      entriesProcessed: 0,
+      entriesSkipped: 0,
+      entriesFailed: 0,
+      groupsUploaded: 0,
+    }
+  }
+
+  private async handlePipeline(
+    entries: ResolvedEntry[],
+    sfPorts: Map<string, SalesforcePort>,
+    watermarks: WatermarkStore,
+    state: StatePort,
+    logger: LoggerPort
+  ): Promise<CrmaLoadResult> {
+    const pipelineEntries: PipelineEntry[] = []
+    for (const resolvedEntry of entries) {
+      pipelineEntries.push(this.buildPipelineEntry(resolvedEntry, sfPorts))
+    }
 
     const createUploader: CreateUploaderPort = {
-      create(dataset, operation) {
-        const factory = new UploadSinkFactory(sfPorts.get(dataset.org)!)
-        return factory.create(dataset, operation)
+      create(dataset, operation, listener) {
+        const sfPort = sfPorts.get(dataset.org)
+        if (!sfPort)
+          throw new Error(`No SF connection for org '${dataset.org}'`)
+        const factory = new UploadSinkFactory(sfPort)
+        return factory.create(dataset, operation, listener)
       },
     }
 
@@ -205,5 +238,37 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       entriesFailed: result.entriesFailed,
       groupsUploaded: result.groupsUploaded,
     }
+  }
+
+  private buildPipelineEntry(
+    resolvedEntry: ResolvedEntry,
+    sfPorts: Map<string, SalesforcePort>
+  ): PipelineEntry {
+    const { entry, index, augmentColumns } = resolvedEntry
+    const srcPort = sfPorts.get(entry.sourceOrg)
+    if (!srcPort)
+      throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
+    return {
+      index,
+      label: entryLabel(entry),
+      watermarkKey: WatermarkKey.fromEntry(entry),
+      datasetKey: DatasetKey.fromEntry(entry),
+      operation: entry.operation,
+      augmentColumns,
+      fetcher: this.createFetcher(entry, srcPort),
+    }
+  }
+
+  private createFetcher(entry: ConfigEntry, sfPort: SalesforcePort): FetchPort {
+    if (entry.type === 'elf') {
+      return new ElfFetcher(sfPort, entry.eventType, entry.interval)
+    }
+    return new SObjectFetcher(sfPort, {
+      sobject: entry.sobject,
+      fields: entry.fields,
+      dateField: entry.dateField,
+      where: entry.where,
+      queryLimit: entry.limit,
+    })
   }
 }

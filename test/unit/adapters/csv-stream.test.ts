@@ -33,7 +33,6 @@ describe('CsvStream', () => {
 
     // Assert
     expect(lines).toEqual(['"Id","Name"\n', '"001","Acme"\n', '"002","Foo"\n'])
-    expect(sut.headersEmitted).toBe(true)
   })
 
   it('given multiple streams, when transforming, then header emitted once and subsequent headers skipped', async () => {
@@ -64,7 +63,6 @@ describe('CsvStream', () => {
     // Assert
     expect(firstLines).toEqual(['"Id"\n', '"001"\n'])
     expect(secondLines).toEqual(['"002"\n'])
-    expect(sut.headersEmitted).toBe(true)
   })
 
   it('given augment columns, when transforming, then appended to header and values to rows', async () => {
@@ -91,7 +89,6 @@ describe('CsvStream', () => {
 
     // Assert
     expect(lines).toEqual(['"Id","Name"\n'])
-    expect(sut.headersEmitted).toBe(true)
   })
 
   it('given empty augment columns, when transforming, then no extra columns added', async () => {

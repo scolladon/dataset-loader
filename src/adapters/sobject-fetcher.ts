@@ -6,35 +6,49 @@ import {
   type FetchResult,
   type QueryResult,
   type SalesforcePort,
+  SF_IDENTIFIER_PATTERN,
 } from '../ports/types.js'
 import { queryPages } from './query-pages.js'
 
+export interface SObjectFetcherConfig {
+  readonly sobject: string
+  readonly fields: string[]
+  readonly dateField: string
+  readonly where?: string
+  readonly queryLimit?: number
+}
+
 export class SObjectFetcher implements FetchPort {
   private readonly queryFields: string[]
+  private readonly sobject: string
+  private readonly fields: string[]
+  private readonly dateField: string
+  private readonly where?: string
+  private readonly queryLimit?: number
 
   constructor(
     private readonly sfPort: SalesforcePort,
-    private readonly sobject: string,
-    private readonly fields: string[],
-    private readonly dateField: string,
-    private readonly where?: string,
-    private readonly queryLimit?: number
+    config: SObjectFetcherConfig
   ) {
-    const apiNamePattern = /^[a-zA-Z_][a-zA-Z0-9_]*$/
-    if (!apiNamePattern.test(sobject)) {
-      throw new Error(`Invalid sobject: '${sobject}'`)
+    if (!SF_IDENTIFIER_PATTERN.test(config.sobject)) {
+      throw new Error(`Invalid sobject: '${config.sobject}'`)
     }
-    for (const field of fields) {
-      if (!apiNamePattern.test(field)) {
+    for (const field of config.fields) {
+      if (!SF_IDENTIFIER_PATTERN.test(field)) {
         throw new Error(`Invalid field: '${field}'`)
       }
     }
-    if (!apiNamePattern.test(dateField)) {
-      throw new Error(`Invalid dateField: '${dateField}'`)
+    if (!SF_IDENTIFIER_PATTERN.test(config.dateField)) {
+      throw new Error(`Invalid dateField: '${config.dateField}'`)
     }
-    this.queryFields = fields.includes(dateField)
-      ? fields
-      : [...fields, dateField]
+    this.sobject = config.sobject
+    this.fields = config.fields
+    this.dateField = config.dateField
+    this.where = config.where
+    this.queryLimit = config.queryLimit
+    this.queryFields = config.fields.includes(config.dateField)
+      ? config.fields
+      : [...config.fields, config.dateField]
   }
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {
@@ -74,7 +88,6 @@ export class SObjectFetcher implements FetchPort {
           yield Readable.from(Buffer.from(csvText))
         }
       })(),
-      totalHint: firstPage.totalSize,
       watermark: () => lastWatermark,
     }
   }
