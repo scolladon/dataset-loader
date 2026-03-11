@@ -1,4 +1,10 @@
-import { CsvStream } from '../adapters/csv-stream.js'
+import { Readable, type Writable } from 'node:stream'
+import { finished, pipeline } from 'node:stream/promises'
+import {
+  buildAugmentSuffix,
+  createAugmentTransform,
+} from '../adapters/augment-transform.js'
+import { createRowCounter } from '../adapters/row-counter.js'
 import {
   type CreateUploaderPort,
   type FetchPort,
@@ -8,6 +14,7 @@ import {
   type Operation,
   type PhaseProgress,
   type ProgressPort,
+  SkipDatasetError,
   type StatePort,
   type Uploader,
   type UploadListener,
@@ -104,7 +111,7 @@ async function processDatasetGroup(
 ): Promise<GroupResult> {
   const tracker = phase.trackGroup(group.datasetKey.name)
   const listener: UploadListener = {
-    onParentCreated: (parentId: string) => tracker.updateParentId(parentId),
+    onParentCreated: (id: string) => tracker.updateParentId(id),
     onPartUploaded: () => tracker.incrementParts(),
   }
   const uploader = input.createUploader.create(
@@ -112,23 +119,32 @@ async function processDatasetGroup(
     group.operation,
     listener
   )
-  const csvStream = new CsvStream()
 
   try {
-    const entryResults = await processEntries(
-      group.entries,
-      input,
-      phase,
-      csvStream,
-      uploader,
-      tracker
-    )
-    return await finalizeGroup(group, entryResults, uploader, input.logger)
-  } catch (error) {
-    await uploader.abort().catch((abortError: unknown) => {
-      input.logger.debug(
-        `sink.abort() failed: ${formatErrorMessage(abortError)}`
+    const chunker = await uploader.init()
+
+    const entryResults = await Promise.all(
+      group.entries.map(entry =>
+        pipeEntry(entry, input, chunker, phase, tracker)
       )
+    )
+
+    chunker.end()
+    await finished(chunker)
+
+    return await finalizeGroup(group, entryResults, uploader)
+  } catch (error) {
+    if (error instanceof SkipDatasetError) {
+      input.logger.warn(error.message)
+      return {
+        processed: 0,
+        skipped: group.entries.length,
+        failed: 0,
+        watermarks: [],
+      }
+    }
+    await uploader.abort().catch((abortError: unknown) => {
+      input.logger.debug(`abort failed: ${formatErrorMessage(abortError)}`)
     })
     throw error
   } finally {
@@ -136,69 +152,47 @@ async function processDatasetGroup(
   }
 }
 
-async function processEntries(
-  entries: readonly PipelineEntry[],
-  input: PipelineInput,
-  phase: { tick: (detail: string) => void },
-  csvStream: CsvStream,
-  uploader: Uploader,
-  tracker: Pick<GroupTracker, 'addFiles' | 'addRows'>
-): Promise<readonly EntryResult[]> {
-  const results: EntryResult[] = []
-  for (const entry of entries) {
-    results.push(
-      await processEntry(entry, input, phase, csvStream, uploader, tracker)
-    )
-  }
-  return results
-}
-
-async function processEntry(
+async function pipeEntry(
   entry: PipelineEntry,
   input: PipelineInput,
+  chunker: Writable,
   phase: { tick: (detail: string) => void },
-  csvStream: CsvStream,
-  uploader: Uploader,
   tracker: Pick<GroupTracker, 'addFiles' | 'addRows'>
 ): Promise<EntryResult> {
   try {
     const watermark = input.watermarks.get(entry.watermarkKey)
-    const fetchResult = await entry.fetcher.fetch(watermark)
+    const result = await entry.fetcher.fetch(watermark)
 
-    const hadHeaders = csvStream.headersEmitted
-    let totalLines = 0
-    const countedStreams = countStreams(fetchResult.streams, () => {
-      tracker.addFiles(1)
-    })
-    let isFirstLine = !hadHeaders
-    for await (const csvLine of csvStream.transform(
-      countedStreams,
-      entry.augmentColumns
-    )) {
-      await uploader.write(csvLine)
-      totalLines++
-      if (isFirstLine) {
-        isFirstLine = false
-      } else {
-        tracker.addRows(1)
-      }
+    const suffix = buildAugmentSuffix(entry.augmentColumns)
+    const source = Readable.from(result.lines)
+    const augmented = createAugmentTransform(suffix)
+    const counted = createRowCounter(tracker)
+    counted.pipe(chunker, { end: false })
+
+    try {
+      await pipeline(source, augmented, counted)
+    } finally {
+      counted.unpipe(chunker)
     }
 
-    const rowCount = computeDataRowCount(hadHeaders, totalLines)
+    const fileCount = result.fileCount()
+    tracker.addFiles(fileCount)
 
-    if (rowCount === 0) {
+    if (fileCount === 0) {
       phase.tick(`  [${entry.index}] ${entry.label} — skipped (no new records)`)
       return { status: 'skipped' }
     }
 
-    phase.tick(`  [${entry.index}] ${entry.label} — ${rowCount} rows`)
-    const wm = fetchResult.watermark()
+    phase.tick(`  [${entry.index}] ${entry.label} — done`)
+    const wm = result.watermark()
     return {
       status: 'processed',
       watermark: wm ? { key: entry.watermarkKey, watermark: wm } : undefined,
     }
   } catch (error) {
-    input.logger.warn(`Fetch failed: ${formatErrorMessage(error)}`)
+    input.logger.warn(
+      `Entry '${entry.label}' failed: ${formatErrorMessage(error)}`
+    )
     return { status: 'failed' }
   }
 }
@@ -206,8 +200,7 @@ async function processEntry(
 async function finalizeGroup(
   group: DatasetGroup,
   entryResults: readonly EntryResult[],
-  uploader: Uploader,
-  logger: LoggerPort
+  uploader: Uploader
 ): Promise<GroupResult> {
   const skipped = entryResults.filter(r => r.status === 'skipped').length
   const failed = entryResults.filter(r => r.status === 'failed').length
@@ -224,32 +217,26 @@ async function finalizeGroup(
   }
 
   if (hasData) {
-    const uploadResult = await uploader.process()
-    logger.debug(`InsightsExternalData created: ${uploadResult.parentId}`)
-  } else {
-    await uploader.abort()
+    await uploader.finalize()
+    return {
+      processed: group.entries.length - skipped - failed,
+      skipped,
+      failed: 0,
+      watermarks: entryResults.flatMap(r => (r.watermark ? [r.watermark] : [])),
+    }
   }
 
-  const watermarks = hasData
-    ? entryResults.flatMap(r => (r.watermark ? [r.watermark] : []))
-    : []
-
-  return {
-    processed: hasData ? group.entries.length - skipped - failed : 0,
-    skipped,
-    failed: 0,
-    watermarks,
-  }
-}
-
-function computeDataRowCount(hadHeaders: boolean, totalLines: number): number {
-  return !hadHeaders && totalLines > 0 ? totalLines - 1 : totalLines
+  await uploader.abort()
+  return { processed: 0, skipped, failed: 0, watermarks: [] }
 }
 
 function aggregateResults(
   results: readonly GroupResult[],
   initialStore: WatermarkStore
-): { readonly store: WatermarkStore; readonly pipelineResult: PipelineResult } {
+): {
+  readonly store: WatermarkStore
+  readonly pipelineResult: PipelineResult
+} {
   const {
     entriesProcessed,
     entriesSkipped,
@@ -305,16 +292,6 @@ function groupByDataset(entries: readonly PipelineEntry[]): DatasetGroup[] {
     }
   }
   return [...map.values()]
-}
-
-async function* countStreams<T>(
-  source: AsyncIterable<T>,
-  onItem: () => void
-): AsyncGenerator<T> {
-  for await (const item of source) {
-    onItem()
-    yield item
-  }
 }
 
 function computeExitCode(processed: number, failed: number): number {

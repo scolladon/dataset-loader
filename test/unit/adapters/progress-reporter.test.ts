@@ -10,9 +10,6 @@ describe('ProgressReporter', () => {
     const phase = sut.create('Fetching', 0)
 
     // Assert
-    expect(typeof phase.tick).toBe('function')
-    expect(typeof phase.trackGroup).toBe('function')
-    expect(typeof phase.stop).toBe('function')
     expect(() => phase.tick('detail')).not.toThrow()
     expect(() => phase.stop()).not.toThrow()
   })
@@ -26,11 +23,6 @@ describe('ProgressReporter', () => {
     const tracker = phase.trackGroup('MyDataset')
 
     // Assert
-    expect(typeof tracker.updateParentId).toBe('function')
-    expect(typeof tracker.incrementParts).toBe('function')
-    expect(typeof tracker.addFiles).toBe('function')
-    expect(typeof tracker.addRows).toBe('function')
-    expect(typeof tracker.stop).toBe('function')
     expect(() => tracker.updateParentId('06Vxxx')).not.toThrow()
     expect(() => tracker.incrementParts()).not.toThrow()
     expect(() => tracker.addFiles(2)).not.toThrow()
@@ -46,9 +38,6 @@ describe('ProgressReporter', () => {
     const phase = sut.create('Fetching', 2)
 
     // Assert
-    expect(typeof phase.tick).toBe('function')
-    expect(typeof phase.trackGroup).toBe('function')
-    expect(typeof phase.stop).toBe('function')
     expect(() => phase.tick('item 1')).not.toThrow()
     expect(() => phase.tick('item 2')).not.toThrow()
     expect(() => phase.stop()).not.toThrow()
@@ -80,9 +69,32 @@ describe('ProgressReporter', () => {
     const phase = sut.create('Fetching', 1)
 
     // Assert
-    expect(typeof phase.tick).toBe('function')
-    expect(typeof phase.stop).toBe('function')
     expect(() => phase.tick('single')).not.toThrow()
     expect(() => phase.stop()).not.toThrow()
+  })
+
+  it('given two group trackers, when updating one, then the other remains independent', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Processing', 2)
+    const tracker1 = phase.trackGroup('DS1')
+    const tracker2 = phase.trackGroup('DS2')
+
+    // Act — mutate tracker1 only
+    tracker1.updateParentId('06V001')
+    tracker1.addFiles(3)
+    tracker1.addRows(100)
+    tracker1.incrementParts()
+
+    // Assert — tracker2 operations remain independent (no shared state corruption)
+    expect(() => tracker2.updateParentId('06V002')).not.toThrow()
+    expect(() => tracker2.addFiles(1)).not.toThrow()
+    expect(() => tracker2.addRows(50)).not.toThrow()
+    expect(() => tracker2.incrementParts()).not.toThrow()
+
+    // Cleanup
+    tracker1.stop()
+    tracker2.stop()
+    phase.stop()
   })
 })

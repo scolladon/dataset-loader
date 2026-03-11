@@ -1,4 +1,4 @@
-const ISO_8601_PATTERN =
+export const ISO_8601_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{4})$/
 
 export class Watermark {

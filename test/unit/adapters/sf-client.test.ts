@@ -247,6 +247,35 @@ describe('SalesforceClient', () => {
     })
   })
 
+  describe('del', () => {
+    it('given a path, when deleting, then sends DELETE with gzip header', async () => {
+      // Arrange
+      requestSpy.mockResolvedValue(undefined)
+
+      // Act
+      await sut.del(
+        '/services/data/v62.0/sobjects/InsightsExternalData/06V000000000001'
+      )
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledWith({
+        method: 'DELETE',
+        url: '/services/data/v62.0/sobjects/InsightsExternalData/06V000000000001',
+        headers: { 'Accept-Encoding': 'gzip' },
+      })
+    })
+
+    it('given server error, when deleting, then propagates error', async () => {
+      // Arrange
+      requestSpy.mockRejectedValue(new Error('delete failed'))
+
+      // Act & Assert
+      await expect(
+        sut.del('/services/data/v62.0/sobjects/InsightsExternalData/06V')
+      ).rejects.toThrow('delete failed')
+    })
+  })
+
   describe('concurrency', () => {
     it('given concurrency of 2, when making 4 parallel requests, then at most 2 run simultaneously', async () => {
       // Arrange

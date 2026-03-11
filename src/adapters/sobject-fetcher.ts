@@ -1,4 +1,3 @@
-import { Readable } from 'node:stream'
 import { stringify } from 'csv-stringify/sync'
 import { Watermark } from '../domain/watermark.js'
 import {
@@ -8,7 +7,6 @@ import {
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
 } from '../ports/types.js'
-import { queryPages } from './query-pages.js'
 
 export interface SObjectFetcherConfig {
   readonly sobject: string
@@ -64,31 +62,47 @@ export class SObjectFetcher implements FetchPort {
 
     const firstPage: QueryResult<Record<string, unknown>> =
       await this.sfPort.query(soql)
-    let lastWatermark: Watermark | undefined
+    let pagesProcessed = 0
+    let lastRecord: Record<string, unknown> | undefined
 
     const fields = this.fields
     const dateField = this.dateField
     const sfPort = this.sfPort
 
-    return {
-      streams: (async function* (): AsyncGenerator<Readable> {
-        for await (const page of queryPages(firstPage, (url: string) =>
-          sfPort.queryMore<Record<string, unknown>>(url)
-        )) {
-          if (page.records.length === 0) continue
-          const rows: string[][] = []
-          for (const record of page.records) {
-            lastWatermark = Watermark.fromString(String(record[dateField]))
-            rows.push(fields.map(f => String(record[f] ?? '')))
-          }
-          const csvText = stringify([fields, ...rows], {
+    async function* generateLines(): AsyncGenerator<string> {
+      let currentPage = firstPage
+
+      while (true) {
+        const nextPromise =
+          !currentPage.done && currentPage.nextRecordsUrl
+            ? sfPort.queryMore<Record<string, unknown>>(
+                currentPage.nextRecordsUrl
+              )
+            : null
+
+        for (const record of currentPage.records) {
+          yield stringify([fields.map(f => String(record[f] ?? ''))], {
             quoted: true,
             quoted_empty: true,
-          })
-          yield Readable.from(Buffer.from(csvText))
+          }).trimEnd()
         }
-      })(),
-      watermark: () => lastWatermark,
+        if (currentPage.records.length > 0) {
+          lastRecord = currentPage.records.at(-1)
+          pagesProcessed++
+        }
+
+        if (!nextPromise) break
+        currentPage = await nextPromise
+      }
+    }
+
+    return {
+      lines: generateLines(),
+      watermark: () =>
+        lastRecord
+          ? Watermark.fromString(String(lastRecord[dateField]))
+          : undefined,
+      fileCount: () => pagesProcessed,
     }
   }
 }

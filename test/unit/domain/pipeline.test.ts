@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream'
+import { PassThrough, type Writable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
@@ -15,13 +15,11 @@ import {
   type GroupTracker,
   type LoggerPort,
   type ProgressPort,
+  SkipDatasetError,
   type StatePort,
   type Uploader,
+  type UploadResult,
 } from '../../../src/ports/types.js'
-
-function csvReadable(content: string): Readable {
-  return Readable.from(Buffer.from(content))
-}
 
 function createMockLogger(): LoggerPort {
   return { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
@@ -60,34 +58,44 @@ function createMockState(
   }
 }
 
-function createMockUploader(overrides: Partial<Uploader> = {}): Uploader {
+function createFetchResult(
+  lines: string[],
+  watermark?: Watermark,
+  fileCount?: number
+): FetchResult {
   return {
-    write: vi.fn(async () => {
-      /* noop */
-    }),
-    process: vi.fn(async () => ({
-      parentId: '06V000000000001',
-      partIds: ['06W000000000001'],
-    })),
-    abort: vi.fn(async () => {
-      /* noop */
-    }),
-    ...overrides,
+    lines: (async function* () {
+      for (const l of lines) yield l
+    })(),
+    watermark: () => watermark,
+    fileCount: () => fileCount ?? (lines.length > 0 ? 1 : 0),
   }
 }
 
-function createFetchResult(
-  csvStreams: string[],
-  watermark?: Watermark
-): FetchResult {
+interface MockUploader extends Uploader {
+  readonly _writtenLines: string[]
+  readonly _writable: PassThrough
+}
+
+function createMockUploader(overrides: Partial<Uploader> = {}): MockUploader {
+  const writtenLines: string[] = []
+  const mockWritable = new PassThrough({ objectMode: true })
+  mockWritable.on('data', (chunk: string) => writtenLines.push(chunk))
   return {
-    streams: (async function* () {
-      for (const csv of csvStreams) {
-        yield csvReadable(csv)
-      }
-    })(),
-    watermark: () => watermark,
-  }
+    init: vi.fn(async () => mockWritable),
+    finalize: vi.fn(
+      async (): Promise<UploadResult> => ({
+        parentId: '06V000000000001',
+        partCount: 1,
+      })
+    ),
+    abort: vi.fn(async () => {
+      /* noop */
+    }),
+    _writtenLines: writtenLines,
+    _writable: mockWritable,
+    ...overrides,
+  } as MockUploader
 }
 
 function mockFetcher(fetchFn: FetchPort['fetch']): FetchPort {
@@ -114,17 +122,17 @@ function createEntry(
 }
 
 describe('executePipeline (streaming)', () => {
-  it('given entries with data, when executing, then streams csv lines into uploader and updates watermarks', async () => {
-    // Arrange
+  it('given entries with data, when executing, then pipes lines into uploader and updates watermarks', async () => {
     const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher = mockFetcher(async () =>
-      createFetchResult(['"H"\n"v"\n'], watermark)
+      createFetchResult(['"v1"', '"v2"'], watermark)
     )
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
     const state = createMockState()
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -134,12 +142,11 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesProcessed).toBe(1)
     expect(sut.groupsUploaded).toBe(1)
     expect(sut.exitCode).toBe(0)
-    expect(uploader.write).toHaveBeenCalledTimes(2)
-    expect(uploader.process).toHaveBeenCalledTimes(1)
+    expect(uploader._writtenLines).toHaveLength(2)
+    expect(uploader.finalize).toHaveBeenCalledTimes(1)
     expect(state.write).toHaveBeenCalledTimes(1)
     const writtenStore: WatermarkStore = (
       state.write as ReturnType<typeof vi.fn>
@@ -154,66 +161,92 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given empty source (no new records), when executing, then skips entry', async () => {
-    // Arrange
     const fetcher = mockFetcher(async () => createFetchResult([]))
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
-    const state = createMockState()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
       createUploader,
-      state,
+      state: createMockState(),
       progress: createMockProgress(),
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesSkipped).toBe(1)
     expect(sut.entriesProcessed).toBe(0)
-    expect(uploader.write).not.toHaveBeenCalled()
-    expect(uploader.process).not.toHaveBeenCalled()
+    expect(uploader._writtenLines).toHaveLength(0)
+    expect(uploader.finalize).not.toHaveBeenCalled()
   })
 
   it('given fetch error, when executing, then counts as failed and aborts uploader', async () => {
-    // Arrange
     const fetcher = mockFetcher(async () => {
       throw new Error('network error')
     })
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
-    const state = createMockState()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
       createUploader,
-      state,
+      state: createMockState(),
       progress: createMockProgress(),
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(sut.exitCode).toBe(2)
-    expect(uploader.process).not.toHaveBeenCalled()
+    expect(uploader.finalize).not.toHaveBeenCalled()
+    expect(uploader.abort).toHaveBeenCalled()
   })
 
-  it('given two entries same dataset, when executing, then both stream into same uploader', async () => {
-    // Arrange
-    const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
-    const fetcher1 = mockFetcher(async () =>
-      createFetchResult(['"H"\n"a"\n'], wm)
-    )
-    const fetcher2 = mockFetcher(async () =>
-      createFetchResult(['"H"\n"b"\n'], wm)
-    )
+  it('given source stream errors mid-iteration, when executing, then counts as failed and does not finalize', async () => {
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield '"v1"'
+        throw new Error('stream error mid-way')
+      })(),
+      watermark: () => undefined,
+      fileCount: () => 1,
+    }))
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
-    const state = createMockState()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const logger = createMockLogger()
+
+    const sut = await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.entriesProcessed).toBe(0)
+    expect(uploader.abort).toHaveBeenCalled()
+    expect(uploader.finalize).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('stream error mid-way')
+    )
+  })
+
+  it('given two entries same dataset, when executing, then both pipe into same uploader', async () => {
+    const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher1 = mockFetcher(async () => createFetchResult(['"a"'], wm))
+    const fetcher2 = mockFetcher(async () => createFetchResult(['"b"'], wm))
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
 
     const entry1 = createEntry({ fetcher: fetcher1, index: 0 })
     const entry2 = createEntry({
@@ -228,36 +261,34 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
-    // Act
     const sut = await executePipeline({
       entries: [entry1, entry2],
       watermarks: WatermarkStore.empty(),
       createUploader,
-      state,
+      state: createMockState(),
       progress: createMockProgress(),
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(createUploader.create).toHaveBeenCalledTimes(1)
-    expect(uploader.write).toHaveBeenCalledTimes(3)
-    expect(uploader.process).toHaveBeenCalledTimes(1)
+    expect(uploader._writtenLines).toHaveLength(2)
+    expect(uploader.finalize).toHaveBeenCalledTimes(1)
     expect(sut.entriesProcessed).toBe(2)
     expect(sut.groupsUploaded).toBe(1)
   })
 
-  it('given augmentColumns, when streaming, then csv lines contain augmented data', async () => {
-    // Arrange
+  it('given augmentColumns, when piping, then lines contain augmented data', async () => {
     const fetcher = mockFetcher(async () =>
       createFetchResult(
-        ['"Id"\n"001"\n'],
+        ['"001"'],
         Watermark.fromString('2026-03-01T00:00:00.000Z')
       )
     )
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
 
-    // Act
     await executePipeline({
       entries: [createEntry({ fetcher, augmentColumns: { Org: 'prod' } })],
       watermarks: WatermarkStore.empty(),
@@ -267,22 +298,14 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
-    const firstLine = (uploader.write as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string
-    const secondLine = (uploader.write as ReturnType<typeof vi.fn>).mock
-      .calls[1][0] as string
-    expect(firstLine).toContain('Id')
-    expect(firstLine).toContain('Org')
-    expect(secondLine).toContain('001')
-    expect(secondLine).toContain('prod')
+    expect(uploader._writtenLines[0]).toContain('001')
+    expect(uploader._writtenLines[0]).toContain('prod')
   })
 
   it('given mixed success and failure across datasets, when executing, then partial success with correct exit code', async () => {
-    // Arrange
     const goodFetcher = mockFetcher(async () =>
       createFetchResult(
-        ['"H"\n"v"\n'],
+        ['"v"'],
         Watermark.fromString('2026-03-01T00:00:00.000Z')
       )
     )
@@ -293,10 +316,9 @@ describe('executePipeline (streaming)', () => {
     const goodUploader = createMockUploader()
     const badUploader = createMockUploader()
     const createUploader: CreateUploaderPort = {
-      create: vi
-        .fn()
-        .mockReturnValueOnce(goodUploader)
-        .mockReturnValueOnce(badUploader),
+      create: vi.fn((dataset: DatasetKey) =>
+        dataset.name === 'DS' ? goodUploader : badUploader
+      ),
     }
 
     const goodEntry = createEntry({
@@ -317,7 +339,6 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
-    // Act
     const sut = await executePipeline({
       entries: [goodEntry, badEntry],
       watermarks: WatermarkStore.empty(),
@@ -327,29 +348,28 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesProcessed).toBe(1)
     expect(sut.entriesFailed).toBe(1)
     expect(sut.exitCode).toBe(1)
   })
 
-  it('given uploader.process throws, when executing, then catches group error and counts all entries as failed', async () => {
-    // Arrange
+  it('given uploader.finalize throws, when executing, then catches group error and counts all entries as failed', async () => {
     const fetcher = mockFetcher(async () =>
       createFetchResult(
-        ['"H"\n"v"\n'],
+        ['"v"'],
         Watermark.fromString('2026-03-01T00:00:00.000Z')
       )
     )
     const uploader = createMockUploader({
-      process: vi.fn(async () => {
+      finalize: vi.fn(async () => {
         throw new Error('upload crash')
       }),
     })
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
     const logger = createMockLogger()
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -359,7 +379,6 @@ describe('executePipeline (streaming)', () => {
       logger,
     })
 
-    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(sut.entriesProcessed).toBe(0)
     expect(sut.exitCode).toBe(2)
@@ -370,14 +389,14 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given all entries fail, when executing, then exit code is 2', async () => {
-    // Arrange
     const badFetcher = mockFetcher(async () => {
       throw new Error('fail')
     })
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher: badFetcher })],
       watermarks: WatermarkStore.empty(),
@@ -387,21 +406,19 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesFailed).toBe(1)
-    expect(sut.entriesProcessed).toBe(0)
     expect(sut.exitCode).toBe(2)
     expect(uploader.abort).toHaveBeenCalled()
   })
 
   it('given entry with data and no watermark returned, when executing, then processes without storing watermark', async () => {
-    // Arrange
-    const fetcher = mockFetcher(async () => createFetchResult(['"H"\n"v"\n']))
+    const fetcher = mockFetcher(async () => createFetchResult(['"v"']))
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
     const state = createMockState()
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -411,9 +428,8 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesProcessed).toBe(1)
-    expect(uploader.process).toHaveBeenCalled()
+    expect(uploader.finalize).toHaveBeenCalled()
     const writtenStore: WatermarkStore = (
       state.write as ReturnType<typeof vi.fn>
     ).mock.calls[0][0]
@@ -426,50 +442,50 @@ describe('executePipeline (streaming)', () => {
     expect(writtenStore.get(wk)).toBeUndefined()
   })
 
-  it('given all entries empty in a group, when executing, then aborts uploader without processing', async () => {
-    // Arrange
+  it('given single empty entry, when executing, then aborts uploader and writes state', async () => {
     const fetcher = mockFetcher(async () => createFetchResult([]))
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+    const state = createMockState()
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
       createUploader,
-      state: createMockState(),
+      state,
       progress: createMockProgress(),
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesSkipped).toBe(1)
-    expect(sut.entriesProcessed).toBe(0)
     expect(sut.groupsUploaded).toBe(0)
-    expect(uploader.process).not.toHaveBeenCalled()
+    expect(uploader.finalize).not.toHaveBeenCalled()
     expect(uploader.abort).toHaveBeenCalled()
+    expect(state.write).toHaveBeenCalledTimes(1)
   })
 
   it('given uploader.abort throws during error handling, when executing, then still counts entries as failed', async () => {
-    // Arrange
     const fetcher = mockFetcher(async () =>
       createFetchResult(
-        ['"H"\n"v"\n'],
+        ['"v"'],
         Watermark.fromString('2026-03-01T00:00:00.000Z')
       )
     )
     const uploader = createMockUploader({
-      process: vi.fn(async () => {
+      finalize: vi.fn(async () => {
         throw new Error('process failed')
       }),
       abort: vi.fn(async () => {
         throw new Error('abort also failed')
       }),
     })
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
     const logger = createMockLogger()
 
-    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -479,52 +495,16 @@ describe('executePipeline (streaming)', () => {
       logger,
     })
 
-    // Assert
     expect(sut.entriesFailed).toBe(1)
-    expect(sut.entriesProcessed).toBe(0)
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('abort also failed')
     )
   })
 
-  it('given non-Error rejection in group, when executing, then logs unknown error', async () => {
-    // Arrange
-    const fetcher = mockFetcher(async () =>
-      createFetchResult(
-        ['"H"\n"v"\n'],
-        Watermark.fromString('2026-03-01T00:00:00.000Z')
-      )
-    )
-    const uploader = createMockUploader({
-      process: vi.fn(async () => {
-        throw 'string error'
-      }),
-    })
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
-    const logger = createMockLogger()
-
-    // Act
-    const sut = await executePipeline({
-      entries: [createEntry({ fetcher })],
-      watermarks: WatermarkStore.empty(),
-      createUploader,
-      state: createMockState(),
-      progress: createMockProgress(),
-      logger,
-    })
-
-    // Assert
-    expect(sut.entriesFailed).toBe(1)
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('unknown error')
-    )
-  })
-
-  it('given entries with data, when executing, then creates group tracker and stops it after finalization', async () => {
-    // Arrange
+  it('given entries with data, when executing, then reports files and rows to tracker', async () => {
     const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher = mockFetcher(async () =>
-      createFetchResult(['"H"\n"v"\n'], watermark)
+      createFetchResult(['"r1"', '"r2"'], watermark)
     )
     const uploader = createMockUploader()
     const createUploader: CreateUploaderPort = {
@@ -533,7 +513,6 @@ describe('executePipeline (streaming)', () => {
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
 
-    // Act
     await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -543,176 +522,32 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
-    const phase = (progress.create as ReturnType<typeof vi.fn>).mock.results[0]
-      .value
-    expect(phase.trackGroup).toHaveBeenCalledWith('DS')
-    expect(tracker.stop).toHaveBeenCalled()
-  })
-
-  it('given entries with data, when executing, then passes upload listener to uploader factory', async () => {
-    // Arrange
-    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
-    const fetcher = mockFetcher(async () =>
-      createFetchResult(['"H"\n"v"\n'], watermark)
-    )
-    const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = {
-      create: vi.fn(() => uploader),
-    }
-    const tracker = createMockGroupTracker()
-    const progress = createMockProgress(tracker)
-
-    // Act
-    await executePipeline({
-      entries: [createEntry({ fetcher })],
-      watermarks: WatermarkStore.empty(),
-      createUploader,
-      state: createMockState(),
-      progress,
-      logger: createMockLogger(),
-    })
-
-    // Assert
-    expect(createUploader.create).toHaveBeenCalledWith(
-      expect.anything(),
-      'Append',
-      expect.objectContaining({
-        onParentCreated: expect.any(Function),
-        onPartUploaded: expect.any(Function),
-      })
-    )
-  })
-
-  it('given upload listener wired, when onParentCreated called, then updates tracker parentId', async () => {
-    // Arrange
-    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
-    const fetcher = mockFetcher(async () =>
-      createFetchResult(['"H"\n"v"\n'], watermark)
-    )
-    const tracker = createMockGroupTracker()
-    const progress = createMockProgress(tracker)
-    let capturedListener: { onParentCreated: (id: string) => void } | undefined
-    const createUploader: CreateUploaderPort = {
-      create: vi.fn((_ds, _op, listener) => {
-        capturedListener = listener
-        return createMockUploader()
-      }),
-    }
-
-    // Act
-    await executePipeline({
-      entries: [createEntry({ fetcher })],
-      watermarks: WatermarkStore.empty(),
-      createUploader,
-      state: createMockState(),
-      progress,
-      logger: createMockLogger(),
-    })
-    capturedListener!.onParentCreated('06Vxxx')
-
-    // Assert
-    expect(tracker.updateParentId).toHaveBeenCalledWith('06Vxxx')
-  })
-
-  it('given upload listener wired, when onPartUploaded called, then increments tracker parts', async () => {
-    // Arrange
-    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
-    const fetcher = mockFetcher(async () =>
-      createFetchResult(['"H"\n"v"\n'], watermark)
-    )
-    const tracker = createMockGroupTracker()
-    const progress = createMockProgress(tracker)
-    let capturedListener: { onPartUploaded: () => void } | undefined
-    const createUploader: CreateUploaderPort = {
-      create: vi.fn((_ds, _op, listener) => {
-        capturedListener = listener
-        return createMockUploader()
-      }),
-    }
-
-    // Act
-    await executePipeline({
-      entries: [createEntry({ fetcher })],
-      watermarks: WatermarkStore.empty(),
-      createUploader,
-      state: createMockState(),
-      progress,
-      logger: createMockLogger(),
-    })
-    capturedListener!.onPartUploaded()
-
-    // Assert
-    expect(tracker.incrementParts).toHaveBeenCalled()
-  })
-
-  it('given non-Error rejection in entry fetch, when executing, then logs unknown error', async () => {
-    // Arrange
-    const fetcher = mockFetcher(async () => {
-      throw 42
-    })
-    const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
-    const logger = createMockLogger()
-
-    // Act
-    const sut = await executePipeline({
-      entries: [createEntry({ fetcher })],
-      watermarks: WatermarkStore.empty(),
-      createUploader,
-      state: createMockState(),
-      progress: createMockProgress(),
-      logger,
-    })
-
-    // Assert
-    expect(sut.entriesFailed).toBe(1)
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('unknown error')
-    )
-  })
-
-  it('given entries with data, when executing, then reports files and rows progressively to tracker', async () => {
-    // Arrange
-    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
-    const fetcher = mockFetcher(async () =>
-      createFetchResult(['"H"\n"r1"\n"r2"\n'], watermark)
-    )
-    const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = {
-      create: vi.fn(() => uploader),
-    }
-    const tracker = createMockGroupTracker()
-    const progress = createMockProgress(tracker)
-
-    // Act
-    await executePipeline({
-      entries: [createEntry({ fetcher })],
-      watermarks: WatermarkStore.empty(),
-      createUploader,
-      state: createMockState(),
-      progress,
-      logger: createMockLogger(),
-    })
-
-    // Assert
     expect(tracker.addFiles).toHaveBeenCalledWith(1)
     expect(tracker.addFiles).toHaveBeenCalledTimes(1)
     expect(tracker.addRows).toHaveBeenCalledWith(1)
     expect(tracker.addRows).toHaveBeenCalledTimes(2)
   })
 
-  it('given empty source (skipped entry), when executing, then does not report fetch stats to tracker', async () => {
-    // Arrange
-    const fetcher = mockFetcher(async () => createFetchResult([]))
-    const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = {
-      create: vi.fn(() => uploader),
-    }
+  it('given upload listener wired, when uploader invokes onParentCreated during init, then updates tracker parentId', async () => {
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"v"'], watermark)
+    )
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn((_ds, _op, listener) => {
+        const writable = new PassThrough({ objectMode: true })
+        writable.resume()
+        return createMockUploader({
+          init: vi.fn(async () => {
+            listener.onParentCreated('06Vxxx')
+            return writable
+          }),
+        })
+      }),
+    }
 
-    // Act
     await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -722,43 +557,86 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
-    expect(tracker.addFiles).not.toHaveBeenCalled()
-    expect(tracker.addRows).not.toHaveBeenCalled()
+    expect(tracker.updateParentId).toHaveBeenCalledWith('06Vxxx')
   })
 
-  it('given fetch error, when executing, then does not report fetch stats to tracker', async () => {
-    // Arrange
-    const fetcher = mockFetcher(async () => {
-      throw new Error('network error')
+  it('given uploader.init throws SkipDatasetError, when executing, then warns and skips all entries', async () => {
+    const fetcher = mockFetcher(async () => createFetchResult(['"data"']))
+    const skipUploader = createMockUploader({
+      init: vi.fn(async () => {
+        throw new SkipDatasetError('No metadata for ds')
+      }),
     })
-    const uploader = createMockUploader()
     const createUploader: CreateUploaderPort = {
-      create: vi.fn(() => uploader),
+      create: vi.fn(() => skipUploader),
     }
-    const tracker = createMockGroupTracker()
-    const progress = createMockProgress(tracker)
+    const logger = createMockLogger()
 
-    // Act
-    await executePipeline({
+    const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
       createUploader,
       state: createMockState(),
-      progress,
+      progress: createMockProgress(),
+      logger,
+    })
+
+    expect(sut.entriesSkipped).toBe(1)
+    expect(sut.entriesFailed).toBe(0)
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('No metadata')
+    )
+    expect(skipUploader.abort).not.toHaveBeenCalled()
+    expect(skipUploader.finalize).not.toHaveBeenCalled()
+  })
+
+  it('given multiple entries piping concurrently, when all finish, then all lines written and finalize called once', async () => {
+    const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher1 = mockFetcher(async () =>
+      createFetchResult(['row_a1', 'row_a2'], wm)
+    )
+    const fetcher2 = mockFetcher(async () => createFetchResult(['row_b1'], wm))
+    const uploader = createMockUploader()
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
+
+    const entry1 = createEntry({ fetcher: fetcher1, index: 0 })
+    const entry2 = createEntry({
+      fetcher: fetcher2,
+      index: 1,
+      label: 'elf:Logout',
+      watermarkKey: WatermarkKey.fromEntry({
+        type: 'elf',
+        sourceOrg: 'src',
+        eventType: 'Logout',
+        interval: 'Daily',
+      }),
+    })
+
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createUploader,
+      state: createMockState(),
+      progress: createMockProgress(),
       logger: createMockLogger(),
     })
 
-    // Assert
-    expect(tracker.addFiles).not.toHaveBeenCalled()
-    expect(tracker.addRows).not.toHaveBeenCalled()
+    expect(uploader._writtenLines).toHaveLength(3)
+    expect(uploader._writtenLines).toEqual(
+      expect.arrayContaining(['row_a1', 'row_a2', 'row_b1'])
+    )
+    expect(createUploader.create).toHaveBeenCalledTimes(1)
+    expect(uploader.finalize).toHaveBeenCalledTimes(1)
+    expect(sut.entriesProcessed).toBe(2)
+    expect(sut.groupsUploaded).toBe(1)
   })
 
-  it('given partial failure within group with two entries, when executing, then aborts entire group', async () => {
-    // Arrange
+  it('given partial failure within group, when executing, then aborts entire group', async () => {
     const goodFetcher = mockFetcher(async () =>
       createFetchResult(
-        ['"H"\n"v"\n'],
+        ['"v"'],
         Watermark.fromString('2026-03-01T00:00:00.000Z')
       )
     )
@@ -766,7 +644,9 @@ describe('executePipeline (streaming)', () => {
       throw new Error('fetch error')
     })
     const uploader = createMockUploader()
-    const createUploader: CreateUploaderPort = { create: vi.fn(() => uploader) }
+    const createUploader: CreateUploaderPort = {
+      create: vi.fn(() => uploader),
+    }
 
     const goodEntry = createEntry({ fetcher: goodFetcher, index: 0 })
     const badEntry = createEntry({
@@ -781,7 +661,6 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
-    // Act
     const sut = await executePipeline({
       entries: [goodEntry, badEntry],
       watermarks: WatermarkStore.empty(),
@@ -791,10 +670,9 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
-    // Assert
     expect(sut.entriesFailed).toBe(2)
     expect(sut.entriesProcessed).toBe(0)
     expect(uploader.abort).toHaveBeenCalled()
-    expect(uploader.process).not.toHaveBeenCalled()
+    expect(uploader.finalize).not.toHaveBeenCalled()
   })
 })

@@ -183,15 +183,21 @@ function resolveAugmentColumnsForEntry(
   if (!columns) return {}
   const resolved: Record<string, string> = {}
 
+  const getOrgInfo = (alias: string): OrgInfo => {
+    const info = orgInfos.get(alias)
+    if (!info) throw new Error(`Org info not resolved for '${alias}'`)
+    return info
+  }
+
   for (const [key, value] of Object.entries(columns)) {
     if (value === '$sourceOrg.Id')
-      resolved[key] = orgInfos.get(entry.sourceOrg)!.Id
+      resolved[key] = getOrgInfo(entry.sourceOrg).Id
     else if (value === '$sourceOrg.Name')
-      resolved[key] = orgInfos.get(entry.sourceOrg)!.Name
+      resolved[key] = getOrgInfo(entry.sourceOrg).Name
     else if (value === '$analyticOrg.Id')
-      resolved[key] = orgInfos.get(entry.analyticOrg)!.Id
+      resolved[key] = getOrgInfo(entry.analyticOrg).Id
     else if (value === '$analyticOrg.Name')
-      resolved[key] = orgInfos.get(entry.analyticOrg)!.Name
+      resolved[key] = getOrgInfo(entry.analyticOrg).Name
     else resolved[key] = value
   }
   return resolved

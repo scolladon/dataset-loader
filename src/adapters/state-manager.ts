@@ -2,15 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
+import { ISO_8601_PATTERN } from '../domain/watermark.js'
 import { WatermarkStore } from '../domain/watermark-store.js'
 import { type StatePort } from '../ports/types.js'
 
-const iso8601 = z
-  .string()
-  .regex(
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{4})$/,
-    'Must be ISO 8601 datetime'
-  )
+const iso8601 = z.string().regex(ISO_8601_PATTERN, 'Must be ISO 8601 datetime')
 
 const stateFileSchema = z.object({
   watermarks: z.record(z.string(), iso8601),

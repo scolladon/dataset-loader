@@ -206,6 +206,20 @@ describe('CrmaLoad NUT', () => {
     return { totalSize: 0, done: true, records: [] }
   }
 
+  const METADATA_BLOB_URL =
+    '/services/data/v65.0/sobjects/InsightsExternalData/06Vmeta/MetadataJson'
+  const DEFAULT_METADATA_JSON = JSON.stringify({
+    objects: [{ name: 'DS', numberOfLinesToIgnore: 1 }],
+  })
+
+  function defaultMetadataQueryResponse() {
+    return {
+      totalSize: 1,
+      done: true,
+      records: [{ MetadataJson: METADATA_BLOB_URL }],
+    }
+  }
+
   function defaultCreateResponse(prefix: string) {
     return { id: `${prefix}000000000001` }
   }
@@ -260,6 +274,11 @@ describe('CrmaLoad NUT', () => {
         .including('/LogFile')
         .returns(elfCsv)
         .onQuery('InsightsExternalData')
+        .including('MetadataJson')
+        .returns(defaultMetadataQueryResponse())
+        .onGet(METADATA_BLOB_URL)
+        .returns(DEFAULT_METADATA_JSON)
+        .onQuery('InsightsExternalData')
         .including('EdgemartAlias')
         .returns(defaultInsightsQueryResponse())
         .onPost('InsightsExternalData')
@@ -283,6 +302,11 @@ describe('CrmaLoad NUT', () => {
         .returns(defaultOrgResponse())
         .onQuery(sobjectName)
         .returns(sobjectResponse)
+        .onQuery('InsightsExternalData')
+        .including('MetadataJson')
+        .returns(defaultMetadataQueryResponse())
+        .onGet(METADATA_BLOB_URL)
+        .returns(DEFAULT_METADATA_JSON)
         .onQuery('InsightsExternalData')
         .including('EdgemartAlias')
         .returns(defaultInsightsQueryResponse())
@@ -658,6 +682,11 @@ describe('CrmaLoad NUT', () => {
           .onQuery('EventLogFile')
           .excluding('InsightsExternalData')
           .throws('ELF_QUERY_FAILED')
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
           .build()
       )
 
@@ -767,6 +796,16 @@ describe('CrmaLoad NUT', () => {
           .onGet('query/01g000000000001-2000')
           .returns(defaultSObjectQueryResponse(page2Records, true))
           .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
@@ -830,6 +869,16 @@ describe('CrmaLoad NUT', () => {
           .onQuery('Account')
           .returns(defaultSObjectQueryResponse(sobjectRecords))
           .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
@@ -882,6 +931,16 @@ describe('CrmaLoad NUT', () => {
           .onQuery('Account')
           .throws('SOBJECT_QUERY_FAILED')
           .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())
           .onPost('InsightsExternalData')
@@ -929,6 +988,11 @@ describe('CrmaLoad NUT', () => {
           .throws('ELF_FAILED')
           .onQuery('Account')
           .throws('SOBJECT_FAILED')
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
           .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())
@@ -1133,6 +1197,7 @@ describe('CrmaLoad NUT', () => {
           .onGet('query/sobject-page2')
           .returns(defaultSObjectQueryResponse(sobjectRecordsPage2, true))
           .onQuery('Case')
+          .excluding('InsightsExternalData')
           .returns(
             defaultSObjectQueryResponse([
               {
@@ -1142,6 +1207,11 @@ describe('CrmaLoad NUT', () => {
               },
             ])
           )
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
           .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())
@@ -1202,6 +1272,11 @@ describe('CrmaLoad NUT', () => {
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
           .returns(largeCsv)
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
           .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())
@@ -1289,6 +1364,11 @@ describe('CrmaLoad NUT', () => {
           .onQuery('EventLogFile')
           .excluding('InsightsExternalData')
           .throws('API_ERROR: Connection refused')
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
           .build()
       )
 
@@ -1324,6 +1404,11 @@ describe('CrmaLoad NUT', () => {
           .onGet('/sobjects/EventLogFile/')
           .including('/LogFile')
           .returns(elfCsv)
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
           .onQuery('InsightsExternalData')
           .including('EdgemartAlias')
           .returns(defaultInsightsQueryResponse())

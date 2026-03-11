@@ -20,7 +20,6 @@ import { WatermarkKey } from '../../domain/watermark-key.js'
 import { type WatermarkStore } from '../../domain/watermark-store.js'
 import {
   type CreateUploaderPort,
-  type EntryType,
   type FetchPort,
   formatErrorMessage,
   type LoggerPort,
@@ -76,6 +75,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       flags['config-file'],
       sfPorts
     )
+
     const filtered = this.filterByEntry(resolvedEntries, flags['entry'])
 
     if (flags['audit']) return this.handleAudit(filtered, sfPorts, logger)
@@ -152,18 +152,11 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     sfPorts: Map<string, SalesforcePort>,
     logger: LoggerPort
   ): Promise<CrmaLoadResult> {
-    const auditEntries: {
-      type: EntryType
-      sourceOrg: string
-      analyticOrg: string
-    }[] = []
-    for (const { entry } of entries) {
-      auditEntries.push({
-        type: entry.type,
-        sourceOrg: entry.sourceOrg,
-        analyticOrg: entry.analyticOrg,
-      })
-    }
+    const auditEntries = entries.map(({ entry }) => ({
+      type: entry.type,
+      sourceOrg: entry.sourceOrg,
+      analyticOrg: entry.analyticOrg,
+    }))
     logger.info('Audit — pre-flight checks:')
     const checks = buildAuditChecks(auditEntries, sfPorts)
     const auditResult = await runAudit(checks, logger)

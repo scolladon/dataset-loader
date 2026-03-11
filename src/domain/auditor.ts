@@ -21,98 +21,62 @@ export function buildAuditChecks(
   sfPorts: ReadonlyMap<string, SalesforcePort>
 ): readonly AuditCheck[] {
   return [
-    ...buildAuthChecks(entries, sfPorts),
-    ...buildElfChecks(entries, sfPorts),
-    ...buildInsightsChecks(entries, sfPorts),
+    ...buildOrgChecks(
+      collectOrgs(entries, e => [e.sourceOrg, e.analyticOrg]),
+      org => `${org}: auth and connectivity`,
+      'SELECT Id FROM Organization LIMIT 1',
+      sfPorts
+    ),
+    ...buildOrgChecks(
+      collectOrgs(entries, e => (e.type === 'elf' ? [e.sourceOrg] : [])),
+      org => `${org}: EventLogFile access (ViewEventLogFiles)`,
+      'SELECT Id FROM EventLogFile LIMIT 1',
+      sfPorts
+    ),
+    ...buildOrgChecks(
+      collectOrgs(entries, e => [e.analyticOrg]),
+      org => `${org}: InsightsExternalData access`,
+      'SELECT Id FROM InsightsExternalData LIMIT 1',
+      sfPorts
+    ),
   ]
 }
 
-function buildAuthChecks(
+function collectOrgs(
   entries: readonly AuditEntry[],
-  sfPorts: ReadonlyMap<string, SalesforcePort>
-): readonly AuditCheck[] {
-  const uniqueOrgs = new Set<string>()
+  selector: (e: AuditEntry) => string[]
+): Set<string> {
+  const orgs = new Set<string>()
   for (const entry of entries) {
-    uniqueOrgs.add(entry.sourceOrg)
-    uniqueOrgs.add(entry.analyticOrg)
+    for (const org of selector(entry)) {
+      orgs.add(org)
+    }
   }
-
-  const checks: AuditCheck[] = []
-  for (const org of uniqueOrgs) {
-    const sfPort = sfPorts.get(org)
-    checks.push({
-      org,
-      label: `${org}: auth and connectivity`,
-      execute: async () => {
-        if (!sfPort) return false
-        try {
-          await sfPort.query('SELECT Id FROM Organization LIMIT 1')
-          return true
-        } catch {
-          return false
-        }
-      },
-    })
-  }
-  return checks
+  return orgs
 }
 
-function buildElfChecks(
-  entries: readonly AuditEntry[],
+function buildOrgChecks(
+  orgs: Set<string>,
+  labelFn: (org: string) => string,
+  soql: string,
   sfPorts: ReadonlyMap<string, SalesforcePort>
 ): readonly AuditCheck[] {
-  const elfSourceOrgs = new Set<string>()
-  for (const entry of entries) {
-    if (entry.type === 'elf') elfSourceOrgs.add(entry.sourceOrg)
-  }
-
-  const checks: AuditCheck[] = []
-  for (const org of elfSourceOrgs) {
+  return [...orgs].map(org => {
     const sfPort = sfPorts.get(org)
-    checks.push({
+    return {
       org,
-      label: `${org}: EventLogFile access (ViewEventLogFiles)`,
+      label: labelFn(org),
       execute: async () => {
         if (!sfPort) return false
         try {
-          await sfPort.query('SELECT Id FROM EventLogFile LIMIT 1')
+          await sfPort.query(soql)
           return true
         } catch {
           return false
         }
       },
-    })
-  }
-  return checks
-}
-
-function buildInsightsChecks(
-  entries: readonly AuditEntry[],
-  sfPorts: ReadonlyMap<string, SalesforcePort>
-): readonly AuditCheck[] {
-  const analyticOrgs = new Set<string>()
-  for (const entry of entries) {
-    analyticOrgs.add(entry.analyticOrg)
-  }
-
-  const checks: AuditCheck[] = []
-  for (const org of analyticOrgs) {
-    const sfPort = sfPorts.get(org)
-    checks.push({
-      org,
-      label: `${org}: InsightsExternalData access`,
-      execute: async () => {
-        if (!sfPort) return false
-        try {
-          await sfPort.query('SELECT Id FROM InsightsExternalData LIMIT 1')
-          return true
-        } catch {
-          return false
-        }
-      },
-    })
-  }
-  return checks
+    }
+  })
 }
 
 export async function runAudit(

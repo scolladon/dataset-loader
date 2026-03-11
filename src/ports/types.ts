@@ -1,4 +1,4 @@
-import { type Readable } from 'node:stream'
+import { type Readable, type Writable } from 'node:stream'
 import { type DatasetKey } from '../domain/dataset-key.js'
 import { type Watermark } from '../domain/watermark.js'
 import { type WatermarkKey } from '../domain/watermark-key.js'
@@ -43,8 +43,9 @@ export type EntryType = 'elf' | 'sobject'
 export type Operation = 'Append' | 'Overwrite'
 
 export interface FetchResult {
-  readonly streams: AsyncIterable<Readable>
+  readonly lines: AsyncIterable<string>
   readonly watermark: () => Watermark | undefined
+  readonly fileCount: () => number
 }
 
 export interface FetchPort {
@@ -53,13 +54,20 @@ export interface FetchPort {
 
 export interface UploadResult {
   readonly parentId: string
-  readonly partIds: readonly string[]
+  readonly partCount: number
 }
 
 export interface Uploader {
-  write(csvLine: string): Promise<void>
-  process(): Promise<UploadResult>
+  init(): Promise<Writable>
+  finalize(): Promise<UploadResult>
   abort(): Promise<void>
+}
+
+export class SkipDatasetError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SkipDatasetError'
+  }
 }
 
 export interface UploadListener {

@@ -1,4 +1,4 @@
-import { type Readable } from 'node:stream'
+import { createInterface } from 'node:readline'
 import { Watermark } from '../domain/watermark.js'
 import {
   type FetchPort,
@@ -46,27 +46,63 @@ export class ElfFetcher implements FetchPort {
       }
     }
 
+    let filesProcessed = 0
+
     if (records.length === 0) {
       return {
-        streams: (async function* () {
+        lines: (async function* () {
           /* empty */
         })(),
         watermark: () => undefined,
+        fileCount: () => filesProcessed,
       }
     }
 
+    // Alias for async generator which cannot reference `this`
     const sfPort = this.sfPort
     const blobUrl = (record: EventLogFileRecord): string =>
       `/services/data/v${sfPort.apiVersion}/sobjects/EventLogFile/${record.Id}/LogFile`
 
     return {
-      streams: (async function* (): AsyncGenerator<Readable> {
-        for (const record of records) {
-          yield await sfPort.getBlobStream(blobUrl(record))
+      lines: (async function* (): AsyncGenerator<string> {
+        const streamPromises = records.map(record =>
+          sfPort.getBlobStream(blobUrl(record))
+        )
+        streamPromises.forEach(p =>
+          p.catch(() => {
+            /* suppress unhandled rejection for pre-fetched streams */
+          })
+        )
+
+        const pending = new Map(
+          streamPromises.map((p, i) => [
+            i,
+            p.then(stream => ({ index: i, stream })),
+          ])
+        )
+
+        while (pending.size > 0) {
+          const { index, stream } = await Promise.race(pending.values())
+          pending.delete(index)
+
+          const rl = createInterface({ input: stream, crlfDelay: Infinity })
+          let isFirstLine = true
+          for await (const line of rl) {
+            if (line.length === 0) continue
+            if (isFirstLine) {
+              isFirstLine = false
+              continue
+            }
+            yield line
+          }
+          rl.close()
+          stream.destroy()
+          filesProcessed++
         }
       })(),
       watermark: () =>
         Watermark.fromString(records[records.length - 1].LogDate),
+      fileCount: () => filesProcessed,
     }
   }
 }
