@@ -1689,6 +1689,41 @@ describe('CrmaLoad NUT', () => {
       ).toBe(true)
     })
 
+    it('given two file-target entries sharing same CSV reader, when pipeline runs, then both output files receive data and file is read only once', async () => {
+      // Arrange — two different file targets, same CSV source file
+      const csvDir = mkdtempSync(join(os.tmpdir(), 'nut-csv-'))
+      const inputPath = join(csvDir, 'input.csv')
+      writeFileSync(inputPath, 'col1,col2\nval1,val2\nval3,val4\n')
+      const out1 = join(os.tmpdir(), `nut-csv-fanout-1-${Date.now()}.csv`)
+      const out2 = join(os.tmpdir(), `nut-csv-fanout-2-${Date.now()}.csv`)
+      tmp = createTempFiles(
+        makeConfigJson([
+          { type: 'csv', filePath: inputPath, dataset: out1 },
+          { type: 'csv', filePath: inputPath, dataset: out2 }, // same path → same reader
+        ])
+      )
+      // No applyConnection needed — CSV entries require no Salesforce connection
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert — both entries processed, both outputs contain data
+      expect(sut).toMatchObject({
+        entriesProcessed: 2,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+      })
+      expect(readFileSync(out1, 'utf-8')).toContain('val1')
+      expect(readFileSync(out2, 'utf-8')).toContain('val1')
+      // Both outputs are identical — same source data fanned out to two destinations
+      expect(readFileSync(out1, 'utf-8')).toBe(readFileSync(out2, 'utf-8'))
+    })
+
     it('given two file-target entries sharing same ELF reader, when pipeline runs, then both output files receive data', async () => {
       // Arrange — two different file targets, same ELF source
       const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])

@@ -12,7 +12,11 @@ export class WatermarkKey {
         `${entry.sourceOrg}:elf:${entry.eventType}:${entry.interval}`
       )
     }
-    return new WatermarkKey(`${entry.sourceOrg}:sobject:${entry.sobject}`)
+    if (entry.type === 'sobject') {
+      return new WatermarkKey(`${entry.sourceOrg}:sobject:${entry.sobject}`)
+    }
+    // entry.type === 'csv'
+    return new WatermarkKey(`csv:${entry.filePath}`)
   }
 
   toString(): string {

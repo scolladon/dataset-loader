@@ -30,7 +30,13 @@ export interface SObjectShape {
   readonly sobject: string
 }
 
-export type EntryShape = ElfShape | SObjectShape
+export interface CsvShape {
+  readonly name?: string
+  readonly type: 'csv'
+  readonly filePath: string
+}
+
+export type EntryShape = ElfShape | SObjectShape | CsvShape
 
 export interface QueryResult<T> {
   totalSize: number
@@ -39,7 +45,7 @@ export interface QueryResult<T> {
   records: T[]
 }
 
-export type EntryType = 'elf' | 'sobject'
+export type EntryType = 'elf' | 'sobject' | 'csv'
 export type Operation = 'Append' | 'Overwrite'
 
 export interface FetchResult {

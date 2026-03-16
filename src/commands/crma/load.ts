@@ -3,11 +3,14 @@ import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
 import { buildAugmentHeaderSuffix } from '../../adapters/augment-transform.js'
 import {
   type ConfigEntry,
+  type ElfEntry,
   entryLabel,
   parseConfig,
   type ResolvedEntry,
   resolveConfig,
+  type SObjectEntry,
 } from '../../adapters/config-loader.js'
+import { CsvReader } from '../../adapters/csv-reader.js'
 import { DatasetWriterFactory } from '../../adapters/dataset-writer.js'
 import { ElfReader } from '../../adapters/elf-reader.js'
 import { FileWriterFactory } from '../../adapters/file-writer.js'
@@ -116,7 +119,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       const config = await parseConfig(configPath)
       const allOrgs = new Set<string>()
       for (const e of config.entries) {
-        allOrgs.add(e.sourceOrg)
+        if (e.type !== 'csv') allOrgs.add(e.sourceOrg)
         if (e.analyticOrg) allOrgs.add(e.analyticOrg)
       }
       const ensurePromises: Promise<void>[] = []
@@ -156,10 +159,10 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     logger: LoggerPort
   ): Promise<CrmaLoadResult> {
     const orgEntries = entries
-      .filter(({ entry }) => entry.analyticOrg)
+      .filter(({ entry }) => entry.type !== 'csv' && entry.analyticOrg)
       .map(({ entry }) => ({
         type: entry.type,
-        sourceOrg: entry.sourceOrg,
+        sourceOrg: (entry as ElfEntry | SObjectEntry).sourceOrg,
         analyticOrg: entry.analyticOrg!,
       }))
     logger.info('Audit — pre-flight checks:')
@@ -236,6 +239,28 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     sharedReaders: Map<string, ReaderPort>
   ): PipelineEntry {
     const { entry, index, augmentColumns } = resolvedEntry
+
+    if (entry.type === 'csv') {
+      const readerKey = ReaderKey.forCsv(entry.filePath)
+      const cacheKey = readerKey.toString()
+      const existing = sharedReaders.get(cacheKey)
+      const fetcher: ReaderPort = existing ?? new CsvReader(entry.filePath)
+      if (!existing) sharedReaders.set(cacheKey, fetcher)
+      return {
+        index,
+        label: entryLabel(entry),
+        readerKey,
+        watermarkKey: WatermarkKey.fromEntry(entry),
+        datasetKey: DatasetKey.fromEntry(entry),
+        operation: entry.operation,
+        augmentColumns,
+        fetcher,
+        header: async () =>
+          (await fetcher.header()) + buildAugmentHeaderSuffix(augmentColumns),
+      }
+    }
+
+    // Salesforce-based entries (ELF / SObject) — existing logic below, unchanged
     const srcPort = sfPorts.get(entry.sourceOrg)
     if (!srcPort)
       throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
@@ -282,6 +307,9 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     if (entry.type === 'elf') {
       return ReaderKey.forElf(entry.sourceOrg, entry.eventType, entry.interval)
     }
+    if (entry.type === 'csv') {
+      return ReaderKey.forCsv(entry.filePath)
+    }
     return ReaderKey.forSObject(
       entry.sourceOrg,
       entry.sobject,
@@ -296,6 +324,9 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     entry: ConfigEntry,
     sfPort: SalesforcePort
   ): ReaderPort {
+    if (entry.type === 'csv') {
+      return new CsvReader(entry.filePath)
+    }
     if (entry.type === 'elf') {
       return new ElfReader(sfPort, entry.eventType, entry.interval)
     }

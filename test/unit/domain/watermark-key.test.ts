@@ -73,4 +73,21 @@ describe('WatermarkKey', () => {
     })
     expect(a.toString()).toBe(b.toString())
   })
+
+  it('given CSV entry without name, when creating key, then format is csv-colon-filePath', () => {
+    const sut = WatermarkKey.fromEntry({
+      type: 'csv',
+      filePath: './data/login.csv',
+    })
+    expect(sut.toString()).toBe('csv:./data/login.csv')
+  })
+
+  it('given CSV entry with name, when creating key, then uses name as key', () => {
+    const sut = WatermarkKey.fromEntry({
+      type: 'csv',
+      filePath: './data/login.csv',
+      name: 'login-data',
+    })
+    expect(sut.toString()).toBe('login-data')
+  })
 })

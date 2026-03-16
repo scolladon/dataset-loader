@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  entryLabel,
   parseConfig,
   type ResolvedEntry,
   resolveConfig,
@@ -519,6 +520,188 @@ describe('ConfigLoader', () => {
     })
   })
 
+  describe('CSV entry', () => {
+    it('given valid CSV config with file target, when parsing, then returns csv entry', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries).toHaveLength(1)
+      expect(sut.entries[0].type).toBe('csv')
+      if (sut.entries[0].type === 'csv') {
+        expect(sut.entries[0].filePath).toBe('./data/login-events.csv')
+        expect(sut.entries[0].operation).toBe('Append')
+      }
+    })
+
+    it('given CSV config with CRMA target, when parsing, then accepts analyticOrg', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: 'LoginEvents',
+              analyticOrg: 'my-org',
+              operation: 'Overwrite',
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0].type).toBe('csv')
+      if (sut.entries[0].type === 'csv') {
+        expect(sut.entries[0].analyticOrg).toBe('my-org')
+        expect(sut.entries[0].operation).toBe('Overwrite')
+      }
+    })
+
+    it('given CSV config with empty filePath, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [{ type: 'csv', filePath: '', dataset: './out/data.csv' }],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow()
+    })
+
+    it('given CSV config with $sourceOrg.Id in augmentColumns, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+              augmentColumns: { OrgId: '$sourceOrg.Id' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow()
+    })
+
+    it('given CSV config with $analyticOrg.Name in augmentColumns, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+              augmentColumns: { OrgName: '$analyticOrg.Name' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow()
+    })
+
+    it('given CSV config with literal augmentColumn value, when parsing, then accepts it', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+              augmentColumns: { Source: 'manual-export' },
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0].type).toBe('csv')
+    })
+
+    it('given CSV config with analyticOrg but non-SF-identifier dataset, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+              analyticOrg: 'my-org',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow()
+    })
+
+    it('given CSV config with absolute filePath, when parsing, then accepts', async () => {
+      // Arrange — absolute paths are valid for CLI tools
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: '/tmp/data.csv',
+              dataset: './out/data.csv',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).resolves.toBeDefined()
+    })
+
+    it('given CSV config with path traversal in filePath, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: '../../etc/passwd',
+              dataset: './out/data.csv',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow()
+    })
+  })
+
   describe('augment column resolution', () => {
     it('given dynamic expressions, when loading, then resolves org info', async () => {
       // Arrange
@@ -649,6 +832,109 @@ describe('ConfigLoader', () => {
       await expect(loadConfig('config.json', new Map())).rejects.toThrow(
         /No authenticated connection/
       )
+    })
+  })
+
+  describe('CSV resolving', () => {
+    it('given CSV entry without analyticOrg, when resolving config, then does not query any org', async () => {
+      // Arrange
+      const sfPort = makeSfPort()
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+              augmentColumns: { Source: 'manual' },
+            },
+          ],
+        })
+      )
+      const sfPorts = new Map([['some-org', sfPort]])
+
+      // Act
+      const sut = await loadConfig('config.json', sfPorts)
+
+      // Assert — no SF org was queried (no sourceOrg, no $analyticOrg.* expressions)
+      expect(sfPort.query).not.toHaveBeenCalled()
+      expect(sut[0].augmentColumns).toEqual({ Source: 'manual' })
+    })
+
+    it('given CSV entry, when resolving, then augmentColumns are literal values (no dynamic resolution)', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              filePath: './data/login-events.csv',
+              dataset: './out/login-events.csv',
+              augmentColumns: { Tag: 'batch-2026' },
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await loadConfig('config.json', new Map())
+
+      // Assert
+      expect(sut[0].augmentColumns).toEqual({ Tag: 'batch-2026' })
+    })
+  })
+
+  describe('entryLabel', () => {
+    it('given CSV entry without name, when getting label, then returns csv-prefixed filePath', () => {
+      expect(
+        entryLabel({
+          type: 'csv',
+          filePath: './data/login.csv',
+          dataset: './out/login.csv',
+          operation: 'Append',
+        })
+      ).toBe('csv:./data/login.csv')
+    })
+
+    it('given CSV entry with name, when getting label, then returns name', () => {
+      expect(
+        entryLabel({
+          type: 'csv',
+          filePath: './data/login.csv',
+          dataset: './out/login.csv',
+          operation: 'Append',
+          name: 'login-data',
+        })
+      ).toBe('login-data')
+    })
+
+    it('given ELF entry without name, when getting label, then returns elf-prefixed eventType', () => {
+      expect(
+        entryLabel({
+          type: 'elf',
+          sourceOrg: 'prod',
+          eventType: 'Login',
+          interval: 'Daily',
+          dataset: 'LoginEvents',
+          analyticOrg: 'my-org',
+          operation: 'Append',
+        })
+      ).toBe('elf:Login')
+    })
+
+    it('given SObject entry without name, when getting label, then returns sobject-prefixed sobject', () => {
+      expect(
+        entryLabel({
+          type: 'sobject',
+          sourceOrg: 'prod',
+          sobject: 'Account',
+          fields: ['Id'],
+          dateField: 'LastModifiedDate',
+          dataset: 'Accounts',
+          analyticOrg: 'my-org',
+          operation: 'Append',
+        })
+      ).toBe('sobject:Account')
     })
   })
 })

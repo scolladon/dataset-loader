@@ -66,4 +66,21 @@ describe('ReaderKey', () => {
     )
     expect(a.toString()).not.toBe(b.toString())
   })
+
+  it('given CSV file path, when creating key, then format is csv-null-filePath', () => {
+    const sut = ReaderKey.forCsv('./data/login-events.csv')
+    expect(sut.toString()).toBe('csv\u0000./data/login-events.csv')
+  })
+
+  it('given two CSV keys with same path, when comparing, then they are equal', () => {
+    const a = ReaderKey.forCsv('./data/login-events.csv')
+    const b = ReaderKey.forCsv('./data/login-events.csv')
+    expect(a.toString()).toBe(b.toString())
+  })
+
+  it('given two CSV keys with different paths, when comparing, then they differ', () => {
+    const a = ReaderKey.forCsv('./data/a.csv')
+    const b = ReaderKey.forCsv('./data/b.csv')
+    expect(a.toString()).not.toBe(b.toString())
+  })
 })

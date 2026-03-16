@@ -30,6 +30,10 @@ export class ReaderKey {
     )
   }
 
+  static forCsv(filePath: string): ReaderKey {
+    return new ReaderKey(['csv', filePath].join('\0'))
+  }
+
   toString(): string {
     return this.value
   }

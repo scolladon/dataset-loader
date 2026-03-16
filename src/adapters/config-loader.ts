@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { z } from 'zod'
 import { DatasetKey } from '../domain/dataset-key.js'
 import {
@@ -32,7 +33,17 @@ export interface SObjectEntry extends BaseEntry {
   limit?: number
 }
 
-export type ConfigEntry = ElfEntry | SObjectEntry
+export interface CsvEntry {
+  name?: string
+  type: Extract<EntryType, 'csv'>
+  filePath: string
+  analyticOrg?: string
+  dataset: string
+  operation: Operation
+  augmentColumns?: Record<string, string>
+}
+
+export type ConfigEntry = ElfEntry | SObjectEntry | CsvEntry
 
 export interface Config {
   entries: ConfigEntry[]
@@ -111,9 +122,55 @@ const sobjectEntrySchema = baseEntrySchema.extend({
   limit: z.number().int().positive().optional(),
 })
 
+const csvEntrySchema = z
+  .object({
+    name: entryName.optional(),
+    type: z.literal('csv'),
+    filePath: z
+      .string()
+      .min(1)
+      .refine(p => path.isAbsolute(p) || !path.normalize(p).startsWith('..'), {
+        message: 'filePath must not traverse parent directories',
+      }),
+    analyticOrg: orgAlias.optional(),
+    dataset: z.string().min(1),
+    operation: z.enum(['Append', 'Overwrite']).default('Append'),
+    augmentColumns: z.record(sfIdentifier, z.string()).optional(),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    if (entry.analyticOrg && !SF_IDENTIFIER_PATTERN.test(entry.dataset)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `dataset must be a valid Salesforce identifier when analyticOrg is set`,
+        path: ['dataset'],
+      })
+    }
+    if (entry.augmentColumns) {
+      for (const [key, value] of Object.entries(entry.augmentColumns)) {
+        if (
+          String(value).startsWith('$sourceOrg.') ||
+          String(value).startsWith('$analyticOrg.')
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `augmentColumns['${key}'] uses a dynamic expression which is not allowed for csv entries`,
+            path: ['augmentColumns', key],
+          })
+        }
+      }
+    }
+  })
+
 const configSchema = z.object({
   entries: z
-    .array(z.discriminatedUnion('type', [elfEntrySchema, sobjectEntrySchema]))
+    .array(
+      z.discriminatedUnion('type', [
+        elfEntrySchema,
+        sobjectEntrySchema,
+        csvEntrySchema,
+      ])
+    )
     .min(1),
 })
 
@@ -125,6 +182,7 @@ interface OrgInfo {
 function collectUniqueOrgs(entries: ConfigEntry[]): Set<string> {
   const orgs = new Set<string>()
   for (const entry of entries) {
+    if (entry.type === 'csv') continue
     const columns = entry.augmentColumns ?? {}
     for (const value of Object.values(columns)) {
       if (DYNAMIC_EXPRESSIONS.some(expr => value === expr)) {
@@ -201,7 +259,7 @@ function validateNameUniqueness(entries: ConfigEntry[]): void {
 
 function resolveAugmentColumnsForEntry(
   columns: Record<string, string> | undefined,
-  entry: ConfigEntry,
+  entry: ElfEntry | SObjectEntry,
   orgInfos: Map<string, OrgInfo>
 ): Record<string, string> {
   if (!columns) return {}
@@ -259,17 +317,16 @@ export async function resolveConfig(
   return config.entries.map((entry, index) => ({
     entry,
     index,
-    augmentColumns: resolveAugmentColumnsForEntry(
-      entry.augmentColumns,
-      entry,
-      orgInfos
-    ),
+    augmentColumns:
+      entry.type === 'csv'
+        ? (entry.augmentColumns ?? {})
+        : resolveAugmentColumnsForEntry(entry.augmentColumns, entry, orgInfos),
   }))
 }
 
 export function entryLabel(entry: ConfigEntry): string {
   if (entry.name) return entry.name
-  return entry.type === 'elf'
-    ? `elf:${entry.eventType}`
-    : `sobject:${entry.sobject}`
+  if (entry.type === 'elf') return `elf:${entry.eventType}`
+  if (entry.type === 'sobject') return `sobject:${entry.sobject}`
+  return `csv:${entry.filePath}`
 }
