@@ -10,6 +10,14 @@ export function buildAugmentSuffix(columns: Record<string, string>): string {
   return ',' + values.map(csvQuote).join(',')
 }
 
+export function buildAugmentHeaderSuffix(
+  columns: Record<string, string>
+): string {
+  const keys = Object.keys(columns)
+  if (keys.length === 0) return ''
+  return ',' + keys.join(',')
+}
+
 export function createAugmentTransform(suffix: string): Transform {
   return new Transform({
     objectMode: true,

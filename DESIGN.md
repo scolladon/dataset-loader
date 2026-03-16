@@ -34,7 +34,7 @@ The codebase follows **Hexagonal Architecture** (Ports & Adapters) with a stream
 │  Command Layer — Composition Root                                          │
 │  commands/crma/load.ts                                                     │
 │  Decomposed into focused methods: config loading, SF port creation,        │
-│  audit, dry-run, pipeline execution, fetcher factory                       │
+│  audit, dry-run, pipeline execution, reader factory                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  Domain Layer — Pure Business Logic                                        │
 │  domain/                                                                   │
@@ -70,15 +70,16 @@ src/
 │   └── types.ts             # Port interfaces + shared types (SF_IDENTIFIER_PATTERN, formatErrorMessage, EntryShape)
 └── adapters/
     ├── sf-client.ts          # Salesforce REST API client
-    ├── elf-fetcher.ts        # EventLogFile fetcher (yields CSV lines)
-    ├── sobject-fetcher.ts    # SObject query fetcher (yields CSV lines)
+    ├── elf-reader.ts         # EventLogFile reader (yields CSV lines)
+    ├── sobject-reader.ts     # SObject query reader (yields CSV lines)
     ├── augment-transform.ts  # Appends extra columns to CSV lines
+    ├── fan-out-transform.ts  # Tees a stream to multiple writable channels
     ├── row-counter.ts        # PassThrough that counts rows for progress
-    ├── upload-sink.ts        # CRMA upload (InsightsExternalData)
+    ├── dataset-writer.ts     # CRMA upload (InsightsExternalData)
+    ├── file-writer.ts        # Local file writer (CSV output)
     ├── config-loader.ts      # Config parsing & validation (Zod)
     ├── state-manager.ts      # Watermark file persistence
-    ├── progress-reporter.ts  # CLI progress bar
-    └── query-pages.ts        # SOQL pagination utility
+    └── progress-reporter.ts  # CLI progress bar
 
 test/
 ├── unit/
@@ -97,20 +98,22 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 | Port | Purpose | Adapter |
 |------|---------|---------|
 | `SalesforcePort` | SOQL queries, blob downloads, REST CRUD | `SalesforceClient` |
-| `FetchPort` | Fetch data as `AsyncIterable<string>` CSV lines | `ElfFetcher`, `SObjectFetcher` |
-| `CreateUploaderPort` | Factory for uploaders per dataset (accepts optional `UploadListener` for progress callbacks) | `UploadSinkFactory` |
-| `Uploader` | Init writable stream, finalize upload, abort on error | `CrmaUploadSink` |
-| `UploadListener` | Callbacks for parent creation and part upload events | Wired in pipeline |
+| `ReaderPort` | Fetch data as `AsyncIterable<string>` CSV lines | `ElfReader`, `SObjectReader` |
+| `CreateWriterPort` | Factory for writers per dataset (accepts `ProgressListener` for progress callbacks and `HeaderProvider` for deferred header resolution) | `DatasetWriterFactory`, `FileWriterFactory` |
+| `Writer` | Init writable stream, finalize, abort on error, skip on no data | `DatasetWriter`, `FileWriter` |
+| `ProgressListener` | Callbacks for sink creation and part upload events | Wired in pipeline |
+| `HeaderProvider` | Deferred header resolution (used by `FileWriter` to write header on first row) | `DatasetGroup` (domain) |
 | `StatePort` | Read/write watermark persistence | `FileStateManager` |
 | `ProgressPort` | Progress bar lifecycle, creates `PhaseProgress` with `GroupTracker` per dataset | `ProgressReporter` |
 | `GroupTracker` | Per-group real-time tracking of parentId, files, rows, and parts | `ProgressReporter` (closure) |
 | `LoggerPort` | Structured logging | SF CLI logger |
 
 **Shared types and utilities** in `ports/types.ts`:
-- `SF_IDENTIFIER_PATTERN` — Regex for valid Salesforce identifiers, shared by config validation and upload-sink
+- `SF_IDENTIFIER_PATTERN` — Regex for valid Salesforce identifiers, shared by config validation and dataset-writer
 - `formatErrorMessage(error)` — Safe error-to-string conversion used across all error handlers
 - `EntryShape`, `ElfShape`, `SObjectShape` — Entry type discriminated unions used by watermark-key and config-loader
 - `EntryType`, `Operation`, `WatermarkEntry` — Shared type aliases
+- `SkipDatasetError` — Thrown by `Writer.init()` to signal that a dataset should be silently skipped
 
 ## Domain Value Objects
 
@@ -139,23 +142,20 @@ executePipeline()
   │
   ├── For each group (parallel via Promise.all with .catch()):
   │   │
-  │   ├── Init Uploader (queries existing metadata, creates parent record)
-  │   │   └── Throws SkipDatasetError if no existing metadata found
-  │   ├── Returns GzipChunkingWritable (shared writable stream for the group)
+  │   ├── Init Writer (CRMA: queries metadata, creates parent record; File: opens stream)
+  │   │   └── Throws SkipDatasetError if no existing CRMA metadata found
+  │   ├── Returns shared chunker Writable for the group
   │   │
-  │   ├── For each entry (concurrent within group via Promise.all):
+  │   ├── For each reader bundle (entries sharing same reader + watermark):
   │   │   │
-  │   │   ├── Fetch data via FetchPort
-  │   │   │   └── Yields AsyncIterable<string> (raw CSV lines)
-  │   │   │
-  │   │   ├── Readable.from(lines) → AugmentTransform → RowCounter
-  │   │   │   └── Appends augment columns, counts rows for progress
-  │   │   │
-  │   │   └── Pipe to shared GzipChunkingWritable (end: false)
+  │   │   ├── Single entry: Fetch via ReaderPort → AugmentTransform → RowCounter → chunker
+  │   │   └── Multiple entries: FanOutTransform tees the reader stream to each entry's channel
+  │   │       └── Each channel: AugmentTransform → RowCounter → its group's chunker
   │   │
   │   ├── End chunker stream and await completion
-  │   ├── Finalize upload (Uploader.finalize())
-  │   │   └── PATCH InsightsExternalData with Action='Process'
+  │   ├── Finalize Writer
+  │   │   └── CRMA: PATCH InsightsExternalData with Action='Process'
+  │   │   └── File: close WriteStream
   │   │
   │   └── Update watermarks for successful entries
   │
@@ -166,11 +166,14 @@ executePipeline()
 
 Data never fully materializes in memory. The pipeline streams through three layers:
 
-1. **Fetchers** yield `AsyncIterable<string>` — raw CSV lines (header-stripped for ELF)
-   - ELF: concurrent blob stream downloads via `getBlobStream()` with `Promise.race` for earliest-available processing; strips header row from each file
+1. **Readers** yield `AsyncIterable<string>` — raw CSV lines (header-stripped for ELF)
+   - ELF: concurrent blob stream downloads via `getBlobStream()`; all blobs in a page are fetched in parallel, writes to the aggregation stream are serialized via a promise chain to avoid backpressure and listener leaks; strips header row from each blob
    - SObject: SOQL query with prefetched next page, yields CSV lines via csv-stringify
 2. **AugmentTransform + RowCounter** — Transform stream that appends augment columns to each line; PassThrough that counts rows for progress tracking
-3. **GzipChunkingWritable** — Writable stream that batch gzip-compresses (64KB flush threshold), splits at 10 MB base64 part boundaries, and uploads parts concurrently via fire-and-collect pattern
+3. **FanOutTransform** — When multiple entries share the same reader (same org + eventType/sobject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
+4. **Writer chunker** — Writable stream returned by `Writer.init()`:
+   - CRMA (`GzipChunkingWritable`): batch gzip-compresses (64KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently via fire-and-collect
+   - File (`FileWriter` internal): streams CSV rows directly to a `fs.WriteStream`; writes header on first row via `HeaderProvider`
 
 Key types:
 
@@ -181,14 +184,16 @@ interface FetchResult {
   readonly fileCount: () => number
 }
 
-interface FetchPort {
+interface ReaderPort {
   fetch(watermark?: Watermark): Promise<FetchResult>
+  header(): Promise<string>
 }
 
-interface Uploader {
+interface Writer {
   init(): Promise<Writable>
-  finalize(): Promise<UploadResult>
+  finalize(): Promise<WriterResult>
   abort(): Promise<void>
+  skip(): Promise<void>
 }
 ```
 
@@ -198,8 +203,8 @@ interface Uploader {
 |-------|----------|-------|
 | Dataset groups | `Promise.all` with `.catch()` wrappers | Unbounded |
 | Entries within a group | Concurrent via `Promise.all` | Unbounded (Node.js stream backpressure serializes writes to shared chunker) |
-| Part uploads within a group | Fire-and-collect (`uploadPromises[]`) | Unbounded |
-| ELF blob downloads | Concurrent with `Promise.race` | All blobs pre-fetched |
+| Part uploads within a group | Fire-and-collect (`uploadPromises[]`) | Unbounded (CRMA only) |
+| ELF blob downloads | Concurrent within each page; pages chained sequentially | All blobs pre-fetched per page |
 | Salesforce API calls per org | `pLimit` semaphore | 25 concurrent |
 | HTTP 429 responses | Exponential backoff retry | 3 attempts (1s, 2s, 4s) |
 
@@ -229,16 +234,17 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 | Component | Path | Responsibility |
 |-----------|------|----------------|
 | `SalesforceClient` | `adapters/sf-client.ts` | Per-org REST client with `p-limit(25)` concurrency, gzip headers, HTTP 429 retry with exponential backoff (3 attempts max). Error formatting extracts Salesforce error details from `error.data` array. |
-| `ElfFetcher` | `adapters/elf-fetcher.ts` | Queries EventLogFile, concurrently downloads blob streams via `getBlobStream()` with `Promise.race` for earliest-available processing. Strips CSV header from each blob. Validates `eventType` and `interval` format on construction. Bootstrap mode (no watermark): fetches only the latest record (`LIMIT 1 DESC`) to establish a watermark without bulk-loading history. |
-| `SObjectFetcher` | `adapters/sobject-fetcher.ts` | Builds SOQL with watermark/where/limit, prefetches next page while yielding current results as CSV lines (serialized via csv-stringify). Auto-appends `dateField` to SELECT if not in `fields`. |
+| `ElfReader` | `adapters/elf-reader.ts` | Queries EventLogFile, concurrently downloads blob streams via `getBlobStream()`. Writes are serialized to the aggregation stream via a promise chain to prevent backpressure issues and listener leaks. Strips CSV header from each blob. Validates `eventType` and `interval` format on construction. Bootstrap mode (no watermark): fetches only the latest record (`LIMIT 1 DESC`) to establish a watermark without bulk-loading history. |
+| `SObjectReader` | `adapters/sobject-reader.ts` | Builds SOQL with watermark/where/limit, prefetches next page while yielding current results as CSV lines (serialized via csv-stringify). Auto-appends `dateField` to SELECT if not in `fields`. |
 | `AugmentTransform` | `adapters/augment-transform.ts` | Transform stream that appends augment column values (CSV-quoted) to each line. |
+| `FanOutTransform` | `adapters/fan-out-transform.ts` | Transform stream that tees each chunk to N `PassThrough` channels concurrently via `Promise.all`. Used when multiple entries share the same reader (same org + type + watermark). Channels that error are removed from the active set. |
 | `RowCounter` | `adapters/row-counter.ts` | PassThrough stream that counts rows for progress tracking via `GroupTracker.addRows()`. |
-| `UploadSinkFactory` | `adapters/upload-sink.ts` | Creates `CrmaUploadSink` instances per dataset. `CrmaUploadSink.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 64KB flush threshold, splits at 10 MB base64 boundaries, and uploads parts concurrently via fire-and-collect. |
+| `DatasetWriterFactory` | `adapters/dataset-writer.ts` | Creates `DatasetWriter` instances per CRMA dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 64KB flush threshold, splits at 10 MB base64 boundaries, and uploads parts concurrently via fire-and-collect. |
+| `FileWriterFactory` | `adapters/file-writer.ts` | Creates `FileWriter` instances per output file path. `FileWriter.init()` opens a `fs.WriteStream` (append or overwrite). Header is written on first row via `HeaderProvider.resolveHeader()`. `skip()` deletes the file on overwrite. |
 | `ConfigLoader` | `adapters/config-loader.ts` | Reads JSON config, Zod schema validation, operation consistency checks, dynamic expression resolution (`$sourceOrg.Id`, etc.) |
 | `FileStateManager` | `adapters/state-manager.ts` | Atomic read/write of watermark state file (temp file + rename, mode `0o600`) |
 | `ProgressReporter` | `adapters/progress-reporter.ts` | CLI progress display using `cli-progress` MultiBar. Main bar tracks entries, per-group sub-bars show real-time files fetched, rows processed, and parts uploaded. No-op for zero-length phases. Includes workaround for cli-progress non-TTY `bar.start()` bug. |
-| `queryPages` | `adapters/query-pages.ts` | Async generator for SOQL pagination (yields pages via `queryMore`) |
-| `Pipeline` | `domain/pipeline.ts` | Core orchestration decomposed into focused functions: `executePipeline` (entry point), `processDatasetGroup`, `pipeEntry`, `finalizeGroup`, `aggregateResults`, `groupByDataset`. Groups entries by dataset, wires Fetcher → AugmentTransform → RowCounter → GzipChunkingWritable, manages watermark updates. Concurrent entry processing within groups (entries pipe to shared writable with `end: false`), parallel across groups. |
+| `Pipeline` | `domain/pipeline.ts` | Core orchestration: `executePipeline` (entry point), groups entries by dataset (`groupByDataset`) and by reader+watermark (`groupByReader`), wires Reader → FanOut/direct → AugmentTransform → RowCounter → Writer chunker, manages watermark updates. Concurrent bundle processing, parallel across groups. |
 | `Auditor` | `domain/auditor.ts` | Builds and runs pre-flight checks decomposed into `buildAuthChecks`, `buildElfChecks`, `buildInsightsChecks`. Deduplicates checks across entries. `runAudit` executes all checks via `Promise.allSettled` with `.catch()` to preserve check labels on rejection. |
 
 ## Config Validation

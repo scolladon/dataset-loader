@@ -11,7 +11,7 @@ import {
 export interface BaseEntry {
   name?: string
   sourceOrg: string
-  analyticOrg: string
+  analyticOrg?: string
   dataset: string
   operation: Operation
   augmentColumns?: Record<string, string>
@@ -62,14 +62,37 @@ const entryName = z
   .string()
   .regex(/^[a-zA-Z0-9_-]+$/, 'Must be alphanumeric, hyphens, or underscores')
 
-const baseEntrySchema = z.object({
-  name: entryName.optional(),
-  sourceOrg: orgAlias,
-  analyticOrg: orgAlias,
-  dataset: sfIdentifier,
-  operation: z.enum(['Append', 'Overwrite']).default('Append'),
-  augmentColumns: z.record(sfIdentifier, z.string()).optional(),
-})
+const baseEntrySchema = z
+  .object({
+    name: entryName.optional(),
+    sourceOrg: orgAlias,
+    analyticOrg: orgAlias.optional(),
+    dataset: z.string().min(1),
+    operation: z.enum(['Append', 'Overwrite']).default('Append'),
+    augmentColumns: z.record(sfIdentifier, z.string()).optional(),
+  })
+  .superRefine((entry, ctx) => {
+    if (entry.analyticOrg) {
+      if (!SF_IDENTIFIER_PATTERN.test(entry.dataset)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `dataset must be a valid Salesforce identifier when analyticOrg is set`,
+          path: ['dataset'],
+        })
+      }
+    }
+    if (!entry.analyticOrg && entry.augmentColumns) {
+      for (const [key, value] of Object.entries(entry.augmentColumns)) {
+        if (String(value).startsWith('$analyticOrg.')) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `augmentColumns['${key}'] uses $analyticOrg.* which is not allowed for file-target entries (analyticOrg is absent)`,
+            path: ['augmentColumns', key],
+          })
+        }
+      }
+    }
+  })
 
 const elfEntrySchema = baseEntrySchema.extend({
   type: z.literal('elf'),
@@ -106,7 +129,8 @@ function collectUniqueOrgs(entries: ConfigEntry[]): Set<string> {
     for (const value of Object.values(columns)) {
       if (DYNAMIC_EXPRESSIONS.some(expr => value === expr)) {
         if (value.startsWith('$sourceOrg.')) orgs.add(entry.sourceOrg)
-        if (value.startsWith('$analyticOrg.')) orgs.add(entry.analyticOrg)
+        if (value.startsWith('$analyticOrg.') && entry.analyticOrg)
+          orgs.add(entry.analyticOrg)
       }
     }
   }
@@ -154,7 +178,7 @@ function validateOperationConsistency(entries: ConfigEntry[]): void {
         .map(o => `'${o.operation}' (entries ${o.indices.join(', ')})`)
         .join(' vs ')
       throw new Error(
-        `Entries target dataset '${datasetKey.name}' on org '${datasetKey.org}' but specify conflicting operations: ${details}`
+        `Entries target dataset '${datasetKey.toString()}' but specify conflicting operations: ${details}`
       )
     }
   }
@@ -195,9 +219,9 @@ function resolveAugmentColumnsForEntry(
     else if (value === '$sourceOrg.Name')
       resolved[key] = getOrgInfo(entry.sourceOrg).Name
     else if (value === '$analyticOrg.Id')
-      resolved[key] = getOrgInfo(entry.analyticOrg).Id
+      resolved[key] = getOrgInfo(entry.analyticOrg!).Id
     else if (value === '$analyticOrg.Name')
-      resolved[key] = getOrgInfo(entry.analyticOrg).Name
+      resolved[key] = getOrgInfo(entry.analyticOrg!).Name
     else resolved[key] = value
   }
   return resolved

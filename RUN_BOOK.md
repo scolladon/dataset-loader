@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CRMA Data Loader is an SF CLI plugin that extracts Salesforce Event Log Files (ELF) and SObject data from source orgs and loads them into CRM Analytics datasets in analytic orgs. It runs outside the Salesforce platform to avoid governor limits, uses a streaming pipeline for memory-bounded processing, supports parallel fetch/upload with gzip compression, and tracks ingestion progress through a JSON-based watermark system. See the [README](README.md) for full command usage and config format.
+The CRMA Data Loader is an SF CLI plugin that extracts Salesforce Event Log Files (ELF) and SObject data from source orgs and writes them either into CRM Analytics datasets (CRMA target) or to local CSV files (file target). It runs outside the Salesforce platform to avoid governor limits, uses a streaming pipeline for memory-bounded processing, supports parallel fetching with gzip compression for CRMA uploads, and tracks ingestion progress through a JSON-based watermark system. See the [README](README.md) for full command usage and config format.
 
 ## Prerequisites & Setup
 
@@ -223,7 +223,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 ### "No existing metadata for dataset, skipping"
 
 - **Symptom**: Log shows `No existing metadata for dataset '<name>', skipping` and the entry is skipped.
-- **Cause**: The target dataset has no prior completed upload in CRMA, so metadata cannot be resolved.
+- **Cause**: The CRMA target dataset has no prior completed upload, so metadata cannot be resolved. This only affects CRMA targets (`analyticOrg` set); file targets are always writable.
 - **Resolution**: Create the dataset manually via the CRMA UI (Analytics Studio > Data Manager) or perform a one-time dataflow upload first, then re-run.
 
 ### "field-count and header's column-count do not match"
@@ -337,4 +337,4 @@ sf crma load -c configs/staging.json -s state/staging.state.json
 | HTTP 429 retry | Exponential backoff, 3 attempts max (1s, 2s, 4s) |
 | Partial failure | Failed entries don't block others; watermarks only advance on success |
 | Atomic state writes | Temp file + rename prevents corruption on crash |
-| Streaming | Memory-bounded processing via async iterables and chunked uploads (10 MB compressed parts) |
+| Streaming | Memory-bounded processing via async iterables; CRMA targets use chunked uploads (10 MB gzip-compressed parts), file targets stream directly to disk |

@@ -1,15 +1,15 @@
 import { finished } from 'node:stream/promises'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  CrmaUploadSink,
+  DatasetWriter,
+  DatasetWriterFactory,
   GzipChunkingWritable,
-  UploadSinkFactory,
-} from '../../../src/adapters/upload-sink.js'
+} from '../../../src/adapters/dataset-writer.js'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
+  type ProgressListener,
   type SalesforcePort,
   SkipDatasetError,
-  type UploadListener,
 } from '../../../src/ports/types.js'
 
 function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
@@ -79,12 +79,12 @@ describe('GzipChunkingWritable', () => {
     }
   })
 
-  it('given listener provided, when part uploaded, then calls onPartUploaded', async () => {
+  it('given listener provided, when part uploaded, then calls onChunkWritten', async () => {
     // Arrange
     const sfPort = makeSfPort()
-    const listener: UploadListener = {
-      onParentCreated: vi.fn(),
-      onPartUploaded: vi.fn(),
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
     }
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId, listener)
 
@@ -94,7 +94,7 @@ describe('GzipChunkingWritable', () => {
     await finished(sut)
 
     // Assert
-    expect(listener.onPartUploaded).toHaveBeenCalled()
+    expect(listener.onChunkWritten).toHaveBeenCalled()
   })
 
   it('given no lines written, when stream ends, then no parts uploaded', async () => {
@@ -184,7 +184,7 @@ describe('GzipChunkingWritable', () => {
   })
 })
 
-describe('CrmaUploadSink', () => {
+describe('DatasetWriter', () => {
   it('given existing metadata, when init called, then queries metadata patches numberOfLinesToIgnore and creates parent', async () => {
     // Arrange
     const existingMeta = JSON.stringify({
@@ -203,7 +203,7 @@ describe('CrmaUploadSink', () => {
     })
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append')
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
 
     // Assert
@@ -229,7 +229,7 @@ describe('CrmaUploadSink', () => {
     const sfPort = makeSfPort()
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append')
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
 
     // Assert
     await expect(sut.init()).rejects.toThrow(SkipDatasetError)
@@ -249,7 +249,7 @@ describe('CrmaUploadSink', () => {
     })
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append')
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
     chunker.write('"data"')
     chunker.end()
@@ -278,9 +278,33 @@ describe('CrmaUploadSink', () => {
     })
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append')
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     await sut.init()
     await sut.abort()
+
+    // Assert
+    expect(sfPort.del).toHaveBeenCalledWith(
+      expect.stringContaining(`InsightsExternalData/${parentId}`)
+    )
+  })
+
+  it('given initialized DatasetWriter, when skip() called, then deletes parent like abort()', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    await sut.init()
+
+    // Act
+    await sut.skip()
 
     // Assert
     expect(sfPort.del).toHaveBeenCalledWith(
@@ -293,14 +317,14 @@ describe('CrmaUploadSink', () => {
     const sfPort = makeSfPort()
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append')
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     await sut.abort()
 
     // Assert
     expect(sfPort.del).not.toHaveBeenCalled()
   })
 
-  it('given listener provided, when init called, then calls onParentCreated', async () => {
+  it('given listener provided, when init called, then calls onSinkReady', async () => {
     // Arrange
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
     const sfPort = makeSfPort({
@@ -312,17 +336,17 @@ describe('CrmaUploadSink', () => {
       getBlob: vi.fn().mockResolvedValue(existingMeta),
       post: vi.fn().mockResolvedValue({ id: parentId }),
     })
-    const listener: UploadListener = {
-      onParentCreated: vi.fn(),
-      onPartUploaded: vi.fn(),
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
     }
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append', listener)
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', listener)
     await sut.init()
 
     // Assert
-    expect(listener.onParentCreated).toHaveBeenCalledWith(parentId)
+    expect(listener.onSinkReady).toHaveBeenCalledWith(parentId)
   })
 
   it('given invalid dataset name, when constructing, then throws', () => {
@@ -334,7 +358,7 @@ describe('CrmaUploadSink', () => {
     })
 
     // Act
-    const act = () => new CrmaUploadSink(sfPort, badKey, 'Append')
+    const act = () => new DatasetWriter(sfPort, badKey, 'Append')
 
     // Assert
     expect(act).toThrow('Invalid dataset name')
@@ -357,7 +381,7 @@ describe('CrmaUploadSink', () => {
     })
 
     // Act
-    const sut = new CrmaUploadSink(sfPort, dsKey, 'Append')
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     await sut.init()
 
     // Assert
@@ -368,20 +392,25 @@ describe('CrmaUploadSink', () => {
   })
 })
 
-describe('UploadSinkFactory', () => {
-  it('given sfPort, when creating uploader, then returns CrmaUploadSink with correct dataset and operation', () => {
+describe('DatasetWriterFactory', () => {
+  it('given sfPort, when creating writer, then returns DatasetWriter with correct dataset and operation', () => {
     // Arrange
     const sfPort = makeSfPort()
-    const sut = new UploadSinkFactory(sfPort)
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
+    }
+    const headerProvider = { resolveHeader: vi.fn() }
+    const sut = new DatasetWriterFactory(sfPort)
 
     // Act
-    const uploader = sut.create(dsKey, 'Overwrite')
+    const writer = sut.create(dsKey, 'Overwrite', listener, headerProvider)
 
     // Assert
-    expect(uploader).toBeInstanceOf(CrmaUploadSink)
+    expect(writer).toBeInstanceOf(DatasetWriter)
   })
 
-  it('given listener, when creating uploader, then forwards listener', async () => {
+  it('given listener, when creating writer, then forwards listener', async () => {
     // Arrange
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
     const sfPort = makeSfPort({
@@ -393,17 +422,18 @@ describe('UploadSinkFactory', () => {
       getBlob: vi.fn().mockResolvedValue(existingMeta),
       post: vi.fn().mockResolvedValue({ id: parentId }),
     })
-    const listener = {
-      onParentCreated: vi.fn(),
-      onPartUploaded: vi.fn(),
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
     }
-    const sut = new UploadSinkFactory(sfPort)
+    const headerProvider = { resolveHeader: vi.fn() }
+    const sut = new DatasetWriterFactory(sfPort)
 
     // Act
-    const uploader = sut.create(dsKey, 'Append', listener)
-    await uploader.init()
+    const writer = sut.create(dsKey, 'Append', listener, headerProvider)
+    await writer.init()
 
     // Assert
-    expect(listener.onParentCreated).toHaveBeenCalledWith(parentId)
+    expect(listener.onSinkReady).toHaveBeenCalledWith(parentId)
   })
 })

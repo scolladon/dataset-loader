@@ -1,5 +1,6 @@
 import { Org } from '@salesforce/core'
 import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
+import { buildAugmentHeaderSuffix } from '../../adapters/augment-transform.js'
 import {
   type ConfigEntry,
   entryLabel,
@@ -7,22 +8,24 @@ import {
   type ResolvedEntry,
   resolveConfig,
 } from '../../adapters/config-loader.js'
-import { ElfFetcher } from '../../adapters/elf-fetcher.js'
+import { DatasetWriterFactory } from '../../adapters/dataset-writer.js'
+import { ElfReader } from '../../adapters/elf-reader.js'
+import { FileWriterFactory } from '../../adapters/file-writer.js'
 import { ProgressReporter } from '../../adapters/progress-reporter.js'
 import { SalesforceClient } from '../../adapters/sf-client.js'
-import { SObjectFetcher } from '../../adapters/sobject-fetcher.js'
+import { SObjectReader } from '../../adapters/sobject-reader.js'
 import { FileStateManager } from '../../adapters/state-manager.js'
-import { UploadSinkFactory } from '../../adapters/upload-sink.js'
 import { buildAuditChecks, runAudit } from '../../domain/auditor.js'
 import { DatasetKey } from '../../domain/dataset-key.js'
 import { executePipeline, type PipelineEntry } from '../../domain/pipeline.js'
+import { ReaderKey } from '../../domain/reader-key.js'
 import { WatermarkKey } from '../../domain/watermark-key.js'
 import { type WatermarkStore } from '../../domain/watermark-store.js'
 import {
-  type CreateUploaderPort,
-  type FetchPort,
+  type CreateWriterPort,
   formatErrorMessage,
   type LoggerPort,
+  type ReaderPort,
   type SalesforcePort,
   type StatePort,
 } from '../../ports/types.js'
@@ -114,7 +117,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       const allOrgs = new Set<string>()
       for (const e of config.entries) {
         allOrgs.add(e.sourceOrg)
-        allOrgs.add(e.analyticOrg)
+        if (e.analyticOrg) allOrgs.add(e.analyticOrg)
       }
       const ensurePromises: Promise<void>[] = []
       for (const alias of allOrgs) {
@@ -152,13 +155,15 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     sfPorts: Map<string, SalesforcePort>,
     logger: LoggerPort
   ): Promise<CrmaLoadResult> {
-    const auditEntries = entries.map(({ entry }) => ({
-      type: entry.type,
-      sourceOrg: entry.sourceOrg,
-      analyticOrg: entry.analyticOrg,
-    }))
+    const orgEntries = entries
+      .filter(({ entry }) => entry.analyticOrg)
+      .map(({ entry }) => ({
+        type: entry.type,
+        sourceOrg: entry.sourceOrg,
+        analyticOrg: entry.analyticOrg!,
+      }))
     logger.info('Audit — pre-flight checks:')
-    const checks = buildAuditChecks(auditEntries, sfPorts)
+    const checks = buildAuditChecks(orgEntries, sfPorts)
     const auditResult = await runAudit(checks, logger)
     if (!auditResult.passed) process.exitCode = 2
     return {
@@ -177,9 +182,8 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     for (const { entry } of entries) {
       const wk = WatermarkKey.fromEntry(entry)
       const wm = watermarks.get(wk)?.toString() ?? '(none)'
-      this.log(
-        `  ${entryLabel(entry)} → ${entry.analyticOrg}:${entry.dataset} (watermark: ${wm})`
-      )
+      const dk = DatasetKey.fromEntry(entry)
+      this.log(`  ${entryLabel(entry)} → ${dk.toString()} (watermark: ${wm})`)
     }
     return {
       entriesProcessed: 0,
@@ -196,25 +200,18 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     state: StatePort,
     logger: LoggerPort
   ): Promise<CrmaLoadResult> {
+    const sharedReaders = new Map<string, ReaderPort>()
     const pipelineEntries: PipelineEntry[] = []
     for (const resolvedEntry of entries) {
-      pipelineEntries.push(this.buildPipelineEntry(resolvedEntry, sfPorts))
-    }
-
-    const createUploader: CreateUploaderPort = {
-      create(dataset, operation, listener) {
-        const sfPort = sfPorts.get(dataset.org)
-        if (!sfPort)
-          throw new Error(`No SF connection for org '${dataset.org}'`)
-        const factory = new UploadSinkFactory(sfPort)
-        return factory.create(dataset, operation, listener)
-      },
+      pipelineEntries.push(
+        this.buildPipelineEntry(resolvedEntry, sfPorts, sharedReaders)
+      )
     }
 
     const result = await executePipeline({
       entries: pipelineEntries,
       watermarks,
-      createUploader,
+      createWriter: this.createWriterFactory(sfPorts),
       state,
       progress: new ProgressReporter(),
       logger,
@@ -235,33 +232,103 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
 
   private buildPipelineEntry(
     resolvedEntry: ResolvedEntry,
-    sfPorts: Map<string, SalesforcePort>
+    sfPorts: Map<string, SalesforcePort>,
+    sharedReaders: Map<string, ReaderPort>
   ): PipelineEntry {
     const { entry, index, augmentColumns } = resolvedEntry
     const srcPort = sfPorts.get(entry.sourceOrg)
     if (!srcPort)
       throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
+    const readerKey = this.createReaderKey(entry)
+    const readerCacheKey = readerKey.toString()
+    const fetcher = this.getOrCreateReader(
+      readerCacheKey,
+      sharedReaders,
+      entry,
+      srcPort
+    )
     return {
       index,
       label: entryLabel(entry),
+      readerKey,
       watermarkKey: WatermarkKey.fromEntry(entry),
       datasetKey: DatasetKey.fromEntry(entry),
       operation: entry.operation,
       augmentColumns,
-      fetcher: this.createFetcher(entry, srcPort),
+      fetcher,
+      header: async () => {
+        const raw = await fetcher.header()
+        return raw + buildAugmentHeaderSuffix(augmentColumns)
+      },
     }
   }
 
-  private createFetcher(entry: ConfigEntry, sfPort: SalesforcePort): FetchPort {
+  // Entries sharing the same readerKey share one ReaderPort instance so that header() returns
+  // a valid value for all of them after the single fetch() call made by fanOutEntries.
+  private getOrCreateReader(
+    cacheKey: string,
+    cache: Map<string, ReaderPort>,
+    entry: ConfigEntry,
+    srcPort: SalesforcePort
+  ): ReaderPort {
+    const existing = cache.get(cacheKey)
+    if (existing) return existing
+    const reader = this.createFetcher(entry, srcPort)
+    cache.set(cacheKey, reader)
+    return reader
+  }
+
+  private createReaderKey(entry: ConfigEntry): ReaderKey {
     if (entry.type === 'elf') {
-      return new ElfFetcher(sfPort, entry.eventType, entry.interval)
+      return ReaderKey.forElf(entry.sourceOrg, entry.eventType, entry.interval)
     }
-    return new SObjectFetcher(sfPort, {
+    return ReaderKey.forSObject(
+      entry.sourceOrg,
+      entry.sobject,
+      entry.fields,
+      entry.dateField,
+      entry.where,
+      entry.limit
+    )
+  }
+
+  private createFetcher(
+    entry: ConfigEntry,
+    sfPort: SalesforcePort
+  ): ReaderPort {
+    if (entry.type === 'elf') {
+      return new ElfReader(sfPort, entry.eventType, entry.interval)
+    }
+    return new SObjectReader(sfPort, {
       sobject: entry.sobject,
       fields: entry.fields,
       dateField: entry.dateField,
       where: entry.where,
       queryLimit: entry.limit,
     })
+  }
+
+  private createWriterFactory(
+    sfPorts: Map<string, SalesforcePort>
+  ): CreateWriterPort {
+    return {
+      create(dataset, operation, listener, headerProvider) {
+        if (dataset.org) {
+          const sfPort = sfPorts.get(dataset.org)!
+          return new DatasetWriterFactory(sfPort).create(
+            dataset,
+            operation,
+            listener,
+            headerProvider
+          )
+        }
+        return new FileWriterFactory().create(
+          dataset,
+          operation,
+          listener,
+          headerProvider
+        )
+      },
+    }
   }
 }

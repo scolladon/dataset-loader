@@ -1,14 +1,14 @@
 import { stringify } from 'csv-stringify/sync'
 import { Watermark } from '../domain/watermark.js'
 import {
-  type FetchPort,
   type FetchResult,
   type QueryResult,
+  type ReaderPort,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
 } from '../ports/types.js'
 
-export interface SObjectFetcherConfig {
+export interface SObjectReaderConfig {
   readonly sobject: string
   readonly fields: string[]
   readonly dateField: string
@@ -16,7 +16,14 @@ export interface SObjectFetcherConfig {
   readonly queryLimit?: number
 }
 
-export class SObjectFetcher implements FetchPort {
+class SObjectHeader {
+  constructor(private readonly fields: readonly string[]) {}
+  toString(): string {
+    return this.fields.join(',')
+  }
+}
+
+export class SObjectReader implements ReaderPort {
   private readonly queryFields: string[]
   private readonly sobject: string
   private readonly fields: string[]
@@ -26,7 +33,7 @@ export class SObjectFetcher implements FetchPort {
 
   constructor(
     private readonly sfPort: SalesforcePort,
-    config: SObjectFetcherConfig
+    config: SObjectReaderConfig
   ) {
     if (!SF_IDENTIFIER_PATTERN.test(config.sobject)) {
       throw new Error(`Invalid sobject: '${config.sobject}'`)
@@ -47,6 +54,10 @@ export class SObjectFetcher implements FetchPort {
     this.queryFields = config.fields.includes(config.dateField)
       ? config.fields
       : [...config.fields, config.dateField]
+  }
+
+  async header(): Promise<string> {
+    return new SObjectHeader(this.fields).toString()
   }
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {

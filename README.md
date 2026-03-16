@@ -56,7 +56,7 @@ sf crma load --dry-run
 sf crma load
 ```
 
-The target dataset must already exist in CRMA with at least one prior completed upload (so that metadata is available). Create the dataset manually via the CRMA UI or a one-time dataflow before the first load.
+For CRMA targets: the dataset must already exist with at least one prior completed upload (so metadata is available). Create it via the CRMA UI or a one-time dataflow before the first load. For file targets: omit `analyticOrg` and set `dataset` to a local file path — the file is created automatically.
 
 <!-- commands -->
 * [`sf crma load`](#sf-crma-load)
@@ -144,12 +144,12 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"elf"` |
 | `sourceOrg` | yes | SF CLI alias of the org containing EventLogFiles |
-| `analyticOrg` | yes | SF CLI alias of the CRMA org |
-| `dataset` | yes | Target CRMA dataset API name (`EdgemartAlias`) |
+| `analyticOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
+| `dataset` | yes | CRMA dataset API name (`EdgemartAlias`) when `analyticOrg` is set; local file path otherwise |
 | `eventType` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
 | `interval` | yes | `"Daily"` or `"Hourly"` (Hourly requires Shield license) |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append (see below) |
+| `augmentColumns` | no | Extra columns to append (see below). `$analyticOrg.*` expressions require `analyticOrg` to be set |
 
 #### SObject Entry Fields
 
@@ -157,15 +157,15 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"sobject"` |
 | `sourceOrg` | yes | SF CLI alias of the source org |
-| `analyticOrg` | yes | SF CLI alias of the CRMA org |
-| `dataset` | yes | Target CRMA dataset API name |
+| `analyticOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
+| `dataset` | yes | CRMA dataset API name when `analyticOrg` is set; local file path otherwise |
 | `sobject` | yes | SObject API name (e.g. `Account`, `Opportunity`) |
 | `fields` | yes | Array of field API names to query |
 | `dateField` | no | Field used for watermarking (default: `LastModifiedDate`) |
 | `where` | no | Additional SOQL WHERE clause |
 | `limit` | no | Max number of records to fetch (appends `LIMIT n` to SOQL) |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append (see below) |
+| `augmentColumns` | no | Extra columns to append (see below). `$analyticOrg.*` expressions require `analyticOrg` to be set |
 
 #### Augment Columns
 
@@ -181,7 +181,11 @@ Append static or dynamic columns to every fetched row:
 
 #### Grouping
 
-Entries targeting the same `(analyticOrg, dataset)` are merged into a single upload job. All entries in a group must use the same `operation`.
+Entries targeting the same destination are merged into a single write job:
+- **CRMA targets**: same `(analyticOrg, dataset)` → single `InsightsExternalData` upload
+- **File targets**: same `dataset` path → single file write
+
+All entries in a group must use the same `operation`.
 
 ### State File (`.crma-load.state.json`)
 
@@ -205,8 +209,8 @@ Without a state file, the first ELF run fetches only the latest record (bootstra
 1. **Parse config** — validate JSON with Zod, check operation consistency across groups
 2. **Resolve** — authenticate orgs, resolve dynamic expressions (`$sourceOrg.Id`, etc.)
 3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access
-4. **Execute pipeline** — group entries by dataset, stream through Fetcher → Augment → GzipChunkingWritable
-5. **Upload** — batch gzip compress, base64 encode, split into 10 MB parts, upload concurrently via InsightsExternalData API
+4. **Execute pipeline** — group entries by dataset, stream through Reader → Augment → Writer
+5. **Write** — CRMA: batch gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API; File: stream rows directly to a local CSV file
 6. **Update watermarks** — only for entries whose group uploaded successfully
 
 ## Development

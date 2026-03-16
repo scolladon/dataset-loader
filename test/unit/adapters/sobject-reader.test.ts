@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SObjectFetcher } from '../../../src/adapters/sobject-fetcher.js'
+import { SObjectReader } from '../../../src/adapters/sobject-reader.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { type SalesforcePort } from '../../../src/ports/types.js'
 
@@ -25,7 +25,7 @@ async function collectLines(
   return lines
 }
 
-describe('SObjectFetcher', () => {
+describe('SObjectReader', () => {
   it('given records exist, when fetching, then yields CSV lines without header', async () => {
     const sfPort = makeSfPort({
       query: vi.fn().mockResolvedValue({
@@ -46,7 +46,7 @@ describe('SObjectFetcher', () => {
       }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id', 'Name', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
@@ -71,7 +71,7 @@ describe('SObjectFetcher', () => {
         .mockResolvedValue({ totalSize: 0, done: true, records: [] }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
@@ -102,7 +102,7 @@ describe('SObjectFetcher', () => {
       }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
@@ -123,7 +123,7 @@ describe('SObjectFetcher', () => {
       .mockResolvedValue({ totalSize: 0, done: true, records: [] })
     const sfPort = makeSfPort({ query: querySpy })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
@@ -145,7 +145,7 @@ describe('SObjectFetcher', () => {
       }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
@@ -165,7 +165,7 @@ describe('SObjectFetcher', () => {
       .mockResolvedValue({ totalSize: 0, done: true, records: [] })
     const sfPort = makeSfPort({ query: querySpy })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
@@ -192,7 +192,7 @@ describe('SObjectFetcher', () => {
       }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
@@ -220,7 +220,7 @@ describe('SObjectFetcher', () => {
       }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
@@ -232,10 +232,10 @@ describe('SObjectFetcher', () => {
     expect(lines[0]).toContain('O""Brien')
   })
 
-  it('given invalid sobject name, when creating fetcher, then throws', () => {
+  it('given invalid sobject name, when creating reader, then throws', () => {
     const sfPort = makeSfPort()
     const act = () =>
-      new SObjectFetcher(sfPort, {
+      new SObjectReader(sfPort, {
         sobject: 'bad name!',
         fields: ['Id'],
         dateField: 'LastModifiedDate',
@@ -243,10 +243,10 @@ describe('SObjectFetcher', () => {
     expect(act).toThrow('Invalid sobject')
   })
 
-  it('given invalid field name, when creating fetcher, then throws', () => {
+  it('given invalid field name, when creating reader, then throws', () => {
     const sfPort = makeSfPort()
     const act = () =>
-      new SObjectFetcher(sfPort, {
+      new SObjectReader(sfPort, {
         sobject: 'Account',
         fields: ['bad field!'],
         dateField: 'LastModifiedDate',
@@ -254,10 +254,10 @@ describe('SObjectFetcher', () => {
     expect(act).toThrow('Invalid field')
   })
 
-  it('given invalid dateField name, when creating fetcher, then throws', () => {
+  it('given invalid dateField name, when creating reader, then throws', () => {
     const sfPort = makeSfPort()
     const act = () =>
-      new SObjectFetcher(sfPort, {
+      new SObjectReader(sfPort, {
         sobject: 'Account',
         fields: ['Id'],
         dateField: 'bad date!',
@@ -278,7 +278,7 @@ describe('SObjectFetcher', () => {
       }),
     })
 
-    const sut = new SObjectFetcher(sfPort, {
+    const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
@@ -287,5 +287,26 @@ describe('SObjectFetcher', () => {
     await collectLines(result.lines)
 
     expect(result.watermark()?.toString()).toBe('2026-01-03T00:00:00.000Z')
+  })
+
+  it('given fields [Id, Name, CreatedDate], when header() called, then returns comma-separated field names', async () => {
+    const sfPort = makeSfPort()
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'Name', 'CreatedDate'],
+      dateField: 'CreatedDate',
+    })
+    expect(await sut.header()).toBe('Id,Name,CreatedDate')
+  })
+
+  it('given fields [Id, Name], when header() called before fetch(), then is available immediately', async () => {
+    const sfPort = makeSfPort()
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'Name'],
+      dateField: 'CreatedDate',
+    })
+    // No fetch() called — header is derived from config
+    expect(await sut.header()).toBe('Id,Name')
   })
 })

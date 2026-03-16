@@ -43,7 +43,7 @@ describe('ProgressReporter', () => {
     expect(() => phase.stop()).not.toThrow()
   })
 
-  it('given positive total, when tracking group, then returns functional group tracker', () => {
+  it('given positive total, when tracking group without parts, then returns functional group tracker', () => {
     // Arrange
     const sut = new ProgressReporter()
     const phase = sut.create('Fetching', 2)
@@ -54,6 +54,22 @@ describe('ProgressReporter', () => {
     // Assert
     expect(() => tracker.updateParentId('06V000000000001')).not.toThrow()
     expect(() => tracker.addFiles(2)).not.toThrow()
+    expect(() => tracker.addRows(150)).not.toThrow()
+    expect(() => tracker.incrementParts()).not.toThrow()
+    expect(() => tracker.stop()).not.toThrow()
+    phase.stop()
+  })
+
+  it('given positive total, when tracking group with parts, then returns functional group tracker including parts', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Processing', 2)
+
+    // Act
+    const tracker = phase.trackGroup('MyDataset', true)
+
+    // Assert
+    expect(() => tracker.addFiles(3)).not.toThrow()
     expect(() => tracker.addRows(150)).not.toThrow()
     expect(() => tracker.incrementParts()).not.toThrow()
     expect(() => tracker.incrementParts()).not.toThrow()

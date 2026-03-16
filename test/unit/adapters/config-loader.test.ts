@@ -426,6 +426,99 @@ describe('ConfigLoader', () => {
     })
   })
 
+  describe('Given file-target entry (no analyticOrg)', () => {
+    describe('When parsing valid config', () => {
+      it('Then parses successfully with file path as dataset', async () => {
+        // Arrange
+        const config = {
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src-org',
+              eventType: 'Login',
+              interval: 'Daily',
+              dataset: './output/login.csv',
+            },
+          ],
+        }
+        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+        // Act & Assert
+        await expect(parseConfig('config.json')).resolves.not.toThrow()
+      })
+    })
+
+    describe('When augmentColumns reference $analyticOrg.*', () => {
+      it('Then throws validation error', async () => {
+        // Arrange
+        const config = {
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src-org',
+              eventType: 'Login',
+              interval: 'Daily',
+              dataset: './output/login.csv',
+              augmentColumns: { Org: '$analyticOrg.Id' },
+            },
+          ],
+        }
+        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+        // Act & Assert
+        await expect(parseConfig('config.json')).rejects.toThrow(
+          /\$analyticOrg/
+        )
+      })
+    })
+  })
+
+  describe('Given org-target entry (analyticOrg present)', () => {
+    describe('When dataset uses SF identifier', () => {
+      it('Then parses successfully', async () => {
+        // Arrange
+        const config = {
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src-org',
+              analyticOrg: 'my-org',
+              eventType: 'Login',
+              interval: 'Daily',
+              dataset: 'LoginEvents',
+            },
+          ],
+        }
+        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+        // Act & Assert
+        await expect(parseConfig('config.json')).resolves.not.toThrow()
+      })
+    })
+
+    describe('When dataset uses file path (invalid SF identifier)', () => {
+      it('Then throws validation error', async () => {
+        // Arrange
+        const config = {
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src-org',
+              analyticOrg: 'my-org',
+              eventType: 'Login',
+              interval: 'Daily',
+              dataset: './output/login.csv',
+            },
+          ],
+        }
+        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+        // Act & Assert
+        await expect(parseConfig('config.json')).rejects.toThrow()
+      })
+    })
+  })
+
   describe('augment column resolution', () => {
     it('given dynamic expressions, when loading, then resolves org info', async () => {
       // Arrange

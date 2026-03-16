@@ -15,6 +15,9 @@ const stateFileSchema = z.object({
 export class FileStateManager implements StatePort {
   constructor(private readonly path: string) {}
 
+  // Note: DatasetKey.toString() format changed from "${org}:${dataset}" to
+  // "org:${org}:${dataset}" in this release. Existing state files will have no matching
+  // watermarks on first run after upgrade — full initial load will occur for all org-target entries.
   async read(): Promise<WatermarkStore> {
     try {
       const raw = await readFile(this.path, 'utf-8')

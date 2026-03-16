@@ -2,14 +2,15 @@ import { Writable } from 'node:stream'
 import { createGzip, type Gzip } from 'node:zlib'
 import { type DatasetKey } from '../domain/dataset-key.js'
 import {
-  type CreateUploaderPort,
+  type CreateWriterPort,
+  type HeaderProvider,
   type Operation,
+  type ProgressListener,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
   SkipDatasetError,
-  type Uploader,
-  type UploadListener,
-  type UploadResult,
+  type Writer,
+  type WriterResult,
 } from '../ports/types.js'
 
 interface CreateResponse {
@@ -55,7 +56,7 @@ export class GzipChunkingWritable extends Writable {
     private readonly sfPort: SalesforcePort,
     private readonly basePath: string,
     private readonly parentId: string,
-    private readonly listener?: UploadListener
+    private readonly listener?: ProgressListener
   ) {
     super({ objectMode: true })
     this.chunk = this.createChunkState()
@@ -175,12 +176,12 @@ export class GzipChunkingWritable extends Writable {
         DataFile: compressed.toString('base64'),
       })
       .then(() => {
-        this.listener?.onPartUploaded()
+        this.listener?.onChunkWritten()
       })
   }
 }
 
-export class CrmaUploadSink implements Uploader {
+export class DatasetWriter implements Writer {
   private parentId: string | undefined
   private chunker: GzipChunkingWritable | undefined
   private readonly basePath: string
@@ -190,7 +191,7 @@ export class CrmaUploadSink implements Uploader {
     private readonly sfPort: SalesforcePort,
     dataset: DatasetKey,
     private readonly operation: Operation,
-    private readonly listener?: UploadListener
+    private readonly listener?: ProgressListener
   ) {
     this.basePath = `/services/data/v${sfPort.apiVersion}/sobjects`
     this.datasetName = dataset.name
@@ -208,7 +209,7 @@ export class CrmaUploadSink implements Uploader {
     }
     const patched = this.normalizeMetadata(metadata)
     this.parentId = await this.createParent(patched)
-    this.listener?.onParentCreated(this.parentId)
+    this.listener?.onSinkReady(this.parentId)
     this.chunker = new GzipChunkingWritable(
       this.sfPort,
       this.basePath,
@@ -218,7 +219,7 @@ export class CrmaUploadSink implements Uploader {
     return this.chunker
   }
 
-  async finalize(): Promise<UploadResult> {
+  async finalize(): Promise<WriterResult> {
     if (!this.parentId || !this.chunker) {
       throw new Error('Not initialized')
     }
@@ -241,6 +242,10 @@ export class CrmaUploadSink implements Uploader {
         `${this.basePath}/InsightsExternalData/${this.parentId}`
       )
     }
+  }
+
+  async skip(): Promise<void> {
+    return this.abort()
   }
 
   private normalizeMetadata(metadataJson: string): string {
@@ -282,14 +287,15 @@ export class CrmaUploadSink implements Uploader {
   }
 }
 
-export class UploadSinkFactory implements CreateUploaderPort {
+export class DatasetWriterFactory implements CreateWriterPort {
   constructor(private readonly sfPort: SalesforcePort) {}
 
   create(
     dataset: DatasetKey,
     operation: Operation,
-    listener?: UploadListener
-  ): Uploader {
-    return new CrmaUploadSink(this.sfPort, dataset, operation, listener)
+    listener: ProgressListener,
+    _headerProvider: HeaderProvider
+  ): Writer {
+    return new DatasetWriter(this.sfPort, dataset, operation, listener)
   }
 }

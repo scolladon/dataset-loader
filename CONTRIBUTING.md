@@ -26,15 +26,16 @@ src/
 │   └── types.ts             # All port interfaces
 └── adapters/                 # Infrastructure implementations
     ├── sf-client.ts          # Salesforce REST client (concurrency + retry)
-    ├── elf-fetcher.ts        # EventLogFile fetcher (yields CSV lines)
-    ├── sobject-fetcher.ts    # SObject query fetcher (yields CSV lines)
+    ├── elf-reader.ts         # EventLogFile reader (yields CSV lines)
+    ├── sobject-reader.ts     # SObject query reader (yields CSV lines)
     ├── augment-transform.ts  # Appends extra columns to CSV lines
+    ├── fan-out-transform.ts  # Tees a stream to multiple writable channels
     ├── row-counter.ts        # PassThrough that counts rows for progress
-    ├── upload-sink.ts        # CRMA upload lifecycle
+    ├── dataset-writer.ts     # CRMA upload lifecycle
+    ├── file-writer.ts        # Local file writer (CSV output)
     ├── config-loader.ts      # Config parsing & validation (Zod)
     ├── state-manager.ts      # Atomic watermark state file
-    ├── progress-reporter.ts  # CLI progress bar
-    └── query-pages.ts        # SOQL pagination utility
+    └── progress-reporter.ts  # CLI progress bar
 
 test/
 ├── unit/
@@ -140,10 +141,10 @@ See [DESIGN.md](DESIGN.md) for the full architecture documentation.
 5. Add NUT test for CLI integration
 6. Update manual test scenarios if applicable
 
-## Adding a New Fetcher Type
+## Adding a New Reader Type
 
-1. Create a new class implementing `FetchPort` in `adapters/`
+1. Create a new class implementing `ReaderPort` in `adapters/`
 2. Add the config entry type to the Zod schema in `config-loader.ts`
 3. Add a discriminated union branch for the new type
 4. Handle the new type in `load.ts` when building `PipelineEntry` objects
-5. Add unit tests for the fetcher and config validation
+5. Add unit tests for the reader and config validation

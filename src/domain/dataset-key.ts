@@ -1,17 +1,20 @@
 export class DatasetKey {
   private constructor(
-    private readonly analyticOrg: string,
+    private readonly analyticOrg: string | undefined,
     private readonly dataset: string
   ) {}
 
   static fromEntry(entry: {
-    analyticOrg: string
+    analyticOrg?: string
     dataset: string
   }): DatasetKey {
+    if (entry.analyticOrg !== undefined && entry.analyticOrg === '') {
+      throw new Error('analyticOrg must not be empty')
+    }
     return new DatasetKey(entry.analyticOrg, entry.dataset)
   }
 
-  get org(): string {
+  get org(): string | undefined {
     return this.analyticOrg
   }
 
@@ -20,6 +23,8 @@ export class DatasetKey {
   }
 
   toString(): string {
-    return `${this.analyticOrg}:${this.dataset}`
+    return this.analyticOrg
+      ? `org:${this.analyticOrg}:${this.dataset}`
+      : `file:${this.dataset}`
   }
 }

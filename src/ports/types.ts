@@ -48,19 +48,21 @@ export interface FetchResult {
   readonly fileCount: () => number
 }
 
-export interface FetchPort {
+export interface ReaderPort {
   fetch(watermark?: Watermark): Promise<FetchResult>
+  header(): Promise<string>
 }
 
-export interface UploadResult {
+export interface WriterResult {
   readonly parentId: string
   readonly partCount: number
 }
 
-export interface Uploader {
+export interface Writer {
   init(): Promise<Writable>
-  finalize(): Promise<UploadResult>
+  finalize(): Promise<WriterResult>
   abort(): Promise<void>
+  skip(): Promise<void>
 }
 
 export class SkipDatasetError extends Error {
@@ -70,17 +72,22 @@ export class SkipDatasetError extends Error {
   }
 }
 
-export interface UploadListener {
-  onParentCreated(parentId: string): void
-  onPartUploaded(): void
+export interface ProgressListener {
+  onSinkReady(parentId: string): void
+  onChunkWritten(): void
 }
 
-export interface CreateUploaderPort {
+export interface HeaderProvider {
+  resolveHeader(): Promise<string>
+}
+
+export interface CreateWriterPort {
   create(
     dataset: DatasetKey,
     operation: Operation,
-    listener?: UploadListener
-  ): Uploader
+    listener: ProgressListener,
+    headerProvider: HeaderProvider
+  ): Writer
 }
 
 export interface SalesforcePort {
@@ -109,7 +116,7 @@ export interface GroupTracker {
 
 export interface PhaseProgress {
   tick(detail: string): void
-  trackGroup(label: string): GroupTracker
+  trackGroup(label: string, withParts?: boolean): GroupTracker
   stop(): void
 }
 

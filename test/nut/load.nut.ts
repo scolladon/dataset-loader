@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import { MockTestOrgData, TestContext } from '@salesforce/core/testSetup'
@@ -80,6 +86,35 @@ function sobjectEntry(overrides: Record<string, unknown> = {}) {
     sourceOrg: 'src-org',
     analyticOrg: 'ana-org',
     dataset: 'DS2',
+    sobject: 'Account',
+    fields: ['Id', 'Name'],
+    dateField: 'LastModifiedDate',
+    ...overrides,
+  }
+}
+
+function fileElfEntry(
+  outputPath: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    type: 'elf' as const,
+    sourceOrg: 'src-org',
+    dataset: outputPath,
+    eventType: 'Login',
+    interval: 'Daily' as const,
+    ...overrides,
+  }
+}
+
+function fileSObjectEntry(
+  outputPath: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    type: 'sobject' as const,
+    sourceOrg: 'src-org',
+    dataset: outputPath,
     sobject: 'Account',
     fields: ['Id', 'Name'],
     dateField: 'LastModifiedDate',
@@ -1452,6 +1487,248 @@ describe('CrmaLoad NUT', () => {
 
       // Assert
       await expect(sut).rejects.toThrow()
+    })
+  })
+
+  describe('file-target dry-run', () => {
+    it('given file-target ELF entry, when running with dry-run flag, then shows file: prefixed dataset key', async () => {
+      // Arrange
+      const outputPath = join(os.tmpdir(), 'nut-file-target-dryrun.csv')
+      tmp = createTempFiles(makeConfigJson([fileElfEntry(outputPath)]))
+      orgOnlyConnection()
+      const loggedLines: string[] = []
+      const originalLog = CrmaLoad.prototype.log
+      CrmaLoad.prototype.log = (msg: string) => {
+        loggedLines.push(msg ?? '')
+      }
+
+      // Act
+      try {
+        const sut = await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--dry-run',
+        ])
+
+        // Assert
+        expect(sut).toEqual({
+          entriesProcessed: 0,
+          entriesSkipped: 0,
+          entriesFailed: 0,
+          groupsUploaded: 0,
+        })
+        const planLine = loggedLines.find(l => l.includes('file:'))
+        expect(planLine).toBeDefined()
+        expect(planLine).toContain(`file:${outputPath}`)
+      } finally {
+        CrmaLoad.prototype.log = originalLog
+      }
+    })
+  })
+
+  describe('e2e pipeline - file-target', () => {
+    it('given file-target ELF entry with one log record, when running pipeline, then writes CSV with header and data rows', async () => {
+      // Arrange
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [
+        ['Login', '005xx0000001'],
+        ['Login', '005xx0000002'],
+      ])
+      const outputPath = join(os.tmpdir(), `nut-file-out-${Date.now()}.csv`)
+      tmp = createTempFiles(makeConfigJson([fileElfEntry(outputPath)]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(elfCsv)
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(existsSync(outputPath)).toBe(true)
+      const written = readFileSync(outputPath, 'utf-8')
+      expect(written).toContain('EVENT_TYPE')
+      expect(written).toContain('USER_ID')
+      expect(written).toContain('Login')
+    })
+
+    it('given file-target SObject entry with records, when running pipeline, then writes CSV with header and data', async () => {
+      // Arrange
+      const records = [
+        {
+          Id: '001000000000001',
+          Name: 'Acme',
+          LastModifiedDate: LOG_DATE_MAR_01,
+        },
+        {
+          Id: '001000000000002',
+          Name: 'Beta',
+          LastModifiedDate: LOG_DATE_MAR_02,
+        },
+      ]
+      const outputPath = join(os.tmpdir(), `nut-file-sobject-${Date.now()}.csv`)
+      tmp = createTempFiles(makeConfigJson([fileSObjectEntry(outputPath)]))
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('Account')
+          .returns(defaultSObjectQueryResponse(records))
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(existsSync(outputPath)).toBe(true)
+      const written = readFileSync(outputPath, 'utf-8')
+      expect(written).toContain('Id,Name')
+      expect(written).toContain('Acme')
+    })
+  })
+
+  describe('e2e pipeline - reader fan-out', () => {
+    it('given two entries sharing same ELF reader, when pipeline runs, then both targets receive data and watermarks advance', async () => {
+      // Arrange — one CRMA org target + one file target, same ELF source
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [
+        ['Login', '005xx0000001'],
+        ['Login', '005xx0000002'],
+      ])
+      const outputPath = join(os.tmpdir(), `nut-fanout-${Date.now()}.csv`)
+      tmp = createTempFiles(
+        makeConfigJson([
+          elfEntry(), // org target
+          fileElfEntry(outputPath), // file target — same sourceOrg+eventType+interval
+        ])
+      )
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(elfCsv)
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
+          .onPost('InsightsExternalDataPart')
+          .returns(defaultCreateResponse(INSIGHTS_PART_PREFIX))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert — both entries processed
+      expect(sut).toMatchObject({
+        entriesProcessed: 2,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+      })
+      // File target received data
+      expect(existsSync(outputPath)).toBe(true)
+      const written = readFileSync(outputPath, 'utf-8')
+      expect(written).toContain('EVENT_TYPE')
+      expect(written).toContain('Login')
+      // Watermark written to state file
+      const state = readState(tmp.statePath)
+      const watermarkValues = Object.values(state)
+      expect(watermarkValues.length).toBe(1) // both entries share the same watermarkKey (same ELF source)
+      expect(
+        watermarkValues.every(v => new Date(v) >= new Date(LOG_DATE_MAR_01))
+      ).toBe(true)
+    })
+
+    it('given two file-target entries sharing same ELF reader, when pipeline runs, then both output files receive data', async () => {
+      // Arrange — two different file targets, same ELF source
+      const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])
+      const out1 = join(os.tmpdir(), `nut-fanout-1-${Date.now()}.csv`)
+      const out2 = join(os.tmpdir(), `nut-fanout-2-${Date.now()}.csv`)
+      tmp = createTempFiles(
+        makeConfigJson([
+          fileElfEntry(out1),
+          fileElfEntry(out2), // same config → same reader
+        ])
+      )
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('EventLogFile')
+          .excluding('InsightsExternalData')
+          .returns(defaultElfQueryResponse([LOG_DATE_MAR_01]))
+          .onGet('/sobjects/EventLogFile/')
+          .including('/LogFile')
+          .returns(elfCsv)
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toMatchObject({
+        entriesProcessed: 2,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+      })
+      expect(readFileSync(out1, 'utf-8')).toContain('Login')
+      expect(readFileSync(out2, 'utf-8')).toContain('Login')
     })
   })
 })
