@@ -12,8 +12,9 @@ import {
 export interface BaseEntry {
   name?: string
   sourceOrg: string
-  analyticOrg?: string
-  dataset: string
+  targetOrg?: string
+  targetDataset?: string
+  targetFile?: string
   operation: Operation
   augmentColumns?: Record<string, string>
 }
@@ -36,9 +37,10 @@ export interface SObjectEntry extends BaseEntry {
 export interface CsvEntry {
   name?: string
   type: Extract<EntryType, 'csv'>
-  filePath: string
-  analyticOrg?: string
-  dataset: string
+  sourceFile: string
+  targetOrg?: string
+  targetDataset?: string
+  targetFile?: string
   operation: Operation
   augmentColumns?: Record<string, string>
 }
@@ -58,8 +60,8 @@ export interface ResolvedEntry {
 const DYNAMIC_EXPRESSIONS = [
   '$sourceOrg.Id',
   '$sourceOrg.Name',
-  '$analyticOrg.Id',
-  '$analyticOrg.Name',
+  '$targetOrg.Id',
+  '$targetOrg.Name',
 ] as const
 
 const sfIdentifier = z
@@ -73,31 +75,59 @@ const entryName = z
   .string()
   .regex(/^[a-zA-Z0-9_-]+$/, 'Must be alphanumeric, hyphens, or underscores')
 
+function validateTargetFields(
+  entry: { targetOrg?: string; targetDataset?: string; targetFile?: string },
+  ctx: z.RefinementCtx
+): void {
+  const hasCrma = !!entry.targetOrg
+  const hasFile = !!entry.targetFile
+
+  if (hasCrma && hasFile) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cannot specify both targetOrg and targetFile',
+    })
+  }
+  if (!hasCrma && !hasFile) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Either targetOrg+targetDataset or targetFile must be specified',
+    })
+  }
+  if (hasCrma && !entry.targetDataset) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'targetDataset is required when targetOrg is set',
+      path: ['targetDataset'],
+    })
+  }
+  if (!hasCrma && entry.targetDataset) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'targetDataset requires targetOrg to be set',
+      path: ['targetDataset'],
+    })
+  }
+}
+
 const baseEntrySchema = z
   .object({
     name: entryName.optional(),
     sourceOrg: orgAlias,
-    analyticOrg: orgAlias.optional(),
-    dataset: z.string().min(1),
+    targetOrg: orgAlias.optional(),
+    targetDataset: sfIdentifier.optional(),
+    targetFile: z.string().min(1).optional(),
     operation: z.enum(['Append', 'Overwrite']).default('Append'),
     augmentColumns: z.record(sfIdentifier, z.string()).optional(),
   })
   .superRefine((entry, ctx) => {
-    if (entry.analyticOrg) {
-      if (!SF_IDENTIFIER_PATTERN.test(entry.dataset)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `dataset must be a valid Salesforce identifier when analyticOrg is set`,
-          path: ['dataset'],
-        })
-      }
-    }
-    if (!entry.analyticOrg && entry.augmentColumns) {
+    validateTargetFields(entry, ctx)
+    if (!entry.targetOrg && entry.augmentColumns) {
       for (const [key, value] of Object.entries(entry.augmentColumns)) {
-        if (String(value).startsWith('$analyticOrg.')) {
+        if (String(value).startsWith('$targetOrg.')) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: `augmentColumns['${key}'] uses $analyticOrg.* which is not allowed for file-target entries (analyticOrg is absent)`,
+            message: `augmentColumns['${key}'] uses $targetOrg.* which is not allowed for file-target entries (targetOrg is absent)`,
             path: ['augmentColumns', key],
           })
         }
@@ -126,31 +156,26 @@ const csvEntrySchema = z
   .object({
     name: entryName.optional(),
     type: z.literal('csv'),
-    filePath: z
+    sourceFile: z
       .string()
       .min(1)
       .refine(p => path.isAbsolute(p) || !path.normalize(p).startsWith('..'), {
-        message: 'filePath must not traverse parent directories',
+        message: 'sourceFile must not traverse parent directories',
       }),
-    analyticOrg: orgAlias.optional(),
-    dataset: z.string().min(1),
+    targetOrg: orgAlias.optional(),
+    targetDataset: sfIdentifier.optional(),
+    targetFile: z.string().min(1).optional(),
     operation: z.enum(['Append', 'Overwrite']).default('Append'),
     augmentColumns: z.record(sfIdentifier, z.string()).optional(),
   })
   .strict()
   .superRefine((entry, ctx) => {
-    if (entry.analyticOrg && !SF_IDENTIFIER_PATTERN.test(entry.dataset)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `dataset must be a valid Salesforce identifier when analyticOrg is set`,
-        path: ['dataset'],
-      })
-    }
+    validateTargetFields(entry, ctx)
     if (entry.augmentColumns) {
       for (const [key, value] of Object.entries(entry.augmentColumns)) {
         if (
           String(value).startsWith('$sourceOrg.') ||
-          String(value).startsWith('$analyticOrg.')
+          String(value).startsWith('$targetOrg.')
         ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -187,8 +212,8 @@ function collectUniqueOrgs(entries: ConfigEntry[]): Set<string> {
     for (const value of Object.values(columns)) {
       if (DYNAMIC_EXPRESSIONS.some(expr => value === expr)) {
         if (value.startsWith('$sourceOrg.')) orgs.add(entry.sourceOrg)
-        if (value.startsWith('$analyticOrg.') && entry.analyticOrg)
-          orgs.add(entry.analyticOrg)
+        if (value.startsWith('$targetOrg.') && entry.targetOrg)
+          orgs.add(entry.targetOrg)
       }
     }
   }
@@ -276,10 +301,10 @@ function resolveAugmentColumnsForEntry(
       resolved[key] = getOrgInfo(entry.sourceOrg).Id
     else if (value === '$sourceOrg.Name')
       resolved[key] = getOrgInfo(entry.sourceOrg).Name
-    else if (value === '$analyticOrg.Id')
-      resolved[key] = getOrgInfo(entry.analyticOrg!).Id
-    else if (value === '$analyticOrg.Name')
-      resolved[key] = getOrgInfo(entry.analyticOrg!).Name
+    else if (value === '$targetOrg.Id')
+      resolved[key] = getOrgInfo(entry.targetOrg!).Id
+    else if (value === '$targetOrg.Name')
+      resolved[key] = getOrgInfo(entry.targetOrg!).Name
     else resolved[key] = value
   }
   return resolved
@@ -328,5 +353,5 @@ export function entryLabel(entry: ConfigEntry): string {
   if (entry.name) return entry.name
   if (entry.type === 'elf') return `elf:${entry.eventType}`
   if (entry.type === 'sobject') return `sobject:${entry.sobject}`
-  return `csv:${entry.filePath}`
+  return `csv:${entry.sourceFile}`
 }

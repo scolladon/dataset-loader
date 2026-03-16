@@ -72,8 +72,8 @@ function elfEntry(overrides: Record<string, unknown> = {}) {
   return {
     type: 'elf' as const,
     sourceOrg: 'src-org',
-    analyticOrg: 'ana-org',
-    dataset: 'DS',
+    targetOrg: 'ana-org',
+    targetDataset: 'DS',
     eventType: 'Login',
     interval: 'Daily' as const,
     ...overrides,
@@ -84,8 +84,8 @@ function sobjectEntry(overrides: Record<string, unknown> = {}) {
   return {
     type: 'sobject' as const,
     sourceOrg: 'src-org',
-    analyticOrg: 'ana-org',
-    dataset: 'DS2',
+    targetOrg: 'ana-org',
+    targetDataset: 'DS2',
     sobject: 'Account',
     fields: ['Id', 'Name'],
     dateField: 'LastModifiedDate',
@@ -100,7 +100,7 @@ function fileElfEntry(
   return {
     type: 'elf' as const,
     sourceOrg: 'src-org',
-    dataset: outputPath,
+    targetFile: outputPath,
     eventType: 'Login',
     interval: 'Daily' as const,
     ...overrides,
@@ -114,7 +114,7 @@ function fileSObjectEntry(
   return {
     type: 'sobject' as const,
     sourceOrg: 'src-org',
-    dataset: outputPath,
+    targetFile: outputPath,
     sobject: 'Account',
     fields: ['Id', 'Name'],
     dateField: 'LastModifiedDate',
@@ -1173,35 +1173,35 @@ describe('CrmaLoad NUT', () => {
       const entries = [
         elfEntry({
           sourceOrg: 'src-org',
-          analyticOrg: 'ana-org',
-          dataset: 'ElfDS1',
+          targetOrg: 'ana-org',
+          targetDataset: 'ElfDS1',
           eventType: 'Login',
         }),
         elfEntry({
           sourceOrg: 'src-org',
-          analyticOrg: 'ana-org',
-          dataset: 'ElfDS2',
+          targetOrg: 'ana-org',
+          targetDataset: 'ElfDS2',
           eventType: 'API',
         }),
         sobjectEntry({
           sourceOrg: 'src-org',
-          analyticOrg: 'ana2-org',
-          dataset: 'AcctDS',
+          targetOrg: 'ana2-org',
+          targetDataset: 'AcctDS',
           sobject: 'Account',
           fields: ['Id', 'Name'],
         }),
         sobjectEntry({
           sourceOrg: 'src2-org',
-          analyticOrg: 'ana-org',
-          dataset: 'CaseDS',
+          targetOrg: 'ana-org',
+          targetDataset: 'CaseDS',
           sobject: 'Case',
           fields: ['Id', 'Subject'],
           dateField: 'LastModifiedDate',
         }),
         elfEntry({
           sourceOrg: 'src2-org',
-          analyticOrg: 'ana2-org',
-          dataset: 'ElfDS3',
+          targetOrg: 'ana2-org',
+          targetDataset: 'ElfDS3',
           eventType: 'Report',
         }),
       ]
@@ -1698,8 +1698,8 @@ describe('CrmaLoad NUT', () => {
       const out2 = join(os.tmpdir(), `nut-csv-fanout-2-${Date.now()}.csv`)
       tmp = createTempFiles(
         makeConfigJson([
-          { type: 'csv', filePath: inputPath, dataset: out1 },
-          { type: 'csv', filePath: inputPath, dataset: out2 }, // same path → same reader
+          { type: 'csv', sourceFile: inputPath, targetFile: out1 },
+          { type: 'csv', sourceFile: inputPath, targetFile: out2 }, // same path → same reader
         ])
       )
       // No applyConnection needed — CSV entries require no Salesforce connection

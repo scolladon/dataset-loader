@@ -7,8 +7,6 @@ describe('WatermarkStore', () => {
   const elfEntry = {
     type: 'elf' as const,
     sourceOrg: 'src',
-    analyticOrg: 'ana',
-    dataset: 'DS',
     eventType: 'Login',
     interval: 'Daily',
   }

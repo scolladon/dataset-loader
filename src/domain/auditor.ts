@@ -13,7 +13,7 @@ export interface AuditCheck {
 interface AuditEntry {
   readonly type: EntryType
   readonly sourceOrg: string
-  readonly analyticOrg: string
+  readonly targetOrg: string
 }
 
 export function buildAuditChecks(
@@ -22,7 +22,7 @@ export function buildAuditChecks(
 ): readonly AuditCheck[] {
   return [
     ...buildOrgChecks(
-      collectOrgs(entries, e => [e.sourceOrg, e.analyticOrg]),
+      collectOrgs(entries, e => [e.sourceOrg, e.targetOrg]),
       org => `${org}: auth and connectivity`,
       'SELECT Id FROM Organization LIMIT 1',
       sfPorts
@@ -34,7 +34,7 @@ export function buildAuditChecks(
       sfPorts
     ),
     ...buildOrgChecks(
-      collectOrgs(entries, e => [e.analyticOrg]),
+      collectOrgs(entries, e => [e.targetOrg]),
       org => `${org}: InsightsExternalData access`,
       'SELECT Id FROM InsightsExternalData LIMIT 1',
       sfPorts

@@ -29,8 +29,8 @@ function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
 const basePath = '/services/data/v62.0/sobjects'
 const parentId = '06V000000000001'
 const dsKey = DatasetKey.fromEntry({
-  analyticOrg: 'TestOrg',
-  dataset: 'MyDataset',
+  targetOrg: 'TestOrg',
+  targetDataset: 'MyDataset',
 })
 
 describe('GzipChunkingWritable', () => {
@@ -353,8 +353,8 @@ describe('DatasetWriter', () => {
     // Arrange
     const sfPort = makeSfPort()
     const badKey = DatasetKey.fromEntry({
-      analyticOrg: 'TestOrg',
-      dataset: 'bad name!',
+      targetOrg: 'TestOrg',
+      targetDataset: 'bad name!',
     })
 
     // Act

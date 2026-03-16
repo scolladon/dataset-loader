@@ -126,7 +126,7 @@ function createEntry(
       eventType: 'Login',
       interval: 'Daily',
     }),
-    datasetKey: DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS' }),
+    datasetKey: DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
     operation: 'Append',
     augmentColumns: {},
     header: vi.fn(async () => 'HEADER'),
@@ -175,7 +175,7 @@ describe('DatasetGroup', () => {
     })
     const sut = DatasetGroup.from(
       'key',
-      DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS' }),
+      DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
       'Append',
       [firstEntry, secondEntry]
     )
@@ -199,7 +199,7 @@ describe('DatasetGroup', () => {
     })
     const sut = DatasetGroup.from(
       'key',
-      DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS' }),
+      DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
       'Append',
       [firstEntry, secondEntry]
     )
@@ -215,7 +215,7 @@ describe('DatasetGroup', () => {
     // Arrange
     const sut = DatasetGroup.from(
       'key',
-      DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS' }),
+      DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
       'Append',
       []
     )
@@ -437,7 +437,10 @@ describe('executePipeline (streaming)', () => {
       index: 1,
       label: 'bad',
       readerKey: ReaderKey.forElf('src', 'Logout', 'Daily'),
-      datasetKey: DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS2' }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS2',
+      }),
       watermarkKey: WatermarkKey.fromEntry({
         type: 'elf',
         sourceOrg: 'src',
@@ -808,7 +811,10 @@ describe('executePipeline (streaming)', () => {
       label: 'e1',
       fetcher,
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS1' }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
       augmentColumns: {},
     })
     const entry2 = createEntryWithReader(readerKey, {
@@ -816,7 +822,7 @@ describe('executePipeline (streaming)', () => {
       label: 'e2',
       fetcher,
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
       augmentColumns: {},
     })
     const mockCreateWriter = vi
@@ -863,7 +869,10 @@ describe('executePipeline (streaming)', () => {
       label: 'e1',
       fetcher: errorFetcher,
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS1' }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
       augmentColumns: {},
     })
     const entry2 = createEntryWithReader(readerKey, {
@@ -871,7 +880,7 @@ describe('executePipeline (streaming)', () => {
       label: 'e2',
       fetcher: errorFetcher,
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
       augmentColumns: {},
     })
     const mockCreateWriter = vi
@@ -910,7 +919,10 @@ describe('executePipeline (streaming)', () => {
       label: 'e1',
       fetcher: errorFetcher,
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS1' }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
       augmentColumns: {},
     })
     const entry2 = createEntryWithReader(readerKey, {
@@ -918,7 +930,7 @@ describe('executePipeline (streaming)', () => {
       label: 'e2',
       fetcher: errorFetcher,
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
       augmentColumns: {},
     })
     const mockCreateWriter = vi
@@ -972,7 +984,10 @@ describe('executePipeline (streaming)', () => {
       label: 'e1',
       fetcher,
       watermarkKey: wmKey1,
-      datasetKey: DatasetKey.fromEntry({ analyticOrg: 'ana', dataset: 'DS1' }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
       augmentColumns: {},
     })
     const entry2 = createEntryWithReader(readerKey, {
@@ -980,7 +995,7 @@ describe('executePipeline (streaming)', () => {
       label: 'e2',
       fetcher,
       watermarkKey: wmKey2,
-      datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
       augmentColumns: {},
     })
 
@@ -1013,7 +1028,7 @@ describe('groupByReader', () => {
     const e2 = createEntryWithReader(key, {
       fetcher: mockFetcher(async () => createFetchResult([])),
       watermarkKey: wmKey,
-      datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
     })
 
     // Act
@@ -1051,7 +1066,7 @@ describe('groupByReader', () => {
     const e2 = createEntryWithReader(key, {
       fetcher: mockFetcher(async () => createFetchResult([])),
       watermarkKey: wmKey2,
-      datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
     })
 
     // Act
@@ -1073,7 +1088,7 @@ describe('groupByReader', () => {
       ReaderKey.forElf('prod', 'Login', 'Hourly'),
       {
         fetcher: mockFetcher(async () => createFetchResult([])),
-        datasetKey: DatasetKey.fromEntry({ dataset: './out.csv' }),
+        datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
       }
     )
 

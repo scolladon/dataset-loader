@@ -1,30 +1,34 @@
 export class DatasetKey {
   private constructor(
-    private readonly analyticOrg: string | undefined,
-    private readonly dataset: string
+    private readonly targetOrg: string | undefined,
+    private readonly target: string
   ) {}
 
   static fromEntry(entry: {
-    analyticOrg?: string
-    dataset: string
+    targetOrg?: string
+    targetDataset?: string
+    targetFile?: string
   }): DatasetKey {
-    if (entry.analyticOrg !== undefined && entry.analyticOrg === '') {
-      throw new Error('analyticOrg must not be empty')
+    if (entry.targetOrg !== undefined && entry.targetOrg === '') {
+      throw new Error('targetOrg must not be empty')
     }
-    return new DatasetKey(entry.analyticOrg, entry.dataset)
+    if (entry.targetOrg) {
+      return new DatasetKey(entry.targetOrg, entry.targetDataset!)
+    }
+    return new DatasetKey(undefined, entry.targetFile!)
   }
 
   get org(): string | undefined {
-    return this.analyticOrg
+    return this.targetOrg
   }
 
   get name(): string {
-    return this.dataset
+    return this.target
   }
 
   toString(): string {
-    return this.analyticOrg
-      ? `org:${this.analyticOrg}:${this.dataset}`
-      : `file:${this.dataset}`
+    return this.targetOrg
+      ? `org:${this.targetOrg}:${this.target}`
+      : `file:${this.target}`
   }
 }

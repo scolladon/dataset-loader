@@ -6,8 +6,6 @@ describe('WatermarkKey', () => {
     const sut = WatermarkKey.fromEntry({
       type: 'elf',
       sourceOrg: 'src',
-      analyticOrg: 'ana',
-      dataset: 'DS',
       eventType: 'Login',
       interval: 'Daily',
     })
@@ -18,11 +16,7 @@ describe('WatermarkKey', () => {
     const sut = WatermarkKey.fromEntry({
       type: 'sobject',
       sourceOrg: 'src',
-      analyticOrg: 'ana',
-      dataset: 'DS',
       sobject: 'Account',
-      fields: ['Id'],
-      dateField: 'LastModifiedDate',
     })
     expect(sut.toString()).toBe('src:sobject:Account')
   })
@@ -31,8 +25,6 @@ describe('WatermarkKey', () => {
     const sut = WatermarkKey.fromEntry({
       type: 'elf',
       sourceOrg: 'src',
-      analyticOrg: 'ana',
-      dataset: 'DS',
       eventType: 'Login',
       interval: 'Daily',
       name: 'my-login-loader',
@@ -44,40 +36,32 @@ describe('WatermarkKey', () => {
     const sut = WatermarkKey.fromEntry({
       type: 'sobject',
       sourceOrg: 'src',
-      analyticOrg: 'ana',
-      dataset: 'DS',
       sobject: 'Account',
-      fields: ['Id'],
-      dateField: 'LastModifiedDate',
       name: 'account-sync',
     })
     expect(sut.toString()).toBe('account-sync')
   })
 
-  it('given two keys with same value, when comparing toString, then they are equal', () => {
+  it('given two ELF keys with same sourceOrg/eventType/interval, when comparing toString, then they are equal', () => {
     const a = WatermarkKey.fromEntry({
       type: 'elf',
       sourceOrg: 'src',
-      analyticOrg: 'ana',
-      dataset: 'DS',
       eventType: 'Login',
       interval: 'Daily',
     })
     const b = WatermarkKey.fromEntry({
       type: 'elf',
       sourceOrg: 'src',
-      analyticOrg: 'ana',
-      dataset: 'DS2',
       eventType: 'Login',
       interval: 'Daily',
     })
     expect(a.toString()).toBe(b.toString())
   })
 
-  it('given CSV entry without name, when creating key, then format is csv-colon-filePath', () => {
+  it('given CSV entry without name, when creating key, then format is csv-colon-sourceFile', () => {
     const sut = WatermarkKey.fromEntry({
       type: 'csv',
-      filePath: './data/login.csv',
+      sourceFile: './data/login.csv',
     })
     expect(sut.toString()).toBe('csv:./data/login.csv')
   })
@@ -85,7 +69,7 @@ describe('WatermarkKey', () => {
   it('given CSV entry with name, when creating key, then uses name as key', () => {
     const sut = WatermarkKey.fromEntry({
       type: 'csv',
-      filePath: './data/login.csv',
+      sourceFile: './data/login.csv',
       name: 'login-data',
     })
     expect(sut.toString()).toBe('login-data')

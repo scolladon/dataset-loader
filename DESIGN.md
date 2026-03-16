@@ -65,7 +65,7 @@ src/
 │   ├── watermark.ts         # Value object: ISO 8601 timestamp
 │   ├── watermark-key.ts     # Value object: entry identifier
 │   ├── watermark-store.ts   # Immutable watermark map
-│   └── dataset-key.ts       # Value object: (analyticOrg, dataset) pair
+│   └── dataset-key.ts       # Value object: (targetOrg, targetDataset/targetFile) target identity
 ├── ports/
 │   └── types.ts             # Port interfaces + shared types (SF_IDENTIFIER_PATTERN, formatErrorMessage, EntryShape)
 └── adapters/
@@ -121,7 +121,7 @@ All value objects are **immutable** and **self-validating** (Object Calisthenics
 
 - **Watermark** — Wraps ISO 8601 timestamp string. Validates format on construction. Converts to SOQL literal via `toSoqlLiteral()`.
 - **WatermarkKey** — Composite key: `{sourceOrg}:elf:{eventType}:{interval}` or `{sourceOrg}:sobject:{sobject}`. Static factory `fromEntry()`.
-- **DatasetKey** — Composite key: `{analyticOrg}:{dataset}`. Used for grouping entries into upload jobs.
+- **DatasetKey** — Composite key: `org:{targetOrg}:{targetDataset}` (CRMA target) or `file:{targetFile}` (file target). Used for grouping entries into write jobs.
 - **WatermarkStore** — Immutable map from WatermarkKey → Watermark. `set()` returns a new store instance.
 
 ## Data Flow
@@ -138,7 +138,7 @@ resolveConfig() ─── Query orgs for dynamic expressions ($sourceOrg.Id, etc
   ▼
 executePipeline()
   │
-  ├── Group entries by DatasetKey (analyticOrg + dataset)
+  ├── Group entries by DatasetKey (targetOrg + targetDataset, or targetFile)
   │
   ├── For each group (parallel via Promise.all with .catch()):
   │   │
@@ -255,7 +255,7 @@ Config is validated at load time using Zod schemas:
 - Org alias format (`[a-zA-Z0-9_.-]+`)
 - Salesforce identifier format (`[a-zA-Z_][a-zA-Z0-9_]*`)
 - At least one entry required
-- Operation consistency: all entries targeting the same dataset must use the same operation
+- Operation consistency: all entries targeting the same `(targetOrg, targetDataset)` or `targetFile` must use the same operation
 
 ## State Management
 

@@ -120,7 +120,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       const allOrgs = new Set<string>()
       for (const e of config.entries) {
         if (e.type !== 'csv') allOrgs.add(e.sourceOrg)
-        if (e.analyticOrg) allOrgs.add(e.analyticOrg)
+        if (e.targetOrg) allOrgs.add(e.targetOrg)
       }
       const ensurePromises: Promise<void>[] = []
       for (const alias of allOrgs) {
@@ -159,11 +159,11 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     logger: LoggerPort
   ): Promise<CrmaLoadResult> {
     const orgEntries = entries
-      .filter(({ entry }) => entry.type !== 'csv' && entry.analyticOrg)
+      .filter(({ entry }) => entry.type !== 'csv' && entry.targetOrg)
       .map(({ entry }) => ({
         type: entry.type,
         sourceOrg: (entry as ElfEntry | SObjectEntry).sourceOrg,
-        analyticOrg: entry.analyticOrg!,
+        targetOrg: entry.targetOrg!,
       }))
     logger.info('Audit — pre-flight checks:')
     const checks = buildAuditChecks(orgEntries, sfPorts)
@@ -241,10 +241,10 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     const { entry, index, augmentColumns } = resolvedEntry
 
     if (entry.type === 'csv') {
-      const readerKey = ReaderKey.forCsv(entry.filePath)
+      const readerKey = ReaderKey.forCsv(entry.sourceFile)
       const cacheKey = readerKey.toString()
       const existing = sharedReaders.get(cacheKey)
-      const fetcher: ReaderPort = existing ?? new CsvReader(entry.filePath)
+      const fetcher: ReaderPort = existing ?? new CsvReader(entry.sourceFile)
       if (!existing) sharedReaders.set(cacheKey, fetcher)
       return {
         index,
@@ -308,7 +308,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
       return ReaderKey.forElf(entry.sourceOrg, entry.eventType, entry.interval)
     }
     if (entry.type === 'csv') {
-      return ReaderKey.forCsv(entry.filePath)
+      return ReaderKey.forCsv(entry.sourceFile)
     }
     return ReaderKey.forSObject(
       entry.sourceOrg,
@@ -325,7 +325,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     sfPort: SalesforcePort
   ): ReaderPort {
     if (entry.type === 'csv') {
-      return new CsvReader(entry.filePath)
+      return new CsvReader(entry.sourceFile)
     }
     if (entry.type === 'elf') {
       return new ElfReader(sfPort, entry.eventType, entry.interval)

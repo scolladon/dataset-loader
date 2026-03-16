@@ -38,8 +38,8 @@ cat crma-load.config.json
       "eventType": "LightningPageView",
       "interval": "Daily",
       "sourceOrg": "my-source-org",
-      "analyticOrg": "my-analytic-org",
-      "dataset": "LightningPageView_my_source_org"
+      "targetOrg": "my-analytic-org",
+      "targetDataset": "LightningPageView_my_source_org"
     }
   ]
 }
@@ -56,7 +56,7 @@ sf crma load --dry-run
 sf crma load
 ```
 
-For CRMA targets: the dataset must already exist with at least one prior completed upload (so metadata is available). Create it via the CRMA UI or a one-time dataflow before the first load. For file targets: omit `analyticOrg` and set `dataset` to a local file path — the file is created automatically.
+For CRMA targets: the dataset must already exist with at least one prior completed upload (so metadata is available). Create it via the CRMA UI or a one-time dataflow before the first load. For file targets: omit `targetOrg` and set `targetFile` to a local file path — the file is created automatically.
 
 <!-- commands -->
 * [`sf crma load`](#sf-crma-load)
@@ -108,8 +108,8 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
     {
       "type": "elf",
       "sourceOrg": "source-org-alias",
-      "analyticOrg": "analytic-org-alias",
-      "dataset": "ALM_LightningPageView",
+      "targetOrg": "analytic-org-alias",
+      "targetDataset": "ALM_LightningPageView",
       "eventType": "LightningPageView",
       "interval": "Daily",
       "operation": "Append",
@@ -122,8 +122,8 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
     {
       "type": "sobject",
       "sourceOrg": "source-org-alias",
-      "analyticOrg": "analytic-org-alias",
-      "dataset": "ALM_Accounts",
+      "targetOrg": "analytic-org-alias",
+      "targetDataset": "ALM_Accounts",
       "sobject": "Account",
       "fields": ["Id", "Name", "Industry", "CreatedDate"],
       "dateField": "LastModifiedDate",
@@ -144,12 +144,13 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"elf"` |
 | `sourceOrg` | yes | SF CLI alias of the org containing EventLogFiles |
-| `analyticOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
-| `dataset` | yes | CRMA dataset API name (`EdgemartAlias`) when `analyticOrg` is set; local file path otherwise |
+| `targetOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
+| `targetDataset` | no | CRMA dataset API name (`EdgemartAlias`). Required when `targetOrg` is set |
+| `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `eventType` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
 | `interval` | yes | `"Daily"` or `"Hourly"` (Hourly requires Shield license) |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append (see below). `$analyticOrg.*` expressions require `analyticOrg` to be set |
+| `augmentColumns` | no | Extra columns to append (see below). `$targetOrg.*` expressions require `targetOrg` to be set |
 
 #### SObject Entry Fields
 
@@ -157,15 +158,28 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"sobject"` |
 | `sourceOrg` | yes | SF CLI alias of the source org |
-| `analyticOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
-| `dataset` | yes | CRMA dataset API name when `analyticOrg` is set; local file path otherwise |
+| `targetOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
+| `targetDataset` | no | CRMA dataset API name. Required when `targetOrg` is set |
+| `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `sobject` | yes | SObject API name (e.g. `Account`, `Opportunity`) |
 | `fields` | yes | Array of field API names to query |
 | `dateField` | no | Field used for watermarking (default: `LastModifiedDate`) |
 | `where` | no | Additional SOQL WHERE clause |
 | `limit` | no | Max number of records to fetch (appends `LIMIT n` to SOQL) |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append (see below). `$analyticOrg.*` expressions require `analyticOrg` to be set |
+| `augmentColumns` | no | Extra columns to append (see below). `$targetOrg.*` expressions require `targetOrg` to be set |
+
+#### CSV Entry Fields
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `type` | yes | `"csv"` |
+| `sourceFile` | yes | Path to the local CSV file to load |
+| `targetOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
+| `targetDataset` | no | CRMA dataset API name. Required when `targetOrg` is set |
+| `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
+| `operation` | no | `"Append"` (default) or `"Overwrite"` |
+| `augmentColumns` | no | Extra static columns to append. Dynamic `$sourceOrg.*` / `$targetOrg.*` expressions are not supported for CSV entries |
 
 #### Augment Columns
 
@@ -175,15 +189,15 @@ Append static or dynamic columns to every fetched row:
 | --- | --- |
 | `$sourceOrg.Id` | 18-char Organization Id of the source org |
 | `$sourceOrg.Name` | Organization Name of the source org |
-| `$analyticOrg.Id` | 18-char Organization Id of the analytic org |
-| `$analyticOrg.Name` | Organization Name of the analytic org |
+| `$targetOrg.Id` | 18-char Organization Id of the target CRMA org |
+| `$targetOrg.Name` | Organization Name of the target CRMA org |
 | Any other string | Used as-is (static value) |
 
 #### Grouping
 
 Entries targeting the same destination are merged into a single write job:
-- **CRMA targets**: same `(analyticOrg, dataset)` → single `InsightsExternalData` upload
-- **File targets**: same `dataset` path → single file write
+- **CRMA targets**: same `(targetOrg, targetDataset)` → single `InsightsExternalData` upload
+- **File targets**: same `targetFile` path → single file write
 
 All entries in a group must use the same `operation`.
 

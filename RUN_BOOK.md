@@ -66,8 +66,8 @@ Create `crma-load.config.json` at the project root. See the [README](README.md#c
       "eventType": "Login",
       "interval": "Daily",
       "sourceOrg": "my-source-org",
-      "analyticOrg": "my-analytic-org",
-      "dataset": "Login_my_source_org"
+      "targetOrg": "my-analytic-org",
+      "targetDataset": "Login_my_source_org"
     }
   ]
 }
@@ -192,7 +192,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 
 - **Symptom**: Command exits immediately with a config validation error.
 - **Cause**: Invalid JSON, missing required fields, or conflicting operations in a group.
-- **Resolution**: Check the error message — Zod provides specific validation details. Ensure entries targeting the same `(analyticOrg, dataset)` use the same `operation`.
+- **Resolution**: Check the error message — Zod provides specific validation details. Ensure entries targeting the same `(targetOrg, targetDataset)` or `targetFile` use the same `operation`.
 
 ### Auth Errors (401/403)
 
@@ -223,7 +223,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 ### "No existing metadata for dataset, skipping"
 
 - **Symptom**: Log shows `No existing metadata for dataset '<name>', skipping` and the entry is skipped.
-- **Cause**: The CRMA target dataset has no prior completed upload, so metadata cannot be resolved. This only affects CRMA targets (`analyticOrg` set); file targets are always writable.
+- **Cause**: The CRMA target dataset has no prior completed upload, so metadata cannot be resolved. This only affects CRMA targets (`targetOrg` set); file targets are always writable.
 - **Resolution**: Create the dataset manually via the CRMA UI (Analytics Studio > Data Manager) or perform a one-time dataflow upload first, then re-run.
 
 ### "field-count and header's column-count do not match"

@@ -33,7 +33,7 @@ export interface SObjectShape {
 export interface CsvShape {
   readonly name?: string
   readonly type: 'csv'
-  readonly filePath: string
+  readonly sourceFile: string
 }
 
 export type EntryShape = ElfShape | SObjectShape | CsvShape

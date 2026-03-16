@@ -16,7 +16,7 @@ export class WatermarkKey {
       return new WatermarkKey(`${entry.sourceOrg}:sobject:${entry.sobject}`)
     }
     // entry.type === 'csv'
-    return new WatermarkKey(`csv:${entry.filePath}`)
+    return new WatermarkKey(`csv:${entry.sourceFile}`)
   }
 
   toString(): string {
