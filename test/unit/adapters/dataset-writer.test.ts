@@ -224,6 +224,60 @@ describe('DatasetWriter', () => {
     expect(decoded.objects[0].numberOfLinesToIgnore).toBe(0)
   })
 
+  it('given existing metadata, when init called, then queries both Completed and CompletedWithWarnings statuses', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    await sut.init()
+
+    // Assert
+    expect(sfPort.query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Status IN ('Completed', 'CompletedWithWarnings')"
+      )
+    )
+  })
+
+  it('given dataset completed with warnings, when init called, then uses its metadata', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({
+      objects: [
+        { fields: [{ name: 'Id', type: 'Text' }], numberOfLinesToIgnore: 1 },
+      ],
+    })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url/completed-with-warnings' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+
+    // Assert
+    expect(chunker).toBeDefined()
+    const metaB64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
+      .MetadataJson as string
+    const decoded = JSON.parse(Buffer.from(metaB64, 'base64').toString('utf-8'))
+    expect(decoded.objects[0].numberOfLinesToIgnore).toBe(0)
+  })
+
   it('given no existing metadata, when init called, then throws SkipDatasetError', async () => {
     // Arrange
     const sfPort = makeSfPort()

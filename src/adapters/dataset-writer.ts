@@ -277,7 +277,7 @@ export class DatasetWriter implements Writer {
     const result = await this.sfPort.query<{
       MetadataJson: string | null
     }>(
-      `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${this.datasetName}' AND Status = 'Completed' ORDER BY CreatedDate DESC LIMIT 1`
+      `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${this.datasetName}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
     )
     if (result.records.length === 0 || !result.records[0].MetadataJson) {
       return null
