@@ -27,6 +27,8 @@ jobs:
       id-token: write
       contents: read
       pull-requests: write
+    outputs:
+      channel: ${{ steps.publish.outputs.channel }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -70,6 +72,7 @@ jobs:
             CHANNEL="latest-rc"
           fi
           npm publish --provenance --access public --tag "$CHANNEL"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
       # Comment PR (PR only)
       - name: Comment PR
@@ -85,3 +88,9 @@ jobs:
             ```
           comment-tag: dev-publish
           mode: recreate
+
+  e2e-tests:
+    needs: [publish]
+    uses: ./.github/workflows/run-e2e-tests.yml
+    with:
+      channel: ${{ needs.publish.outputs.channel }}

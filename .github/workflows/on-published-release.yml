@@ -26,3 +26,6 @@ jobs:
             # Or
             $ sf plugins install crma-data-loader@{release_tag}
             ```
+
+            ---
+            If this project saves you time, consider [sponsoring its development](https://github.com/sponsors/scolladon). Your support helps keep it maintained and growing. Thank you!

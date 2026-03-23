@@ -1,0 +1,30 @@
+---
+name: E2E Tests
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: npm channel to install the plugin from
+        required: true
+        type: string
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Install plugin
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: sf plugins install "crma-data-loader@$CHANNEL"
+
+      - name: Verify plugin installation
+        run: sf crma load --help
