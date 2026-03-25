@@ -1,4 +1,4 @@
-import { PassThrough, Readable, type Writable } from 'node:stream'
+import { PassThrough, Readable, Writable } from 'node:stream'
 import { finished, pipeline } from 'node:stream/promises'
 import {
   buildAugmentSuffix,
@@ -311,15 +311,25 @@ async function fanOutEntries(
         buildAugmentSuffix(entry.augmentColumns)
       )
       const counted = createRowCounter(slot.tracker)
-      counted.pipe(slot.chunker, { end: false })
+      const forwarder = new Writable({
+        objectMode: true,
+        write(line, _enc, cb) {
+          slot.chunker.write(line, cb)
+        },
+      })
+      // Absorb chunker's async 'error' event — already propagated via write callback
+      const absorb = (_err: Error) => {
+        /* absorbed — already propagated via write callback */
+      }
+      slot.chunker.on('error', absorb)
 
-      return pipeline(channels[i], augmented, counted)
+      return pipeline(channels[i], augmented, counted, forwarder)
         .then((): ChannelOutcome => {
-          counted.unpipe(slot.chunker)
+          slot.chunker.removeListener('error', absorb)
           return { entry, slot, ok: true }
         })
         .catch((err: Error): ChannelOutcome => {
-          counted.unpipe(slot.chunker)
+          slot.chunker.removeListener('error', absorb)
           input.logger.warn(
             `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
           )
@@ -383,12 +393,21 @@ async function pipeEntry(
     const source = Readable.from(result.lines)
     const augmented = createAugmentTransform(suffix)
     const counted = createRowCounter(tracker)
-    counted.pipe(chunker, { end: false })
-
+    const forwarder = new Writable({
+      objectMode: true,
+      write(line, _enc, cb) {
+        chunker.write(line, cb)
+      },
+    })
+    // Absorb chunker's async 'error' event — already propagated via write callback
+    const absorb = (_err: Error) => {
+      /* absorbed — already propagated via write callback */
+    }
+    chunker.on('error', absorb)
     try {
-      await pipeline(source, augmented, counted)
+      await pipeline(source, augmented, counted, forwarder)
     } finally {
-      counted.unpipe(chunker)
+      chunker.removeListener('error', absorb)
     }
 
     return resolveEntryResult(

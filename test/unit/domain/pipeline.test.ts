@@ -345,6 +345,40 @@ describe('executePipeline (streaming)', () => {
     )
   })
 
+  it('given writable emits error on first write, when executing, then counts as failed and aborts writer', async () => {
+    // Arrange — simulate LazyGzipChunkingWritable failing to create parent on first write
+    const { Writable } = await import('node:stream')
+    const errorWritable = new Writable({
+      objectMode: true,
+      write(_chunk, _enc, callback) {
+        callback(new Error('parent creation failed'))
+      },
+    })
+    const fetcher = mockFetcher(async () => createFetchResult(['"v1"']))
+    const writer = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
+    const logger = createMockLogger()
+
+    // Act
+    const sut = await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.entriesProcessed).toBe(0)
+    expect(writer.abort).toHaveBeenCalled()
+    expect(writer.finalize).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('parent creation failed')
+    )
+  })
+
   it('given two entries same dataset, when executing, then both pipe into same writer', async () => {
     const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher1 = mockFetcher(async () => createFetchResult(['"a"'], wm))
