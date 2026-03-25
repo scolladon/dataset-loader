@@ -4,6 +4,7 @@ import {
   DatasetWriter,
   DatasetWriterFactory,
   GzipChunkingWritable,
+  LazyGzipChunkingWritable,
 } from '../../../src/adapters/dataset-writer.js'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
@@ -205,7 +206,7 @@ describe('GzipChunkingWritable', () => {
 })
 
 describe('DatasetWriter', () => {
-  it('given existing metadata, when init called, then queries metadata patches numberOfLinesToIgnore and creates parent', async () => {
+  it('given existing metadata, when data written, then patches numberOfLinesToIgnore and creates parent with correct metadata', async () => {
     // Arrange
     const existingMeta = JSON.stringify({
       objects: [
@@ -225,6 +226,9 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
 
     // Assert
     expect(chunker).toBeDefined()
@@ -269,7 +273,7 @@ describe('DatasetWriter', () => {
     )
   })
 
-  it('given dataset completed with warnings, when init called, then uses its metadata', async () => {
+  it('given dataset completed with warnings, when data written, then uses its metadata', async () => {
     // Arrange
     const existingMeta = JSON.stringify({
       objects: [
@@ -289,6 +293,9 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
 
     // Assert
     expect(chunker).toBeDefined()
@@ -338,7 +345,7 @@ describe('DatasetWriter', () => {
     expect(result.parentId).toBe(parentId)
   })
 
-  it('given initialized, when finalize called, then drains uploads before patching Action Process', async () => {
+  it('given initialized and data written, when finalize called, then drains uploads before patching Action Process', async () => {
     // Arrange
     const callOrder: string[] = []
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
@@ -356,10 +363,16 @@ describe('DatasetWriter', () => {
       }),
     })
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = (await sut.init()) as GzipChunkingWritable
-    vi.spyOn(chunker, 'drainUploads').mockImplementation(async () => {
+    const chunker = await sut.init()
+    vi.spyOn(
+      chunker as LazyGzipChunkingWritable,
+      'drainUploads'
+    ).mockImplementation(async () => {
       callOrder.push('drain')
     })
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
 
     // Act
     await sut.finalize()
@@ -368,7 +381,86 @@ describe('DatasetWriter', () => {
     expect(callOrder).toEqual(['drain', 'patch'])
   })
 
-  it('given initialized, when abort called, then drains uploads and deletes parent', async () => {
+  it('given initialized and data written, when abort called, then drains uploads and deletes parent', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
+    await sut.abort()
+
+    // Assert
+    expect(sfPort.del).toHaveBeenCalledWith(
+      expect.stringContaining(`InsightsExternalData/${parentId}`)
+    )
+  })
+
+  it('given initialized DatasetWriter and data written, when skip() called, then deletes parent like abort()', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
+
+    // Act
+    await sut.skip()
+
+    // Assert
+    expect(sfPort.del).toHaveBeenCalledWith(
+      expect.stringContaining(`InsightsExternalData/${parentId}`)
+    )
+  })
+
+  it('given init called but no data written, when finalize called, then does NOT post parent and does NOT patch Action:Process', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+    chunker.end()
+    await finished(chunker)
+    await sut.finalize()
+
+    // Assert
+    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sfPort.patch).not.toHaveBeenCalled()
+  })
+
+  it('given init called but no data written, when abort called, then does NOT post parent and does NOT delete', async () => {
     // Arrange
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
     const sfPort = makeSfPort({
@@ -387,12 +479,11 @@ describe('DatasetWriter', () => {
     await sut.abort()
 
     // Assert
-    expect(sfPort.del).toHaveBeenCalledWith(
-      expect.stringContaining(`InsightsExternalData/${parentId}`)
-    )
+    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sfPort.del).not.toHaveBeenCalled()
   })
 
-  it('given initialized DatasetWriter, when skip() called, then deletes parent like abort()', async () => {
+  it('given init called but no data written, when skip called, then does NOT post parent and does NOT delete', async () => {
     // Arrange
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
     const sfPort = makeSfPort({
@@ -404,16 +495,76 @@ describe('DatasetWriter', () => {
       getBlob: vi.fn().mockResolvedValue(existingMeta),
       post: vi.fn().mockResolvedValue({ id: parentId }),
     })
-    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    await sut.init()
 
     // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    await sut.init()
     await sut.skip()
 
     // Assert
-    expect(sfPort.del).toHaveBeenCalledWith(
-      expect.stringContaining(`InsightsExternalData/${parentId}`)
+    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sfPort.del).not.toHaveBeenCalled()
+  })
+
+  it('given data written for first time, when writing, then creates parent before forwarding data', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const postCallsBeforeWrite: number[] = []
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+    postCallsBeforeWrite.push(
+      (sfPort.post as ReturnType<typeof vi.fn>).mock.calls.length
     )
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
+
+    // Assert
+    expect(postCallsBeforeWrite[0]).toBe(0)
+    expect(sfPort.post).toHaveBeenCalledWith(
+      expect.stringContaining('InsightsExternalData'),
+      expect.objectContaining({ EdgemartAlias: 'MyDataset' })
+    )
+  })
+
+  it('given listener provided, when first data written, then calls onSinkReady', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
+    }
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', listener)
+    const chunker = await sut.init()
+    expect(listener.onSinkReady).not.toHaveBeenCalled()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
+
+    // Assert
+    expect(listener.onSinkReady).toHaveBeenCalledWith(parentId)
   })
 
   it('given not initialized, when abort called, then does nothing', async () => {
@@ -428,7 +579,7 @@ describe('DatasetWriter', () => {
     expect(sfPort.del).not.toHaveBeenCalled()
   })
 
-  it('given listener provided, when init called, then calls onSinkReady', async () => {
+  it('given listener provided, when init called, then onSinkReady is NOT yet called', async () => {
     // Arrange
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
     const sfPort = makeSfPort({
@@ -450,7 +601,7 @@ describe('DatasetWriter', () => {
     await sut.init()
 
     // Assert
-    expect(listener.onSinkReady).toHaveBeenCalledWith(parentId)
+    expect(listener.onSinkReady).not.toHaveBeenCalled()
   })
 
   it('given invalid dataset name, when constructing, then throws', () => {
@@ -468,7 +619,7 @@ describe('DatasetWriter', () => {
     expect(act).toThrow('Invalid dataset name')
   })
 
-  it('given existing metadata as JSON object, when init called, then stringifies it', async () => {
+  it('given existing metadata as JSON object, when data written, then stringifies it', async () => {
     // Arrange
     const metaObj = {
       fileFormat: { charsetName: 'UTF-8' },
@@ -486,7 +637,10 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    await sut.init()
+    const chunker = await sut.init()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
 
     // Assert
     const metaB64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
@@ -514,7 +668,7 @@ describe('DatasetWriterFactory', () => {
     expect(writer).toBeInstanceOf(DatasetWriter)
   })
 
-  it('given listener, when creating writer, then forwards listener', async () => {
+  it('given listener, when creating writer and data written, then forwards listener', async () => {
     // Arrange
     const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
     const sfPort = makeSfPort({
@@ -535,7 +689,10 @@ describe('DatasetWriterFactory', () => {
 
     // Act
     const writer = sut.create(dsKey, 'Append', listener, headerProvider)
-    await writer.init()
+    const chunker = await writer.init()
+    chunker.write('"data"')
+    chunker.end()
+    await finished(chunker)
 
     // Assert
     expect(listener.onSinkReady).toHaveBeenCalledWith(parentId)

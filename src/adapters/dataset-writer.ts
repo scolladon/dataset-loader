@@ -186,9 +186,83 @@ export class GzipChunkingWritable extends Writable {
   }
 }
 
+export class LazyGzipChunkingWritable extends Writable {
+  private _chunker?: GzipChunkingWritable
+  private _parentId?: string
+
+  constructor(
+    private readonly sfPort: SalesforcePort,
+    private readonly basePath: string,
+    private readonly datasetName: string,
+    private readonly operation: Operation,
+    private readonly metadataJson: string,
+    private readonly listener?: ProgressListener
+  ) {
+    super({ objectMode: true })
+  }
+
+  get parentId(): string | undefined {
+    return this._parentId
+  }
+
+  get partCount(): number {
+    return this._chunker?.partCount ?? 0
+  }
+
+  async drainUploads(): Promise<void> {
+    await this._chunker?.drainUploads()
+  }
+
+  override _write(
+    line: string,
+    _enc: BufferEncoding,
+    callback: (error?: Error | null) => void
+  ): void {
+    if (this._chunker) {
+      this._chunker.write(line, callback)
+      return
+    }
+    this.createChunker()
+      .then(() => this._chunker!.write(line, callback))
+      .catch(callback)
+  }
+
+  override _final(callback: (error?: Error | null) => void): void {
+    if (!this._chunker) {
+      callback()
+      return
+    }
+    this._chunker.once('finish', () => callback())
+    this._chunker.once('error', callback)
+    this._chunker.end()
+  }
+
+  private async createChunker(): Promise<void> {
+    const result = await this.sfPort.post<CreateResponse>(
+      `${this.basePath}/InsightsExternalData`,
+      {
+        EdgemartAlias: this.datasetName,
+        Format: 'Csv',
+        Operation: this.operation,
+        Action: 'None',
+        MetadataJson: Buffer.from(this.metadataJson, 'utf-8').toString(
+          'base64'
+        ),
+      }
+    )
+    this._parentId = result.id
+    this.listener?.onSinkReady(this._parentId)
+    this._chunker = new GzipChunkingWritable(
+      this.sfPort,
+      this.basePath,
+      this._parentId,
+      this.listener
+    )
+  }
+}
+
 export class DatasetWriter implements Writer {
-  private parentId: string | undefined
-  private chunker: GzipChunkingWritable | undefined
+  private lazyWritable?: LazyGzipChunkingWritable
   private readonly basePath: string
   private readonly datasetName: string
 
@@ -213,41 +287,44 @@ export class DatasetWriter implements Writer {
       )
     }
     const patched = this.normalizeMetadata(metadata)
-    this.parentId = await this.createParent(patched)
-    this.listener?.onSinkReady(this.parentId)
-    this.chunker = new GzipChunkingWritable(
+    this.lazyWritable = new LazyGzipChunkingWritable(
       this.sfPort,
       this.basePath,
-      this.parentId,
+      this.datasetName,
+      this.operation,
+      patched,
       this.listener
     )
-    return this.chunker
+    return this.lazyWritable
   }
 
   async finalize(): Promise<WriterResult> {
-    if (!this.parentId || !this.chunker) {
+    if (!this.lazyWritable) {
       throw new Error('Not initialized')
     }
-    await this.chunker.drainUploads()
+    if (!this.lazyWritable.parentId) {
+      return { parentId: '', partCount: 0 }
+    }
+    await this.lazyWritable.drainUploads()
     await this.sfPort.patch(
-      `${this.basePath}/InsightsExternalData/${this.parentId}`,
+      `${this.basePath}/InsightsExternalData/${this.lazyWritable.parentId}`,
       {
         Action: 'Process',
         Mode: 'Incremental',
       }
     )
-    return { parentId: this.parentId, partCount: this.chunker.partCount }
+    return {
+      parentId: this.lazyWritable.parentId,
+      partCount: this.lazyWritable.partCount,
+    }
   }
 
   async abort(): Promise<void> {
-    if (this.chunker) {
-      await this.chunker.drainUploads()
-    }
-    if (this.parentId) {
-      await this.sfPort.del(
-        `${this.basePath}/InsightsExternalData/${this.parentId}`
-      )
-    }
+    if (!this.lazyWritable?.parentId) return
+    await this.lazyWritable.drainUploads()
+    await this.sfPort.del(
+      `${this.basePath}/InsightsExternalData/${this.lazyWritable.parentId}`
+    )
   }
 
   async skip(): Promise<void> {
@@ -263,20 +340,6 @@ export class DatasetWriter implements Writer {
         numberOfLinesToIgnore: 0,
       })),
     })
-  }
-
-  private async createParent(metadataJson: string): Promise<string> {
-    const result = await this.sfPort.post<CreateResponse>(
-      `${this.basePath}/InsightsExternalData`,
-      {
-        EdgemartAlias: this.datasetName,
-        Format: 'Csv',
-        Operation: this.operation,
-        Action: 'None',
-        MetadataJson: Buffer.from(metadataJson, 'utf-8').toString('base64'),
-      }
-    )
-    return result.id
   }
 
   private async queryExistingMetadata(): Promise<string | null> {
