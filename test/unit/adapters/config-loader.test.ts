@@ -449,7 +449,53 @@ describe('ConfigLoader', () => {
       })
     })
 
-    describe('When augmentColumns reference $targetOrg.*', () => {
+    it('given augmentColumns key with dot notation, when parsing ELF entry, then accepts it', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src-org',
+              targetOrg: 'target-org',
+              targetDataset: 'MyDataset',
+              eventType: 'Login',
+              interval: 'Daily',
+              augmentColumns: { 'Org.Name': 'MyOrg' },
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0].type).toBe('elf')
+    })
+
+    it('given {{targetOrg.Id}} in augmentColumns when no targetOrg, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src-org',
+              eventType: 'Login',
+              interval: 'Daily',
+              targetFile: './output/login.csv',
+              augmentColumns: { Org: '{{targetOrg.Id}}' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(/targetOrg/)
+    })
+
+    describe('When augmentColumns reference {{targetOrg.*}}', () => {
       it('Then throws validation error', async () => {
         // Arrange
         const config = {
@@ -460,14 +506,14 @@ describe('ConfigLoader', () => {
               eventType: 'Login',
               interval: 'Daily',
               targetFile: './output/login.csv',
-              augmentColumns: { Org: '$targetOrg.Id' },
+              augmentColumns: { Org: '{{targetOrg.Id}}' },
             },
           ],
         }
         vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
         // Act & Assert
-        await expect(parseConfig('config.json')).rejects.toThrow(/\$targetOrg/)
+        await expect(parseConfig('config.json')).rejects.toThrow(/targetOrg/)
       })
     })
   })
@@ -605,7 +651,7 @@ describe('ConfigLoader', () => {
       await expect(parseConfig('config.json')).rejects.toThrow()
     })
 
-    it('given CSV config with $sourceOrg.Id in augmentColumns, when parsing, then rejects', async () => {
+    it('given CSV config with {{sourceOrg.Id}} in augmentColumns value, when parsing, then rejects', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
@@ -614,7 +660,7 @@ describe('ConfigLoader', () => {
               type: 'csv',
               sourceFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
-              augmentColumns: { OrgId: '$sourceOrg.Id' },
+              augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
             },
           ],
         })
@@ -624,7 +670,7 @@ describe('ConfigLoader', () => {
       await expect(parseConfig('config.json')).rejects.toThrow()
     })
 
-    it('given CSV config with $targetOrg.Name in augmentColumns, when parsing, then rejects', async () => {
+    it('given CSV config with {{targetOrg.Name}} in augmentColumns value, when parsing, then rejects', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
@@ -633,7 +679,7 @@ describe('ConfigLoader', () => {
               type: 'csv',
               sourceFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
-              augmentColumns: { OrgName: '$targetOrg.Name' },
+              augmentColumns: { OrgName: '{{targetOrg.Name}}' },
             },
           ],
         })
@@ -641,6 +687,47 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).rejects.toThrow()
+    })
+
+    it('given CSV config with static augmentColumns value, when parsing, then accepts it as literal', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              sourceFile: './data/login-events.csv',
+              targetFile: './out/login-events.csv',
+              augmentColumns: { OrgId: 'static-value' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert — any plain string is accepted as-is
+      await expect(parseConfig('config.json')).resolves.toBeDefined()
+    })
+
+    it('given augmentColumns key with dot notation, when parsing, then accepts it', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              sourceFile: './data/login-events.csv',
+              targetFile: './out/login-events.csv',
+              augmentColumns: { 'Org.Name': 'MyOrg' },
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0].type).toBe('csv')
     })
 
     it('given CSV config with literal augmentColumn value, when parsing, then accepts it', async () => {
@@ -722,6 +809,117 @@ describe('ConfigLoader', () => {
   })
 
   describe('augment column resolution', () => {
+    it('given {{sourceOrg.Id}} mustache token, when loading, then resolves to source org id', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventType: 'E1',
+            interval: 'Daily',
+            augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+      const sfPorts = new Map<string, SalesforcePort>([
+        ['source', makeSfPort({ Id: '00Dsrc', Name: 'SourceOrg' })],
+        ['analytic', makeSfPort({ Id: '00Dana', Name: 'AnalyticOrg' })],
+      ])
+
+      // Act
+      const sut = await loadConfig('config.json', sfPorts)
+
+      // Assert
+      expect(sut[0].augmentColumns).toEqual({ OrgId: '00Dsrc' })
+    })
+
+    it('given mixed static and {{sourceOrg.Name}} in value, when loading, then interpolates', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventType: 'E1',
+            interval: 'Daily',
+            augmentColumns: { Label: 'PROD-{{sourceOrg.Name}}' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+      const sfPorts = new Map<string, SalesforcePort>([
+        ['source', makeSfPort({ Id: '00Dsrc', Name: 'MyOrg' })],
+        ['analytic', makeSfPort({ Id: '00Dana', Name: 'AnalyticOrg' })],
+      ])
+
+      // Act
+      const sut = await loadConfig('config.json', sfPorts)
+
+      // Assert
+      expect(sut[0].augmentColumns).toEqual({ Label: 'PROD-MyOrg' })
+    })
+
+    it('given multiple mustache tokens in same value, when loading, then resolves all', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventType: 'E1',
+            interval: 'Daily',
+            augmentColumns: { Label: '{{sourceOrg.Name}}-{{targetOrg.Id}}' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+      const sfPorts = new Map<string, SalesforcePort>([
+        ['source', makeSfPort({ Id: '00Dsrc', Name: 'MyOrg' })],
+        ['analytic', makeSfPort({ Id: '00Dana', Name: 'AnalyticOrg' })],
+      ])
+
+      // Act
+      const sut = await loadConfig('config.json', sfPorts)
+
+      // Assert
+      expect(sut[0].augmentColumns).toEqual({ Label: 'MyOrg-00Dana' })
+    })
+
+    it('given unknown mustache token, when loading, then throws', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventType: 'E1',
+            interval: 'Daily',
+            augmentColumns: { Label: '{{unknownVar}}' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+      const sfPorts = new Map<string, SalesforcePort>([
+        ['source', makeSfPort({ Id: '00Dsrc', Name: 'MyOrg' })],
+        ['analytic', makeSfPort({ Id: '00Dana', Name: 'AnalyticOrg' })],
+      ])
+
+      // Act & Assert
+      await expect(loadConfig('config.json', sfPorts)).rejects.toThrow(
+        /unknownVar/
+      )
+    })
+
     it('given dynamic expressions, when loading, then resolves org info', async () => {
       // Arrange
       const config = {
@@ -734,9 +932,9 @@ describe('ConfigLoader', () => {
             eventType: 'E1',
             interval: 'Daily',
             augmentColumns: {
-              OrgId: '$sourceOrg.Id',
-              OrgName: '$sourceOrg.Name',
-              AnalyticId: '$targetOrg.Id',
+              OrgId: '{{sourceOrg.Id}}',
+              OrgName: '{{sourceOrg.Name}}',
+              AnalyticId: '{{targetOrg.Id}}',
               Env: 'Production',
             },
           },
@@ -783,7 +981,7 @@ describe('ConfigLoader', () => {
             eventType: 'E1',
             interval: 'Daily',
             augmentColumns: {
-              TargetName: '$targetOrg.Name',
+              TargetName: '{{targetOrg.Name}}',
             },
           },
         ],
@@ -811,7 +1009,7 @@ describe('ConfigLoader', () => {
             targetDataset: 'DS',
             eventType: 'E1',
             interval: 'Daily',
-            augmentColumns: { OrgId: '$sourceOrg.Id' },
+            augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
           },
         ],
       }
@@ -841,7 +1039,7 @@ describe('ConfigLoader', () => {
             targetDataset: 'DS',
             eventType: 'E1',
             interval: 'Daily',
-            augmentColumns: { OrgId: '$sourceOrg.Id' },
+            augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
           },
         ],
       }
@@ -875,7 +1073,7 @@ describe('ConfigLoader', () => {
       // Act
       const sut = await loadConfig('config.json', sfPorts)
 
-      // Assert — no SF org was queried (no sourceOrg, no $targetOrg.* expressions)
+      // Assert — no SF org was queried (no sourceOrg, no {{targetOrg.*}} tokens)
       expect(sfPort.query).not.toHaveBeenCalled()
       expect(sut[0].augmentColumns).toEqual({ Source: 'manual' })
     })

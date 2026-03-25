@@ -57,16 +57,19 @@ export interface ResolvedEntry {
   augmentColumns: Record<string, string>
 }
 
-const DYNAMIC_EXPRESSIONS = [
-  '$sourceOrg.Id',
-  '$sourceOrg.Name',
-  '$targetOrg.Id',
-  '$targetOrg.Name',
-] as const
+const MUSTACHE_TOKEN = /\{\{([\w.]+)\}\}/g
+const MUSTACHE_TARGETORG = /\{\{targetOrg\./
+const MUSTACHE_SOURCEORG = /\{\{sourceOrg\./
 
 const sfIdentifier = z
   .string()
   .regex(SF_IDENTIFIER_PATTERN, 'Must be a valid Salesforce identifier')
+const crmaColumnName = z
+  .string()
+  .regex(
+    /^[a-zA-Z_][a-zA-Z0-9_.]*$/,
+    'Must be a valid CRMA column name (letters, digits, underscores, dots)'
+  )
 const orgAlias = z
   .string()
   .regex(/^[a-zA-Z0-9_.-]+$/, 'Must be a valid org alias (no colons)')
@@ -118,16 +121,16 @@ const baseEntrySchema = z
     targetDataset: sfIdentifier.optional(),
     targetFile: z.string().min(1).optional(),
     operation: z.enum(['Append', 'Overwrite']).default('Append'),
-    augmentColumns: z.record(sfIdentifier, z.string()).optional(),
+    augmentColumns: z.record(crmaColumnName, z.string()).optional(),
   })
   .superRefine((entry, ctx) => {
     validateTargetFields(entry, ctx)
     if (!entry.targetOrg && entry.augmentColumns) {
       for (const [key, value] of Object.entries(entry.augmentColumns)) {
-        if (String(value).startsWith('$targetOrg.')) {
+        if (MUSTACHE_TARGETORG.test(String(value))) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: `augmentColumns['${key}'] uses $targetOrg.* which is not allowed for file-target entries (targetOrg is absent)`,
+            message: `augmentColumns['${key}'] uses {{targetOrg.*}} which is not allowed for file-target entries (targetOrg is absent)`,
             path: ['augmentColumns', key],
           })
         }
@@ -166,7 +169,7 @@ const csvEntrySchema = z
     targetDataset: sfIdentifier.optional(),
     targetFile: z.string().min(1).optional(),
     operation: z.enum(['Append', 'Overwrite']).default('Append'),
-    augmentColumns: z.record(sfIdentifier, z.string()).optional(),
+    augmentColumns: z.record(crmaColumnName, z.string()).optional(),
   })
   .strict()
   .superRefine((entry, ctx) => {
@@ -174,8 +177,8 @@ const csvEntrySchema = z
     if (entry.augmentColumns) {
       for (const [key, value] of Object.entries(entry.augmentColumns)) {
         if (
-          String(value).startsWith('$sourceOrg.') ||
-          String(value).startsWith('$targetOrg.')
+          MUSTACHE_SOURCEORG.test(String(value)) ||
+          MUSTACHE_TARGETORG.test(String(value))
         ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -210,11 +213,9 @@ function collectUniqueOrgs(entries: ConfigEntry[]): Set<string> {
     if (entry.type === 'csv') continue
     const columns = entry.augmentColumns ?? {}
     for (const value of Object.values(columns)) {
-      if (DYNAMIC_EXPRESSIONS.some(expr => value === expr)) {
-        if (value.startsWith('$sourceOrg.')) orgs.add(entry.sourceOrg)
-        if (value.startsWith('$targetOrg.') && entry.targetOrg)
-          orgs.add(entry.targetOrg)
-      }
+      if (MUSTACHE_SOURCEORG.test(value)) orgs.add(entry.sourceOrg)
+      if (MUSTACHE_TARGETORG.test(value) && entry.targetOrg)
+        orgs.add(entry.targetOrg)
     }
   }
   return orgs
@@ -297,15 +298,13 @@ function resolveAugmentColumnsForEntry(
   }
 
   for (const [key, value] of Object.entries(columns)) {
-    if (value === '$sourceOrg.Id')
-      resolved[key] = getOrgInfo(entry.sourceOrg).Id
-    else if (value === '$sourceOrg.Name')
-      resolved[key] = getOrgInfo(entry.sourceOrg).Name
-    else if (value === '$targetOrg.Id')
-      resolved[key] = getOrgInfo(entry.targetOrg!).Id
-    else if (value === '$targetOrg.Name')
-      resolved[key] = getOrgInfo(entry.targetOrg!).Name
-    else resolved[key] = value
+    resolved[key] = value.replace(MUSTACHE_TOKEN, (_, token: string) => {
+      if (token === 'sourceOrg.Id') return getOrgInfo(entry.sourceOrg).Id
+      if (token === 'sourceOrg.Name') return getOrgInfo(entry.sourceOrg).Name
+      if (token === 'targetOrg.Id') return getOrgInfo(entry.targetOrg!).Id
+      if (token === 'targetOrg.Name') return getOrgInfo(entry.targetOrg!).Name
+      throw new Error(`Unknown mustache token: {{${token}}}`)
+    })
   }
   return resolved
 }

@@ -156,7 +156,7 @@ cat > crma-load.config.json << 'EOF'
       "dataset": "Test_Augmented",
       "operation": "Overwrite",
       "augmentColumns": {
-        "SourceOrgId": "$sourceOrg.Id",
+        "SourceOrgId": "{{sourceOrg.Id}}",
         "Env": "Production"
       }
     }

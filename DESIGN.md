@@ -133,7 +133,7 @@ Config File (JSON)
 parseConfig() ─── Zod validation, operation consistency check
   │
   ▼
-resolveConfig() ─── Query orgs for dynamic expressions ($sourceOrg.Id, etc.)
+resolveConfig() ─── Query orgs for mustache tokens ({{sourceOrg.Id}}, etc.)
   │
   ▼
 executePipeline()
@@ -241,7 +241,7 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 | `RowCounter` | `adapters/row-counter.ts` | PassThrough stream that counts rows for progress tracking via `GroupTracker.addRows()`. |
 | `DatasetWriterFactory` | `adapters/dataset-writer.ts` | Creates `DatasetWriter` instances per CRMA dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 64KB flush threshold, splits at 10 MB base64 boundaries, and uploads parts concurrently via fire-and-collect. |
 | `FileWriterFactory` | `adapters/file-writer.ts` | Creates `FileWriter` instances per output file path. `FileWriter.init()` opens a `fs.WriteStream` (append or overwrite). Header is written on first row via `HeaderProvider.resolveHeader()`. `skip()` deletes the file on overwrite. |
-| `ConfigLoader` | `adapters/config-loader.ts` | Reads JSON config, Zod schema validation, operation consistency checks, dynamic expression resolution (`$sourceOrg.Id`, etc.) |
+| `ConfigLoader` | `adapters/config-loader.ts` | Reads JSON config, Zod schema validation, operation consistency checks, mustache token resolution (`{{sourceOrg.Id}}`, etc.) |
 | `FileStateManager` | `adapters/state-manager.ts` | Atomic read/write of watermark state file (temp file + rename, mode `0o600`) |
 | `ProgressReporter` | `adapters/progress-reporter.ts` | CLI progress display using `cli-progress` MultiBar. Main bar tracks entries, per-group sub-bars show real-time files fetched, rows processed, and parts uploaded. No-op for zero-length phases. Includes workaround for cli-progress non-TTY `bar.start()` bug. |
 | `Pipeline` | `domain/pipeline.ts` | Core orchestration: `executePipeline` (entry point), groups entries by dataset (`groupByDataset`) and by reader+watermark (`groupByReader`), wires Reader → FanOut/direct → AugmentTransform → RowCounter → Writer chunker, manages watermark updates. Concurrent bundle processing, parallel across groups. |

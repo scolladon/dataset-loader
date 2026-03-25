@@ -114,8 +114,8 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
       "interval": "Daily",
       "operation": "Append",
       "augmentColumns": {
-        "OrgId": "$sourceOrg.Id",
-        "OrgName": "$sourceOrg.Name",
+        "OrgId": "{{sourceOrg.Id}}",
+        "OrgName": "{{sourceOrg.Name}}",
         "Environment": "Production"
       }
     },
@@ -131,7 +131,7 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
       "limit": 100,
       "operation": "Overwrite",
       "augmentColumns": {
-        "OrgId": "$sourceOrg.Id"
+        "OrgId": "{{sourceOrg.Id}}"
       }
     }
   ]
@@ -150,7 +150,7 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | `eventType` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
 | `interval` | yes | `"Daily"` or `"Hourly"` (Hourly requires Shield license) |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append (see below). `$targetOrg.*` expressions require `targetOrg` to be set |
+| `augmentColumns` | no | Extra columns to append (see below). `{{targetOrg.*}}` expressions require `targetOrg` to be set |
 
 #### SObject Entry Fields
 
@@ -167,7 +167,7 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | `where` | no | Additional SOQL WHERE clause |
 | `limit` | no | Max number of records to fetch (appends `LIMIT n` to SOQL) |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append (see below). `$targetOrg.*` expressions require `targetOrg` to be set |
+| `augmentColumns` | no | Extra columns to append (see below). `{{targetOrg.*}}` expressions require `targetOrg` to be set |
 
 #### CSV Entry Fields
 
@@ -179,19 +179,21 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | `targetDataset` | no | CRMA dataset API name. Required when `targetOrg` is set |
 | `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra static columns to append. Dynamic `$sourceOrg.*` / `$targetOrg.*` expressions are not supported for CSV entries |
+| `augmentColumns` | no | Extra static columns to append. Dynamic `{{sourceOrg.*}}` / `{{targetOrg.*}}` expressions are not supported for CSV entries |
 
 #### Augment Columns
 
-Append static or dynamic columns to every fetched row:
+Append static or dynamic columns to every fetched row. Values support mustache-style `{{token}}` interpolation — tokens can appear anywhere in the string, including mixed with static text (e.g. `"PROD-{{sourceOrg.Name}}"`):
 
-| Expression | Resolves to |
+| Token | Resolves to |
 | --- | --- |
-| `$sourceOrg.Id` | 18-char Organization Id of the source org |
-| `$sourceOrg.Name` | Organization Name of the source org |
-| `$targetOrg.Id` | 18-char Organization Id of the target CRMA org |
-| `$targetOrg.Name` | Organization Name of the target CRMA org |
+| `{{sourceOrg.Id}}` | 18-char Organization Id of the source org |
+| `{{sourceOrg.Name}}` | Organization Name of the source org |
+| `{{targetOrg.Id}}` | 18-char Organization Id of the target CRMA org |
+| `{{targetOrg.Name}}` | Organization Name of the target CRMA org |
 | Any other string | Used as-is (static value) |
+
+Column names may contain dots (e.g. `"Org.Name"`) as CRMA supports dotted dimension names.
 
 #### Grouping
 
@@ -221,7 +223,7 @@ Without a state file, the first ELF run fetches only the latest record (bootstra
 ## How It Works
 
 1. **Parse config** — validate JSON with Zod, check operation consistency across groups
-2. **Resolve** — authenticate orgs, resolve dynamic expressions (`$sourceOrg.Id`, etc.)
+2. **Resolve** — authenticate orgs, resolve mustache tokens in augmentColumns (`{{sourceOrg.Id}}`, etc.)
 3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access
 4. **Execute pipeline** — group entries by dataset, stream through Reader → Augment → Writer
 5. **Write** — CRMA: batch gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API; File: stream rows directly to a local CSV file
