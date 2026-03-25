@@ -5,6 +5,8 @@ import { type WatermarkKey } from '../domain/watermark-key.js'
 import { type WatermarkStore } from '../domain/watermark-store.js'
 
 export const SF_IDENTIFIER_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+export const SOQL_RELATIONSHIP_PATH_PATTERN =
+  /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/
 
 export function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown error'

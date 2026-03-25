@@ -118,6 +118,26 @@ describe('ConfigLoader', () => {
       await expect(loadConfig('config.json', new Map())).rejects.toThrow()
     })
 
+    it('given sobject entry with relationship traversal field Owner.Name, when parsing, then accepts the config', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'sobject',
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS_Account',
+            sobject: 'Contact',
+            fields: ['Id', 'Owner.Name', 'Account.Type'],
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).resolves.toBeDefined()
+    })
+
     it('given invalid orgAlias with colons, when parsing, then rejects', async () => {
       // Arrange
       const config = {

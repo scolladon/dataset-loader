@@ -6,6 +6,7 @@ import {
   type ReaderPort,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
+  SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../ports/types.js'
 
 export interface SObjectReaderConfig {
@@ -14,6 +15,15 @@ export interface SObjectReaderConfig {
   readonly dateField: string
   readonly where?: string
   readonly queryLimit?: number
+}
+
+function resolveField(record: Record<string, unknown>, field: string): unknown {
+  let current: unknown = record
+  for (const part of field.split('.')) {
+    if (current === null || typeof current !== 'object') return null
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current
 }
 
 class SObjectHeader {
@@ -39,7 +49,7 @@ export class SObjectReader implements ReaderPort {
       throw new Error(`Invalid sobject: '${config.sobject}'`)
     }
     for (const field of config.fields) {
-      if (!SF_IDENTIFIER_PATTERN.test(field)) {
+      if (!SOQL_RELATIONSHIP_PATH_PATTERN.test(field)) {
         throw new Error(`Invalid field: '${field}'`)
       }
     }
@@ -92,10 +102,13 @@ export class SObjectReader implements ReaderPort {
             : null
 
         for (const record of currentPage.records) {
-          yield stringify([fields.map(f => String(record[f] ?? ''))], {
-            quoted: true,
-            quoted_empty: true,
-          }).trimEnd()
+          yield stringify(
+            [fields.map(f => String(resolveField(record, f) ?? ''))],
+            {
+              quoted: true,
+              quoted_empty: true,
+            }
+          ).trimEnd()
         }
         if (currentPage.records.length > 0) {
           lastRecord = currentPage.records.at(-1)

@@ -7,6 +7,7 @@ import {
   type Operation,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
+  SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../ports/types.js'
 
 export interface BaseEntry {
@@ -64,6 +65,12 @@ const MUSTACHE_SOURCEORG = /\{\{sourceOrg\./
 const sfIdentifier = z
   .string()
   .regex(SF_IDENTIFIER_PATTERN, 'Must be a valid Salesforce identifier')
+const soqlRelationshipPath = z
+  .string()
+  .regex(
+    SOQL_RELATIONSHIP_PATH_PATTERN,
+    'Must be a valid SOQL field or relationship path (e.g. Name, Owner.Name)'
+  )
 const crmaColumnName = z
   .string()
   .regex(
@@ -147,7 +154,7 @@ const elfEntrySchema = baseEntrySchema.extend({
 const sobjectEntrySchema = baseEntrySchema.extend({
   type: z.literal('sobject'),
   sobject: sfIdentifier,
-  fields: z.array(sfIdentifier).min(1),
+  fields: z.array(soqlRelationshipPath).min(1),
   dateField: sfIdentifier.default('LastModifiedDate'),
   // Trust boundary: where clause is user-supplied SOQL interpolated directly into queries.
   // The config file is a trusted input — do not construct it from untrusted sources.

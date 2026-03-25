@@ -232,6 +232,56 @@ describe('SObjectReader', () => {
     expect(lines[0]).toContain('O""Brien')
   })
 
+  it('given relationship field Owner.Name, when creating reader, then does not throw', () => {
+    const sfPort = makeSfPort()
+    expect(
+      () =>
+        new SObjectReader(sfPort, {
+          sobject: 'Contact',
+          fields: ['Id', 'Owner.Name'],
+          dateField: 'LastModifiedDate',
+        })
+    ).not.toThrow()
+  })
+
+  it('given relationship traversal field Owner.Name, when fetching, then extracts nested record value', async () => {
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [
+          {
+            Id: '001',
+            Owner: { Name: 'Jane Doe' },
+            LastModifiedDate: '2026-03-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    })
+
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Contact',
+      fields: ['Id', 'Owner.Name'],
+      dateField: 'LastModifiedDate',
+    })
+    const result = await sut.fetch()
+    const lines = await collectLines(result.lines)
+
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('001')
+    expect(lines[0]).toContain('Jane Doe')
+  })
+
+  it('given relationship traversal field Owner.Name, when header called, then returns dotted name', async () => {
+    const sfPort = makeSfPort()
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Contact',
+      fields: ['Id', 'Owner.Name'],
+      dateField: 'LastModifiedDate',
+    })
+    expect(await sut.header()).toBe('Id,Owner.Name')
+  })
+
   it('given invalid sobject name, when creating reader, then throws', () => {
     const sfPort = makeSfPort()
     const act = () =>
