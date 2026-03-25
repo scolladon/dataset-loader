@@ -90,7 +90,11 @@ export class GzipChunkingWritable extends Writable {
           endGzip(finished)
             .then(() => {
               const compressed = Buffer.concat(finished.chunks)
-              this.uploadPromises.push(this.uploadPart(compressed))
+              const upload = this.uploadPart(compressed)
+              upload.catch(() => {
+                // noop — error surfaces via _final()'s Promise.all(uploadPromises)
+              })
+              this.uploadPromises.push(upload)
               this.chunk = this.createChunkState()
               this.addLine(line, callback)
             })
@@ -117,7 +121,8 @@ export class GzipChunkingWritable extends Writable {
       .then(() => callback(), callback)
   }
 
-  // Intentionally ignores failures — called during abort, parent will be deleted
+  // Intentionally ignores failures — called during abort (parent will be deleted)
+  // and during finalize (to ensure all parts are settled before Action:Process)
   async drainUploads(): Promise<void> {
     await Promise.allSettled(this.uploadPromises)
   }
@@ -223,6 +228,7 @@ export class DatasetWriter implements Writer {
     if (!this.parentId || !this.chunker) {
       throw new Error('Not initialized')
     }
+    await this.chunker.drainUploads()
     await this.sfPort.patch(
       `${this.basePath}/InsightsExternalData/${this.parentId}`,
       {

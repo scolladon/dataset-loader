@@ -126,6 +126,26 @@ describe('GzipChunkingWritable', () => {
     await expect(finished(sut)).rejects.toThrow('upload failed')
   })
 
+  it('given upload fails during part rotation in write, when stream ends, then error propagates', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      post: vi.fn().mockRejectedValue(new Error('upload failed during write')),
+    })
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Force the current chunk to appear nearly full so the next write triggers rotation
+    const chunk = (sut as unknown as { chunk: { compressedSize: number } })
+      .chunk
+    chunk.compressedSize = 8 * 1024 * 1024
+
+    // Act — write triggers rotation: upload fires in _write() before _final()
+    sut.write('"data"')
+    sut.end()
+
+    // Assert
+    await expect(finished(sut)).rejects.toThrow('upload failed during write')
+  })
+
   it('given gzip stream error, when writing, then error propagates to finished', async () => {
     // Arrange
     const sfPort = makeSfPort()
@@ -316,6 +336,36 @@ describe('DatasetWriter', () => {
       { Action: 'Process', Mode: 'Incremental' }
     )
     expect(result.parentId).toBe(parentId)
+  })
+
+  it('given initialized, when finalize called, then drains uploads before patching Action Process', async () => {
+    // Arrange
+    const callOrder: string[] = []
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+      patch: vi.fn().mockImplementation(() => {
+        callOrder.push('patch')
+        return Promise.resolve(null)
+      }),
+    })
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = (await sut.init()) as GzipChunkingWritable
+    vi.spyOn(chunker, 'drainUploads').mockImplementation(async () => {
+      callOrder.push('drain')
+    })
+
+    // Act
+    await sut.finalize()
+
+    // Assert
+    expect(callOrder).toEqual(['drain', 'patch'])
   })
 
   it('given initialized, when abort called, then drains uploads and deletes parent', async () => {
