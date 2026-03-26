@@ -1,0 +1,89 @@
+{
+  "entries": [
+    {
+      "type": "elf",
+      "name": "pageviews-xrmru",
+      "eventType": "LightningPageView",
+      "interval": "Daily",
+      "operation": "Overwrite",
+      "sourceOrg": "xrmru",
+      "targetOrg": "alm-devops",
+      "targetDataset": "Test_LightningPageView"
+    },
+    {
+      "type": "elf",
+      "name": "pageviews-prod",
+      "eventType": "LightningPageView",
+      "interval": "Daily",
+      "operation": "Overwrite",
+      "sourceOrg": "alm-prod",
+      "targetOrg": "alm-devops",
+      "targetDataset": "Test_LightningPageView"
+    },
+    {
+      "type": "elf",
+      "name": "pageviews-prod-all-file",
+      "eventType": "LightningPageView",
+      "interval": "Daily",
+      "operation": "Overwrite",
+      "sourceOrg": "alm-prod",
+      "targetFile": "AllLightningPageView.csv"
+    },
+    {
+      "type": "elf",
+      "name": "pageviews-xrmru-all-file",
+      "eventType": "LightningPageView",
+      "interval": "Daily",
+      "operation": "Overwrite",
+      "sourceOrg": "xrmru",
+      "targetFile": "AllLightningPageView.csv"
+    },
+    {
+      "type": "elf",
+      "name": "pageviews-prod-file",
+      "eventType": "LightningPageView",
+      "interval": "Daily",
+      "operation": "Overwrite",
+      "sourceOrg": "alm-prod",
+      "targetFile": "ProdLightningPageView.csv"
+    },
+    {
+      "type": "sobject",
+      "name": "users-xrmru",
+      "sobject": "User",
+      "fields": ["Id", "Name", "Username"],
+      "operation": "Overwrite",
+      "sourceOrg": "xrmru",
+      "targetOrg": "alm-devops",
+      "targetDataset": "Test_User",
+      "augmentColumns": {
+        "ORGANIZATION_ID": "$sourceOrg.Id"
+      }
+    },
+    {
+      "type": "sobject",
+      "name": "users-dev",
+      "sobject": "User",
+      "fields": ["Id", "Name", "Username"],
+      "operation": "Overwrite",
+      "sourceOrg": "alm-dev",
+      "targetOrg": "alm-devops",
+      "targetDataset": "Test_User",
+      "augmentColumns": {
+        "ORGANIZATION_ID": "$sourceOrg.Id"
+      }
+    },
+    {
+      "type": "sobject",
+      "name": "users-xrmru-file",
+      "sobject": "User",
+      "fields": ["Id", "Name", "Username"],
+      "operation": "Overwrite",
+      "sourceOrg": "xrmru",
+      "targetFile": "XrmruUser.csv",
+      "augmentColumns": {
+        "ORGANIZATION_ID": "$sourceOrg.Id"
+      }
+    }
+  ]
+}

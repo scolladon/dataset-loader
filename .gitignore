@@ -6,3 +6,6 @@ coverage/
 .wireit
 .worktrees/
 spike/
+profiles/
+crma-load.config.profiling.json
+.crma-load.state.profiling.json
