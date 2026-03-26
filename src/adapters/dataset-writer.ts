@@ -12,6 +12,7 @@ import {
   type Writer,
   type WriterResult,
 } from '../ports/types.js'
+import { DEFAULT_CONCURRENCY } from './sf-client.js'
 
 interface CreateResponse {
   id: string
@@ -29,7 +30,8 @@ interface CrmaMetadata {
 }
 
 const PART_MAX_BYTES = 10 * 1024 * 1024
-const FLUSH_THRESHOLD = 64 * 1024
+const FLUSH_THRESHOLD = 512 * 1024
+export const UPLOAD_HIGH_WATER = DEFAULT_CONCURRENCY
 
 function base64Length(byteCount: number): number {
   return Math.ceil(byteCount / 3) * 4
@@ -51,12 +53,14 @@ export class GzipChunkingWritable extends Writable {
   private gzError: Error | undefined
   private partNumber = 0
   private readonly uploadPromises: Promise<void>[] = []
+  private readonly pendingUploads = new Set<Promise<void>>()
 
   constructor(
     private readonly sfPort: SalesforcePort,
     private readonly basePath: string,
     private readonly parentId: string,
-    private readonly listener?: ProgressListener
+    private readonly listener?: ProgressListener,
+    private readonly uploadHighWater = UPLOAD_HIGH_WATER
   ) {
     super({ objectMode: true })
     this.chunk = this.createChunkState()
@@ -67,7 +71,7 @@ export class GzipChunkingWritable extends Writable {
   }
 
   override _write(
-    line: string,
+    batch: string[],
     _enc: BufferEncoding,
     callback: (error?: Error | null) => void
   ): void {
@@ -76,36 +80,80 @@ export class GzipChunkingWritable extends Writable {
       return
     }
 
-    const lineBytes = Buffer.byteLength(line + '\n')
+    let i = 0
 
-    if (this.wouldExceed(lineBytes)) {
-      this.chunk.gz.flush(() => {
+    const loop = (): void => {
+      while (i < batch.length) {
         if (this.gzError) {
           callback(this.gzError)
           return
         }
-        this.chunk.pendingBytes = 0
+        const line = batch[i++]
+        const lineBytes = Buffer.byteLength(line + '\n')
+
         if (this.wouldExceed(lineBytes)) {
-          const finished = this.chunk
-          endGzip(finished)
-            .then(() => {
-              const compressed = Buffer.concat(finished.chunks)
-              const upload = this.uploadPart(compressed)
-              upload.catch(() => {
-                // noop — error surfaces via _final()'s Promise.all(uploadPromises)
-              })
-              this.uploadPromises.push(upload)
-              this.chunk = this.createChunkState()
-              this.addLine(line, callback)
-            })
-            .catch((err: Error) => callback(err))
-        } else {
-          this.addLine(line, callback)
+          this.chunk.gz.flush(() => {
+            if (this.gzError) {
+              callback(this.gzError)
+              return
+            }
+            this.chunk.pendingBytes = 0
+            if (this.wouldExceed(lineBytes)) {
+              const finished = this.chunk
+              endGzip(finished)
+                .then(async () => {
+                  const compressed = Buffer.concat(finished.chunks)
+                  const upload = this.uploadPart(compressed)
+                  // Auto-remove from pending set on settle; suppress unhandled rejection
+                  // until _final's Promise.all catches it
+                  upload
+                    .finally(() => this.pendingUploads.delete(upload))
+                    .catch(() => {
+                      // Rejection handled by Promise.all in _final
+                    })
+                  this.pendingUploads.add(upload)
+                  this.uploadPromises.push(upload)
+                  if (this.pendingUploads.size >= this.uploadHighWater) {
+                    await Promise.race([...this.pendingUploads])
+                  }
+                  this.chunk = this.createChunkState()
+                  this.writeLineToGz(line)
+                  loop()
+                })
+                .catch((err: Error) => callback(err))
+            } else {
+              this.writeLineToGz(line)
+              loop()
+            }
+          })
+          return
         }
-      })
-    } else {
-      this.addLine(line, callback)
+
+        this.writeLineToGz(line)
+
+        if (this.chunk.pendingBytes >= FLUSH_THRESHOLD) {
+          this.chunk.gz.flush(() => {
+            if (this.gzError) {
+              callback(this.gzError)
+              return
+            }
+            this.chunk.pendingBytes = 0
+            loop()
+          })
+          return
+        }
+      }
+
+      callback()
     }
+
+    loop()
+  }
+
+  private writeLineToGz(line: string): void {
+    const data = line + '\n'
+    this.chunk.gz.write(data)
+    this.chunk.pendingBytes += Buffer.byteLength(data)
   }
 
   override _final(callback: (error?: Error | null) => void): void {
@@ -147,23 +195,6 @@ export class GzipChunkingWritable extends Writable {
       this.destroy(err)
     })
     return state
-  }
-
-  private addLine(
-    line: string,
-    callback: (error?: Error | null) => void
-  ): void {
-    const data = line + '\n'
-    this.chunk.gz.write(data)
-    this.chunk.pendingBytes += Buffer.byteLength(data)
-    if (this.chunk.pendingBytes >= FLUSH_THRESHOLD) {
-      this.chunk.gz.flush(() => {
-        this.chunk.pendingBytes = 0
-        callback()
-      })
-    } else {
-      callback()
-    }
   }
 
   private wouldExceed(additionalBytes: number): boolean {
@@ -214,16 +245,16 @@ export class LazyGzipChunkingWritable extends Writable {
   }
 
   override _write(
-    line: string,
+    batch: string[],
     _enc: BufferEncoding,
     callback: (error?: Error | null) => void
   ): void {
     if (this._chunker) {
-      this._chunker.write(line, callback)
+      this._chunker.write(batch, callback)
       return
     }
     this.createChunker()
-      .then(() => this._chunker!.write(line, callback))
+      .then(() => this._chunker!.write(batch, callback))
       .catch(callback)
   }
 

@@ -1,5 +1,4 @@
-import { createInterface } from 'node:readline'
-import { PassThrough } from 'node:stream'
+import { StringDecoder } from 'node:string_decoder'
 import { Watermark } from '../domain/watermark.js'
 import {
   type FetchResult,
@@ -8,6 +7,9 @@ import {
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
 } from '../ports/types.js'
+import { AsyncChannel } from './async-channel.js'
+
+const BATCH_SIZE = 2000
 
 interface EventLogFileRecord {
   Id: string
@@ -58,47 +60,18 @@ export class ElfReader implements ReaderPort {
     let lastRecord: EventLogFileRecord | undefined
 
     const sfPort = this.sfPort
-    const self = this
     const blobUrl = (record: EventLogFileRecord): string =>
       `/services/data/v${sfPort.apiVersion}/sobjects/EventLogFile/${record.Id}/LogFile`
 
-    // Aggregation stream: all pages' blobs write here concurrently
-    const aggStream = new PassThrough({ objectMode: true })
-
-    // Serialize writes to aggStream so at most one drain/error listener pair is
-    // active at a time, regardless of how many blobs are fetched concurrently.
-    // Without this, N blobs waiting for drain simultaneously would add N
-    // once('error') listeners, exceeding Node.js's default MaxListeners=10.
-    let writeSeq: Promise<void> = Promise.resolve()
-    const writeToAgg = (chunk: string): Promise<void> => {
-      const next = writeSeq.then(async () => {
-        if (aggStream.destroyed) return
-        if (!aggStream.write(chunk)) {
-          await new Promise<void>((resolve, reject) => {
-            const onDrain = () => {
-              aggStream.off('error', onError)
-              resolve()
-            }
-            const onError = (err: Error) => {
-              aggStream.off('drain', onDrain)
-              reject(err)
-            }
-            aggStream.once('drain', onDrain)
-            aggStream.once('error', onError)
-          })
-        }
-      })
-      writeSeq = next.catch(() => {
-        // keep the chain alive after errors; aggStream.destroyed guard handles post-error writes
-      })
-      return next
-    }
+    // Async channel: all blob processors push batches here concurrently.
+    // Backpressure is applied per-push when the queue reaches highWater.
+    const channel = new AsyncChannel<string[]>()
 
     // processPage fires queryMore for the next page AND all blob fetches for
     // this page concurrently, so blobs across all pages are fetched in parallel.
-    async function processPage(
+    const processPage = async (
       page: QueryResult<EventLogFileRecord>
-    ): Promise<void> {
+    ): Promise<void> => {
       if (page.records.length > 0) {
         // Set synchronously — pages are fetched in ascending order so the last
         // page to start always has the highest LogDate.
@@ -114,33 +87,69 @@ export class ElfReader implements ReaderPort {
 
       const blobPromises = page.records.map(async record => {
         const stream = await sfPort.getBlobStream(blobUrl(record))
-        const rl = createInterface({ input: stream, crlfDelay: Infinity })
-        let isFirstLine = true
-        for await (const line of rl) {
-          if (line.length === 0) continue
-          if (isFirstLine) {
-            isFirstLine = false
-            self._header ??= line // schema is the same across all blobs
-            continue
+        try {
+          const decoder = new StringDecoder('utf-8')
+          let remainder = ''
+          let isFirstLine = true
+          let pending: string[] = []
+
+          const flushPending = async () => {
+            if (pending.length === 0) return
+            await channel.push(pending)
+            pending = []
           }
-          await writeToAgg(line)
+
+          for await (const rawChunk of stream) {
+            const text =
+              remainder +
+              (typeof rawChunk === 'string'
+                ? rawChunk
+                : decoder.write(rawChunk as Buffer))
+            const parts = text.split('\n')
+            remainder = parts.pop()!
+            for (const rawLine of parts) {
+              const line = rawLine.endsWith('\r')
+                ? rawLine.slice(0, -1)
+                : rawLine
+              if (line.length === 0) continue
+              if (isFirstLine) {
+                isFirstLine = false
+                this._header ??= line
+                continue
+              }
+              pending.push(line)
+              if (pending.length >= BATCH_SIZE) await flushPending()
+            }
+          }
+          const tail = remainder + decoder.end()
+          if (tail.length > 0) {
+            const line = tail.endsWith('\r') ? tail.slice(0, -1) : tail
+            if (line.length > 0) {
+              if (isFirstLine) {
+                this._header ??= line
+              } else {
+                pending.push(line)
+              }
+            }
+          }
+          await flushPending()
+          filesProcessed++
+        } finally {
+          stream.destroy()
         }
-        rl.close()
-        stream.destroy()
-        filesProcessed++
       })
 
       await Promise.all([nextPagePromise, ...blobPromises])
     }
 
     return {
-      lines: (async function* (): AsyncGenerator<string> {
+      lines: (async function* (): AsyncGenerator<string[]> {
         const producer = processPage(firstPage)
-          .then(() => aggStream.end())
-          .catch((err: Error) => aggStream.destroy(err))
+          .then(() => channel.close())
+          .catch((err: Error) => channel.fail(err))
 
-        for await (const line of aggStream) {
-          yield line as string
+        for await (const batch of channel) {
+          yield batch
         }
 
         await producer

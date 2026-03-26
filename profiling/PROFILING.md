@@ -291,3 +291,40 @@ The `aggStream` PassThrough + `writeSeq` chain adds a full stream buffer layer. 
 **4. Add upload backpressure to GzipChunkingWritable** *(robustness)*
 
 Currently `uploadPromises[]` grows without bound until `_final`. For very large datasets this could accumulate many in-flight requests. Add a high-water mark: pause `_write` when in-flight count exceeds N, resume when some complete.
+
+---
+
+## Post-optimization results — 2026-03-26
+
+### Applied improvements (branch `perf/reduce-async-overhead`)
+
+| # | Change | File(s) |
+|---|--------|---------|
+| 1 | Replace `readline` with manual chunk splitting in ElfReader | `src/adapters/elf-reader.ts` |
+| 2 | Batch lines (2000) through the entire pipeline (`AsyncIterable<string[]>`) | `src/ports/types.ts`, all adapters |
+| 3 | Eliminate `aggStream` PassThrough hop — replaced with `AsyncChannel<string[]>` | `src/adapters/elf-reader.ts`, `src/adapters/async-channel.ts` |
+| 4 | Upload backpressure in `GzipChunkingWritable` (`UPLOAD_HIGH_WATER = DEFAULT_CONCURRENCY = 25`) | `src/adapters/dataset-writer.ts`, `src/adapters/sf-client.ts` |
+| 5 | `FLUSH_THRESHOLD` 64KB → 512KB (already on main, carried forward) | `src/adapters/dataset-writer.ts` |
+
+### Verification (3 runs, same scenario, same state reset procedure)
+
+| Run | Before | After |
+|-----|--------|-------|
+| 1   | 57s    | 58s   |
+| 2   | 61s    | 60s   |
+| 3   | 62s    | 56s   |
+| **Avg** | **~60s** | **~58s** |
+
+### Conclusion
+
+**Wall-clock improvement: negligible (~2s / ~3%)**, within network variance.
+
+The optimizations correctly targeted the O(n) async overhead identified in profiling, but the measured data reveals the bottleneck was not in JS-land as much as the CPU profile suggested. The 56.8% idle time is the Salesforce API network latency — there is no client-side optimization that can reduce it.
+
+The improvements are still **kept** because they:
+- Reduce GC pressure (~1.84M fewer Promise allocations per run)
+- Eliminate stream machinery overhead (PassThrough, `writeSeq` chain)
+- Cap concurrent in-flight uploads at `DEFAULT_CONCURRENCY` to bound heap pressure
+- Improve code clarity (`AsyncChannel` vs `aggStream + writeSeq`)
+
+**True bottleneck**: Salesforce API throughput for the ~40 `InsightsExternalDataPart` POST calls and the ~11 days of ELF blob downloads. No client-side optimization can overcome network latency.

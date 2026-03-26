@@ -21,8 +21,8 @@ export function buildAugmentHeaderSuffix(
 export function createAugmentTransform(suffix: string): Transform {
   return new Transform({
     objectMode: true,
-    transform(line: string, _enc: string, cb: TransformCallback) {
-      cb(null, line + suffix)
+    transform(batch: string[], _enc: string, cb: TransformCallback) {
+      cb(null, suffix ? batch.map(line => line + suffix) : batch)
     },
   })
 }

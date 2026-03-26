@@ -219,6 +219,7 @@ export async function executePipeline(
   )
   phase.stop()
   await input.state.write(store)
+
   return pipelineResult
 }
 

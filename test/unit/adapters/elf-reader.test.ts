@@ -19,10 +19,10 @@ function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
 }
 
 async function collectLines(
-  iterable: AsyncIterable<string>
+  iterable: AsyncIterable<string[]>
 ): Promise<string[]> {
   const lines: string[] = []
-  for await (const line of iterable) lines.push(line)
+  for await (const batch of iterable) lines.push(...batch)
   return lines
 }
 
@@ -40,9 +40,11 @@ describe('ElfReader', () => {
       getBlobStream: vi
         .fn()
         .mockResolvedValueOnce(
-          Readable.from(Buffer.from('header1\ndata1a\ndata1b\n'))
+          Readable.from([Buffer.from('header1\ndata1a\ndata1b\n')])
         )
-        .mockResolvedValueOnce(Readable.from(Buffer.from('header2\ndata2a\n'))),
+        .mockResolvedValueOnce(
+          Readable.from([Buffer.from('header2\ndata2a\n')])
+        ),
     })
 
     const sut = new ElfReader(sfPort, 'LightningPageView', 'Daily')
@@ -98,7 +100,7 @@ describe('ElfReader', () => {
       query: querySpy,
       getBlobStream: vi
         .fn()
-        .mockResolvedValue(Readable.from(Buffer.from('hdr\ndata\n'))),
+        .mockResolvedValue(Readable.from([Buffer.from('hdr\ndata\n')])),
     })
 
     const sut = new ElfReader(sfPort, 'Login', 'Daily')
@@ -121,6 +123,33 @@ describe('ElfReader', () => {
     const soql: string = querySpy.mock.calls[0][0]
     expect(soql).toContain('ORDER BY LogDate ASC')
     expect(soql).not.toContain('LIMIT')
+  })
+
+  it('given blob content split across multiple chunks, when fetching, then reassembles lines correctly', async () => {
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [
+          { Id: '0AT1', LogDate: '2026-03-01T00:00:00.000Z', LogFile: '' },
+        ],
+      }),
+      // Blob split mid-line: 'header\nda' + 'ta1\ndata2\n'
+      getBlobStream: vi
+        .fn()
+        .mockResolvedValue(
+          Readable.from([
+            Buffer.from('header\nda'),
+            Buffer.from('ta1\ndata2\n'),
+          ])
+        ),
+    })
+
+    const sut = new ElfReader(sfPort, 'Login', 'Daily')
+    const result = await sut.fetch()
+    const lines = await collectLines(result.lines)
+
+    expect(lines).toEqual(['data1', 'data2'])
   })
 
   it('given invalid eventType, when creating reader, then throws', () => {
@@ -154,8 +183,8 @@ describe('ElfReader', () => {
       }),
       getBlobStream: vi
         .fn()
-        .mockResolvedValueOnce(Readable.from(Buffer.from('h1\na\n')))
-        .mockResolvedValueOnce(Readable.from(Buffer.from('h2\nb\n'))),
+        .mockResolvedValueOnce(Readable.from([Buffer.from('h1\na\n')]))
+        .mockResolvedValueOnce(Readable.from([Buffer.from('h2\nb\n')])),
     })
 
     const sut = new ElfReader(sfPort, 'Login', 'Daily')
@@ -179,7 +208,7 @@ describe('ElfReader', () => {
       getBlobStream: vi
         .fn()
         .mockResolvedValue(
-          Readable.from(Buffer.from('header\n\ndata1\n\ndata2\n'))
+          Readable.from([Buffer.from('header\n\ndata1\n\ndata2\n')])
         ),
     })
 
@@ -232,8 +261,8 @@ describe('ElfReader', () => {
     await vi.waitFor(() => expect(resolveBlob2).toBeDefined(), {
       timeout: 2000,
     })
-    resolveBlob2(Readable.from(Buffer.from('h2\nfrom_blob2\n')))
-    resolveBlob1(Readable.from(Buffer.from('h1\nfrom_blob1\n')))
+    resolveBlob2(Readable.from([Buffer.from('h2\nfrom_blob2\n')]))
+    resolveBlob1(Readable.from([Buffer.from('h1\nfrom_blob1\n')]))
     const lines = await linesPromise
 
     expect(lines).toEqual(['from_blob2', 'from_blob1'])
@@ -274,7 +303,7 @@ describe('ElfReader', () => {
         )
         .mockImplementationOnce(() => {
           callOrder.push('page2-blob-requested')
-          return Promise.resolve(Readable.from(Buffer.from('h2\ndata2\n')))
+          return Promise.resolve(Readable.from([Buffer.from('h2\ndata2\n')]))
         }),
     })
 
@@ -289,7 +318,7 @@ describe('ElfReader', () => {
     )
     expect(callOrder).not.toContain('page1-blob-resolved')
 
-    resolvePage1Blob(Readable.from(Buffer.from('h1\ndata1\n')))
+    resolvePage1Blob(Readable.from([Buffer.from('h1\ndata1\n')]))
     const lines = await linesPromise
 
     expect(lines).toHaveLength(2)
@@ -308,7 +337,7 @@ describe('ElfReader', () => {
       }),
       getBlobStream: vi
         .fn()
-        .mockResolvedValueOnce(Readable.from(Buffer.from('h\nok\n')))
+        .mockResolvedValueOnce(Readable.from([Buffer.from('h\nok\n')]))
         .mockRejectedValueOnce(new Error('stream failure')),
     })
 
@@ -324,7 +353,9 @@ describe('ElfReader', () => {
       LogDate: '2024-01-01T00:00:00.000Z',
       LogFile: '',
     }
-    const blob = Readable.from(['TIMESTAMP_DERIVED,USER_ID\n2024-01-01,user1'])
+    const blob = Readable.from([
+      Buffer.from('TIMESTAMP_DERIVED,USER_ID\n2024-01-01,user1'),
+    ])
     const sfPort = makeSfPort({
       query: vi.fn().mockResolvedValue({
         totalSize: 1,
@@ -379,7 +410,9 @@ describe('ElfReader', () => {
           .fn()
           .mockImplementation(() =>
             Promise.resolve(
-              Readable.from(Buffer.from('header\nline1\nline2\nline3\nline4\n'))
+              Readable.from([
+                Buffer.from('header\nline1\nline2\nline3\nline4\n'),
+              ])
             )
           ),
       })
@@ -390,8 +423,8 @@ describe('ElfReader', () => {
         Watermark.fromString('2026-02-28T00:00:00.000Z')
       )
       const lines: string[] = []
-      for await (const line of result.lines) {
-        lines.push(line)
+      for await (const batch of result.lines) {
+        lines.push(...batch)
         await new Promise<void>(resolve => setImmediate(resolve)) // slow consumer to induce backpressure
       }
 

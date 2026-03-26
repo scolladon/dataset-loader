@@ -5,6 +5,7 @@ import {
   DatasetWriterFactory,
   GzipChunkingWritable,
   LazyGzipChunkingWritable,
+  UPLOAD_HIGH_WATER,
 } from '../../../src/adapters/dataset-writer.js'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
@@ -41,8 +42,7 @@ describe('GzipChunkingWritable', () => {
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Act
-    sut.write('"001","Acme"')
-    sut.write('"002","Beta"')
+    sut.write(['"001","Acme"', '"002","Beta"'])
     sut.end()
     await finished(sut)
 
@@ -66,9 +66,11 @@ describe('GzipChunkingWritable', () => {
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Act
-    for (let i = 0; i < 12000; i++) {
-      sut.write(`"${randomBytes(1024).toString('base64')}"`)
-    }
+    const batch = Array.from(
+      { length: 12000 },
+      () => `"${randomBytes(1024).toString('base64')}"`
+    )
+    sut.write(batch)
     sut.end()
     await finished(sut)
 
@@ -90,7 +92,7 @@ describe('GzipChunkingWritable', () => {
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId, listener)
 
     // Act
-    sut.write('"data"')
+    sut.write(['"data"'])
     sut.end()
     await finished(sut)
 
@@ -120,7 +122,7 @@ describe('GzipChunkingWritable', () => {
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Act
-    sut.write('"data"')
+    sut.write(['"data"'])
     sut.end()
 
     // Assert
@@ -140,7 +142,7 @@ describe('GzipChunkingWritable', () => {
     chunk.compressedSize = 8 * 1024 * 1024
 
     // Act — write triggers rotation: upload fires in _write() before _final()
-    sut.write('"data"')
+    sut.write(['"data"'])
     sut.end()
 
     // Assert
@@ -153,7 +155,7 @@ describe('GzipChunkingWritable', () => {
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Act
-    sut.write('"first line"')
+    sut.write(['"first line"'])
     // Force a gzip error by destroying the internal gzip stream
     // Access the chunk's gz through the stream internals
     const chunk = (
@@ -174,26 +176,12 @@ describe('GzipChunkingWritable', () => {
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Act
-    const lines: string[] = []
-    for (let i = 0; i < 12000; i++) {
-      lines.push(`"${randomBytes(1024).toString('base64')}"`)
-    }
+    const batch = Array.from(
+      { length: 12000 },
+      () => `"${randomBytes(1024).toString('base64')}"`
+    )
     await new Promise<void>((resolve, reject) => {
-      let i = 0
-      const writeNext = (): void => {
-        let ok = true
-        while (i < lines.length && ok) {
-          ok = sut.write(lines[i])
-          i++
-        }
-        if (i < lines.length) {
-          sut.once('drain', writeNext)
-        } else {
-          resolve()
-        }
-      }
-      sut.on('error', reject)
-      writeNext()
+      sut.write(batch, err => (err ? reject(err) : resolve()))
     })
 
     await sut.drainUploads()
@@ -203,6 +191,93 @@ describe('GzipChunkingWritable', () => {
     expect(sut.partCount).toBeGreaterThan(0)
     expect(sfPort.post).toHaveBeenCalledTimes(sut.partCount)
   })
+
+  it(
+    'given upload concurrency cap is reached, when a new chunk rotation is triggered, then producer blocks until a slot is freed',
+    { timeout: 30000 },
+    async () => {
+      // Arrange: uploads complete only when explicitly resolved.
+      // Use a small uploadHighWater (4) so the test only needs ~4 rotations instead
+      // of the production UPLOAD_HIGH_WATER (DEFAULT_CONCURRENCY = 25).
+      const TEST_HIGH_WATER = 4
+      const { randomBytes } = await import('node:crypto')
+      const uploadResolvers: Array<() => void> = []
+      let concurrentUploads = 0
+      let maxConcurrentUploads = 0
+      const sfPort = makeSfPort({
+        post: vi.fn().mockImplementation(
+          () =>
+            new Promise<{ id: string }>(resolve => {
+              concurrentUploads++
+              maxConcurrentUploads = Math.max(
+                maxConcurrentUploads,
+                concurrentUploads
+              )
+              uploadResolvers.push(() => {
+                concurrentUploads--
+                resolve({ id: '06W' })
+              })
+            })
+        ),
+      })
+      const sut = new GzipChunkingWritable(
+        sfPort,
+        basePath,
+        parentId,
+        undefined,
+        TEST_HIGH_WATER
+      )
+
+      // Pre-generate a pool then slice into lines. 20000 lines per batch ensures ≥ 4
+      // chunk rotations across both batches regardless of gzip compression ratio.
+      const pool = randomBytes(1024 * 20000)
+      const batch = Array.from(
+        { length: 20000 },
+        (_, i) =>
+          `"${pool.subarray(i * 1024, (i + 1) * 1024).toString('base64')}"`
+      )
+
+      // Act
+      // Batch 1: completes without backpressure (uploads started, held in-flight)
+      await new Promise<void>((resolve, reject) => {
+        sut.write(batch, err => (err ? reject(err) : resolve()))
+      })
+
+      // Batch 2: pauses when TEST_HIGH_WATER rotations are in-flight
+      let batch2Completed = false
+      const batch2Promise = new Promise<void>((resolve, reject) => {
+        sut.write(batch, err => {
+          batch2Completed = true
+          if (err) reject(err)
+          else resolve()
+        })
+      })
+
+      // Wait for all TEST_HIGH_WATER uploads to be in-flight
+      await vi.waitFor(
+        () =>
+          expect(uploadResolvers.length).toBeGreaterThanOrEqual(
+            TEST_HIGH_WATER
+          ),
+        { timeout: 10000 }
+      )
+
+      // Assert: backpressure is holding the second write
+      expect(batch2Completed).toBe(false)
+      expect(maxConcurrentUploads).toBeLessThanOrEqual(TEST_HIGH_WATER)
+
+      // Release slots; batch2 may stall again on subsequent rotations so drain continuously
+      const drainInterval = setInterval(() => {
+        while (uploadResolvers.length > 0) uploadResolvers.shift()!()
+      }, 1)
+      await batch2Promise
+      clearInterval(drainInterval)
+
+      while (uploadResolvers.length > 0) uploadResolvers.shift()!()
+      await sut.drainUploads()
+      expect(batch2Completed).toBe(true)
+    }
+  )
 })
 
 describe('DatasetWriter', () => {
@@ -226,7 +301,7 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -293,7 +368,7 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -332,7 +407,7 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
     const result = await sut.finalize()
@@ -370,7 +445,7 @@ describe('DatasetWriter', () => {
     ).mockImplementation(async () => {
       callOrder.push('drain')
     })
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -397,7 +472,7 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
     await sut.abort()
@@ -422,7 +497,7 @@ describe('DatasetWriter', () => {
     })
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -526,7 +601,7 @@ describe('DatasetWriter', () => {
     postCallsBeforeWrite.push(
       (sfPort.post as ReturnType<typeof vi.fn>).mock.calls.length
     )
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -559,7 +634,7 @@ describe('DatasetWriter', () => {
     const sut = new DatasetWriter(sfPort, dsKey, 'Append', listener)
     const chunker = await sut.init()
     expect(listener.onSinkReady).not.toHaveBeenCalled()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -638,7 +713,7 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
     const chunker = await sut.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
@@ -690,7 +765,7 @@ describe('DatasetWriterFactory', () => {
     // Act
     const writer = sut.create(dsKey, 'Append', listener, headerProvider)
     const chunker = await writer.init()
-    chunker.write('"data"')
+    chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 

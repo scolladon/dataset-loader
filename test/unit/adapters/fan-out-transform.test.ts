@@ -4,13 +4,13 @@ import { describe, expect, it } from 'vitest'
 import { createFanOutTransform } from '../../../src/adapters/fan-out-transform.js'
 
 async function collect(stream: PassThrough): Promise<string[]> {
-  const chunks: string[] = []
-  stream.on('data', (c: string) => chunks.push(c))
-  return new Promise(resolve => stream.on('end', () => resolve(chunks)))
+  const batches: string[][] = []
+  stream.on('data', (b: string[]) => batches.push(b))
+  return new Promise(resolve => stream.on('end', () => resolve(batches.flat())))
 }
 
 describe('createFanOutTransform', () => {
-  it('given two channels, when source emits three lines, then both channels receive all lines', async () => {
+  it('given two channels, when source emits three batches, then both channels receive all batches', async () => {
     // Arrange
     const ch1 = new PassThrough({ objectMode: true })
     const ch2 = new PassThrough({ objectMode: true })
@@ -20,7 +20,7 @@ describe('createFanOutTransform', () => {
     const p2 = collect(ch2)
 
     // Act
-    await pipeline(Readable.from(['a', 'b', 'c']), sut)
+    await pipeline(Readable.from([['a', 'b'], ['c']]), sut)
     const [r1, r2] = await Promise.all([p1, p2])
 
     // Assert
@@ -41,13 +41,13 @@ describe('createFanOutTransform', () => {
     // Act: slow consumer (one item per event-loop tick) to induce repeated backpressure+drain cycles
     const results: string[] = []
     const consuming = (async () => {
-      for await (const chunk of ch) {
-        results.push(chunk as string)
+      for await (const batch of ch) {
+        results.push(...(batch as string[]))
         await new Promise<void>(resolve => setImmediate(resolve))
       }
     })()
     await pipeline(
-      Readable.from(Array.from({ length: 12 }, (_, i) => `c${i}`)),
+      Readable.from(Array.from({ length: 12 }, (_, i) => [`c${i}`])),
       sut
     )
     await consuming
@@ -58,7 +58,7 @@ describe('createFanOutTransform', () => {
     expect(ch.listenerCount('error')).toBeLessThanOrEqual(2)
   })
 
-  it('given one channel errors, when source emits lines, then onChannelError is called and other channel still receives all lines', async () => {
+  it('given one channel errors, when source emits batches, then onChannelError is called and other channel still receives all lines', async () => {
     // Arrange
     const ch1 = new PassThrough({ objectMode: true })
     const ch2 = new PassThrough({ objectMode: true })
@@ -72,7 +72,7 @@ describe('createFanOutTransform', () => {
     ch2.destroy(new Error('channel dead'))
 
     // Act
-    await pipeline(Readable.from(['a', 'b', 'c']), sut)
+    await pipeline(Readable.from([['a', 'b'], ['c']]), sut)
     const r1 = await p1
 
     // Assert

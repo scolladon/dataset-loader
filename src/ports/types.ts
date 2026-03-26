@@ -51,7 +51,7 @@ export type EntryType = 'elf' | 'sobject' | 'csv'
 export type Operation = 'Append' | 'Overwrite'
 
 export interface FetchResult {
-  readonly lines: AsyncIterable<string>
+  readonly lines: AsyncIterable<string[]>
   readonly watermark: () => Watermark | undefined
   readonly fileCount: () => number
 }

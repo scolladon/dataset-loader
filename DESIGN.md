@@ -75,6 +75,7 @@ src/
     ├── augment-transform.ts  # Appends extra columns to CSV lines
     ├── fan-out-transform.ts  # Tees a stream to multiple writable channels
     ├── row-counter.ts        # PassThrough that counts rows for progress
+    ├── async-channel.ts      # Bounded async channel (multi-producer, single-consumer)
     ├── dataset-writer.ts     # CRMA upload (InsightsExternalData)
     ├── file-writer.ts        # Local file writer (CSV output)
     ├── config-loader.ts      # Config parsing & validation (Zod)
@@ -98,7 +99,7 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 | Port | Purpose | Adapter |
 |------|---------|---------|
 | `SalesforcePort` | SOQL queries, blob downloads, REST CRUD | `SalesforceClient` |
-| `ReaderPort` | Fetch data as `AsyncIterable<string>` CSV lines | `ElfReader`, `SObjectReader` |
+| `ReaderPort` | Fetch data as `AsyncIterable<string[]>` CSV line batches | `ElfReader`, `SObjectReader` |
 | `CreateWriterPort` | Factory for writers per dataset (accepts `ProgressListener` for progress callbacks and `HeaderProvider` for deferred header resolution) | `DatasetWriterFactory`, `FileWriterFactory` |
 | `Writer` | Init writable stream, finalize, abort on error, skip on no data | `DatasetWriter`, `FileWriter` |
 | `ProgressListener` | Callbacks for sink creation and part upload events | Wired in pipeline |
@@ -166,20 +167,20 @@ executePipeline()
 
 Data never fully materializes in memory. The pipeline streams through three layers:
 
-1. **Readers** yield `AsyncIterable<string>` — raw CSV lines (header-stripped for ELF)
-   - ELF: concurrent blob stream downloads via `getBlobStream()`; all blobs in a page are fetched in parallel, writes to the aggregation stream are serialized via a promise chain to avoid backpressure and listener leaks; strips header row from each blob
+1. **Readers** yield `AsyncIterable<string[]>` — batches of 2000 CSV lines (header-stripped for ELF)
+   - ELF: concurrent blob stream downloads via `getBlobStream()`; all blobs in a page are fetched in parallel; batches are pushed to a bounded `AsyncChannel<string[]>` which applies backpressure when the queue is full; strips header row from each blob
    - SObject: SOQL query with prefetched next page, yields CSV lines via csv-stringify
-2. **AugmentTransform + RowCounter** — Transform stream that appends augment columns to each line; PassThrough that counts rows for progress tracking
+2. **AugmentTransform + RowCounter** — Transform stream that appends augment columns to each batch; PassThrough that counts rows for progress tracking
 3. **FanOutTransform** — When multiple entries share the same reader (same org + eventType/sobject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
 4. **Writer chunker** — Writable stream returned by `Writer.init()`:
-   - CRMA (`GzipChunkingWritable`): batch gzip-compresses (64KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently via fire-and-collect
+   - CRMA (`GzipChunkingWritable`): batch gzip-compresses (512KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently up to `UPLOAD_HIGH_WATER` (= 25) in-flight
    - File (`FileWriter` internal): streams CSV rows directly to a `fs.WriteStream`; writes header on first row via `HeaderProvider`
 
 Key types:
 
 ```typescript
 interface FetchResult {
-  readonly lines: AsyncIterable<string>
+  readonly lines: AsyncIterable<string[]>
   readonly watermark: () => Watermark | undefined
   readonly fileCount: () => number
 }
@@ -203,7 +204,7 @@ interface Writer {
 |-------|----------|-------|
 | Dataset groups | `Promise.all` with `.catch()` wrappers | Unbounded |
 | Entries within a group | Concurrent via `Promise.all` | Unbounded (Node.js stream backpressure serializes writes to shared chunker) |
-| Part uploads within a group | Fire-and-collect (`uploadPromises[]`) | Unbounded (CRMA only) |
+| Part uploads within a group | Bounded in-flight set (`pendingUploads`) with `Promise.race` backpressure | `UPLOAD_HIGH_WATER` = 25 (CRMA only) |
 | ELF blob downloads | Concurrent within each page; pages chained sequentially | All blobs pre-fetched per page |
 | Salesforce API calls per org | `pLimit` semaphore | 25 concurrent |
 | HTTP 429 responses | Exponential backoff retry | 3 attempts (1s, 2s, 4s) |
@@ -234,12 +235,13 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 | Component | Path | Responsibility |
 |-----------|------|----------------|
 | `SalesforceClient` | `adapters/sf-client.ts` | Per-org REST client with `p-limit(25)` concurrency, gzip headers, HTTP 429 retry with exponential backoff (3 attempts max). Error formatting extracts Salesforce error details from `error.data` array. |
-| `ElfReader` | `adapters/elf-reader.ts` | Queries EventLogFile, concurrently downloads blob streams via `getBlobStream()`. Writes are serialized to the aggregation stream via a promise chain to prevent backpressure issues and listener leaks. Strips CSV header from each blob. Validates `eventType` and `interval` format on construction. Bootstrap mode (no watermark): fetches only the latest record (`LIMIT 1 DESC`) to establish a watermark without bulk-loading history. |
+| `ElfReader` | `adapters/elf-reader.ts` | Queries EventLogFile, concurrently downloads blob streams via `getBlobStream()`. Each blob processor accumulates lines into batches of 2000 and pushes them to a shared `AsyncChannel<string[]>`, which provides backpressure and serializes delivery to the consumer. Strips CSV header from each blob. Validates `eventType` and `interval` format on construction. Bootstrap mode (no watermark): fetches only the latest record (`LIMIT 1 DESC`) to establish a watermark without bulk-loading history. |
 | `SObjectReader` | `adapters/sobject-reader.ts` | Builds SOQL with watermark/where/limit, prefetches next page while yielding current results as CSV lines (serialized via csv-stringify). Auto-appends `dateField` to SELECT if not in `fields`. |
 | `AugmentTransform` | `adapters/augment-transform.ts` | Transform stream that appends augment column values (CSV-quoted) to each line. |
 | `FanOutTransform` | `adapters/fan-out-transform.ts` | Transform stream that tees each chunk to N `PassThrough` channels concurrently via `Promise.all`. Used when multiple entries share the same reader (same org + type + watermark). Channels that error are removed from the active set. |
 | `RowCounter` | `adapters/row-counter.ts` | PassThrough stream that counts rows for progress tracking via `GroupTracker.addRows()`. |
-| `DatasetWriterFactory` | `adapters/dataset-writer.ts` | Creates `DatasetWriter` instances per CRMA dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 64KB flush threshold, splits at 10 MB base64 boundaries, and uploads parts concurrently via fire-and-collect. |
+| `AsyncChannel<T>` | `adapters/async-channel.ts` | Bounded multi-producer, single-consumer async queue. Producers call `push()` and await backpressure when the queue reaches `highWater`. Consumer iterates with `for await`. `close()` signals end-of-stream; `fail(err)` propagates an error to both producers and consumer. |
+| `DatasetWriterFactory` | `adapters/dataset-writer.ts` | Creates `DatasetWriter` instances per CRMA dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 512KB flush threshold, splits at 10 MB base64 boundaries, and keeps at most `UPLOAD_HIGH_WATER` (= 25) part uploads in-flight via `Promise.race` backpressure. |
 | `FileWriterFactory` | `adapters/file-writer.ts` | Creates `FileWriter` instances per output file path. `FileWriter.init()` opens a `fs.WriteStream` (append or overwrite). Header is written on first row via `HeaderProvider.resolveHeader()`. `skip()` deletes the file on overwrite. |
 | `ConfigLoader` | `adapters/config-loader.ts` | Reads JSON config, Zod schema validation, operation consistency checks, mustache token resolution (`{{sourceOrg.Id}}`, etc.) |
 | `FileStateManager` | `adapters/state-manager.ts` | Atomic read/write of watermark state file (temp file + rename, mode `0o600`) |

@@ -90,7 +90,7 @@ export class SObjectReader implements ReaderPort {
     const dateField = this.dateField
     const sfPort = this.sfPort
 
-    async function* generateLines(): AsyncGenerator<string> {
+    async function* generateLines(): AsyncGenerator<string[]> {
       let currentPage = firstPage
 
       while (true) {
@@ -101,18 +101,16 @@ export class SObjectReader implements ReaderPort {
               )
             : null
 
-        for (const record of currentPage.records) {
-          yield stringify(
-            [fields.map(f => String(resolveField(record, f) ?? ''))],
-            {
-              quoted: true,
-              quoted_empty: true,
-            }
-          ).trimEnd()
-        }
         if (currentPage.records.length > 0) {
+          const batch = currentPage.records.map(record =>
+            stringify(
+              [fields.map(f => String(resolveField(record, f) ?? ''))],
+              { quoted: true, quoted_empty: true }
+            ).trimEnd()
+          )
           lastRecord = currentPage.records.at(-1)
           pagesProcessed++
+          yield batch
         }
 
         if (!nextPromise) break

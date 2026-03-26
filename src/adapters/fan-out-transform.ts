@@ -1,6 +1,6 @@
 import { PassThrough, Transform, type Writable } from 'node:stream'
 
-function promiseWrite(stream: Writable, chunk: string): Promise<void> {
+function promiseWrite(stream: Writable, chunk: string[]): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if (!stream.write(chunk)) {
       const onDrain = () => {
@@ -33,7 +33,7 @@ export function createFanOutTransform(
   }
   return new Transform({
     objectMode: true,
-    transform(chunk: string, _enc, cb) {
+    transform(chunk: string[], _enc, cb) {
       Promise.all(
         [...active].map(ch =>
           promiseWrite(ch, chunk).catch((err: Error) => {

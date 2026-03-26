@@ -70,7 +70,7 @@ function createFetchResult(
 ): FetchResult {
   return {
     lines: (async function* () {
-      for (const l of lines) yield l
+      if (lines.length > 0) yield lines
     })(),
     watermark: () => watermark,
     fileCount: () => fileCount ?? (lines.length > 0 ? 1 : 0),
@@ -85,7 +85,7 @@ interface MockWriter extends Writer {
 function createMockWriter(overrides: Partial<Writer> = {}): MockWriter {
   const writtenLines: string[] = []
   const mockWritable = new PassThrough({ objectMode: true })
-  mockWritable.on('data', (chunk: string) => writtenLines.push(chunk))
+  mockWritable.on('data', (batch: string[]) => writtenLines.push(...batch))
   return {
     init: vi.fn(async () => mockWritable),
     finalize: vi.fn(
@@ -669,8 +669,8 @@ describe('executePipeline (streaming)', () => {
 
     expect(tracker.addFiles).toHaveBeenCalledWith(1)
     expect(tracker.addFiles).toHaveBeenCalledTimes(1)
-    expect(tracker.addRows).toHaveBeenCalledWith(1)
-    expect(tracker.addRows).toHaveBeenCalledTimes(2)
+    expect(tracker.addRows).toHaveBeenCalledWith(2)
+    expect(tracker.addRows).toHaveBeenCalledTimes(1)
   })
 
   it('given progress listener wired, when writer invokes onSinkReady during init, then updates tracker parentId', async () => {

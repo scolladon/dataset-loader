@@ -5,6 +5,6 @@ export function createRowCounter(
   tracker: Pick<GroupTracker, 'addRows'>
 ): PassThrough {
   const counter = new PassThrough({ objectMode: true })
-  counter.on('data', () => tracker.addRows(1))
+  counter.on('data', (batch: string[]) => tracker.addRows(batch.length))
   return counter
 }

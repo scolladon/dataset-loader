@@ -18,10 +18,10 @@ function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
 }
 
 async function collectLines(
-  iterable: AsyncIterable<string>
+  iterable: AsyncIterable<string[]>
 ): Promise<string[]> {
   const lines: string[] = []
-  for await (const line of iterable) lines.push(line)
+  for await (const batch of iterable) lines.push(...batch)
   return lines
 }
 

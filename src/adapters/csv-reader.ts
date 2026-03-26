@@ -3,6 +3,8 @@ import { createInterface } from 'node:readline'
 import { Watermark } from '../domain/watermark.js'
 import { type FetchResult, type ReaderPort } from '../ports/types.js'
 
+const BATCH_SIZE = 2000
+
 export class CsvReader implements ReaderPort {
   private _headerPromise?: Promise<string>
 
@@ -31,16 +33,22 @@ export class CsvReader implements ReaderPort {
     const filePath = this.filePath
     const consumedAt = Watermark.fromString(new Date().toISOString())
     return {
-      lines: (async function* (): AsyncGenerator<string> {
+      lines: (async function* (): AsyncGenerator<string[]> {
         const stream = createReadStream(filePath)
         const rl = createInterface({ input: stream, crlfDelay: Infinity })
         try {
           const iter = rl[Symbol.asyncIterator]()
           await iter.next() // skip header
+          let batch: string[] = []
           for await (const line of iter) {
             if (line.length === 0) continue
-            yield line
+            batch.push(line)
+            if (batch.length >= BATCH_SIZE) {
+              yield batch
+              batch = []
+            }
           }
+          if (batch.length > 0) yield batch
         } finally {
           rl.close()
           stream.destroy()

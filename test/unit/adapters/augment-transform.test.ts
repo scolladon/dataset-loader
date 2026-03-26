@@ -43,27 +43,27 @@ describe('buildAugmentHeaderSuffix', () => {
 })
 
 describe('createAugmentTransform', () => {
-  it('given suffix, when line passes through, then suffix is appended', async () => {
+  it('given suffix, when batch passes through, then suffix is appended to each line', async () => {
     const sut = createAugmentTransform(',"extra"')
-    const chunks: string[] = []
-    sut.on('data', (chunk: string) => chunks.push(chunk))
+    const batches: string[][] = []
+    sut.on('data', (batch: string[]) => batches.push(batch))
 
-    sut.write('"Id","Name"')
+    sut.write(['"Id","Name"', '"001","Acme"'])
     sut.end()
     await new Promise(resolve => sut.on('end', resolve))
 
-    expect(chunks).toEqual(['"Id","Name","extra"'])
+    expect(batches).toEqual([['"Id","Name","extra"', '"001","Acme","extra"']])
   })
 
-  it('given empty suffix, when line passes through, then line is unchanged', async () => {
+  it('given empty suffix, when batch passes through, then lines are unchanged', async () => {
     const sut = createAugmentTransform('')
-    const chunks: string[] = []
-    sut.on('data', (chunk: string) => chunks.push(chunk))
+    const batches: string[][] = []
+    sut.on('data', (batch: string[]) => batches.push(batch))
 
-    sut.write('"value"')
+    sut.write(['"value"', '"other"'])
     sut.end()
     await new Promise(resolve => sut.on('end', resolve))
 
-    expect(chunks).toEqual(['"value"'])
+    expect(batches).toEqual([['"value"', '"other"']])
   })
 })

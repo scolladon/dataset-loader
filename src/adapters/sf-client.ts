@@ -9,7 +9,7 @@ export interface SalesforceClientOptions {
   readonly retryBaseDelayMs?: number
 }
 
-const DEFAULT_CONCURRENCY = 25
+export const DEFAULT_CONCURRENCY = 25
 const MAX_RETRIES = 3
 const DEFAULT_BASE_DELAY_MS = 1000
 
