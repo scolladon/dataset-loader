@@ -4,10 +4,10 @@
 
 ```
 profiling/
-  PROFILING.md            this file
-  crma-load.config.json   baseline config for reproducible runs
-  state.json              baseline state (watermarks as of 2026-03-15)
-  reset.sh                reset script — run between every profiling run
+  PROFILING.md              this file
+  profiling.config.json     baseline config for reproducible runs
+  profiling.state.json      baseline state (watermarks as of 2026-03-15)
+  reset.sh                  reset script — run between every profiling run
 ```
 
 CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand).
@@ -37,7 +37,7 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand).
 
 ```bash
 # Copy profiling baseline config over the active config
-cp profiling/crma-load.config.json crma-load.config.json
+cp profiling/profiling.config.json crma-load.config.json
 
 # Ensure profiles/ output directory exists
 mkdir -p profiles
