@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
-import { ElfReader } from '../../../src/adapters/elf-reader.js'
+import { ElfReader } from '../../../src/adapters/readers/elf-reader.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { type SalesforcePort } from '../../../src/ports/types.js'
 

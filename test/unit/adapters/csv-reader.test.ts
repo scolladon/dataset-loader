@@ -1,7 +1,7 @@
 import { type ReadStream } from 'node:fs'
 import { Readable } from 'node:stream'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { CsvReader } from '../../../src/adapters/csv-reader.js'
+import { CsvReader } from '../../../src/adapters/readers/csv-reader.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 
 vi.mock('node:fs', () => ({

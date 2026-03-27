@@ -1,7 +1,7 @@
 import { PassThrough, Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { describe, expect, it } from 'vitest'
-import { createFanOutTransform } from '../../../src/adapters/fan-out-transform.js'
+import { createFanOutTransform } from '../../../src/adapters/pipeline/fan-out-transform.js'
 
 async function collect(stream: PassThrough): Promise<string[]> {
   const batches: string[][] = []

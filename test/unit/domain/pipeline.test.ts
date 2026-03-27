@@ -2,6 +2,7 @@ import { PassThrough, type Writable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
+  createHeaderProvider,
   DatasetGroup,
   executePipeline,
   groupByReader,
@@ -163,67 +164,90 @@ function buildPipelineInput(
 }
 
 describe('DatasetGroup', () => {
-  it('given group with entries, when resolveHeader is called, then returns first non-empty header', async () => {
+  it('given key, datasetKey, operation, and entries, when created via from(), then exposes all properties', () => {
     // Arrange
-    const firstEntry = createEntry({
-      fetcher: mockFetcher(async () => createFetchResult([])),
-      header: vi.fn(async () => 'col1,col2,col3'),
+    const datasetKey = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS',
     })
-    const secondEntry = createEntry({
+    const entry = createEntry({
       fetcher: mockFetcher(async () => createFetchResult([])),
-      header: vi.fn(async () => 'other_header'),
     })
-    const sut = DatasetGroup.from(
-      'key',
-      DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
-      'Append',
-      [firstEntry, secondEntry]
-    )
+
+    // Act
+    const sut = DatasetGroup.from('my-key', datasetKey, 'Append', [entry])
+
+    // Assert
+    expect(sut.key).toBe('my-key')
+    expect(sut.datasetKey).toBe(datasetKey)
+    expect(sut.operation).toBe('Append')
+    expect(sut.entries).toHaveLength(1)
+  })
+})
+
+describe('createHeaderProvider', () => {
+  it('given entries where first has header, when resolveHeader is called, then returns first non-empty header', async () => {
+    // Arrange
+    const first = createEntry({
+      fetcher: mockFetcher(async () => createFetchResult([])),
+      header: vi.fn(async () => 'col1,col2'),
+    })
+    const second = createEntry({
+      fetcher: mockFetcher(async () => createFetchResult([])),
+      header: vi.fn(async () => 'other'),
+    })
+    const sut = createHeaderProvider([first, second])
 
     // Act
     const result = await sut.resolveHeader()
 
     // Assert
-    expect(result).toBe('col1,col2,col3')
+    expect(result).toBe('col1,col2')
   })
 
-  it('given group where first entry has no header yet, when resolveHeader is called, then returns header from next entry that has one', async () => {
-    // Arrange — simulates the race: first entry's reader hasn't fetched blobs yet
-    const firstEntry = createEntry({
+  it('given entries where first has no header yet, when resolveHeader is called, then returns header from next entry', async () => {
+    // Arrange
+    const first = createEntry({
       fetcher: mockFetcher(async () => createFetchResult([])),
       header: vi.fn(async () => ''),
     })
-    const secondEntry = createEntry({
+    const second = createEntry({
       fetcher: mockFetcher(async () => createFetchResult([])),
-      header: vi.fn(async () => 'col1,col2,col3'),
+      header: vi.fn(async () => 'col1,col2'),
     })
-    const sut = DatasetGroup.from(
-      'key',
-      DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
-      'Append',
-      [firstEntry, secondEntry]
-    )
+    const sut = createHeaderProvider([first, second])
 
     // Act
     const result = await sut.resolveHeader()
 
     // Assert
-    expect(result).toBe('col1,col2,col3')
+    expect(result).toBe('col1,col2')
   })
 
-  it('given empty group, when resolveHeader is called, then throws error', async () => {
+  it('given entries all with empty header, when resolveHeader is called, then returns empty string', async () => {
     // Arrange
-    const sut = DatasetGroup.from(
-      'key',
-      DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
-      'Append',
-      []
-    )
+    const entry = createEntry({
+      fetcher: mockFetcher(async () => createFetchResult([])),
+      header: vi.fn(async () => ''),
+    })
+    const sut = createHeaderProvider([entry])
 
-    // Act & Assert
-    await expect(sut.resolveHeader()).rejects.toThrow(
-      'DatasetGroup has no entries'
-    )
+    // Act
+    const result = await sut.resolveHeader()
+
+    // Assert
+    expect(result).toBe('')
+  })
+
+  it('given no entries, when resolveHeader is called, then returns empty string', async () => {
+    // Arrange
+    const sut = createHeaderProvider([])
+
+    // Act
+    const result = await sut.resolveHeader()
+
+    // Assert
+    expect(result).toBe('')
   })
 })
 
@@ -651,12 +675,18 @@ describe('executePipeline (streaming)', () => {
     const fetcher = mockFetcher(async () =>
       createFetchResult(['"r1"', '"r2"'], watermark)
     )
-    const writer = createMockWriter()
-    const createWriter: CreateWriterPort = {
-      create: vi.fn(() => writer),
-    }
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
+    const createWriter: CreateWriterPort = {
+      create: vi.fn((_ds, _op, listener) => {
+        const writable = new PassThrough({ objectMode: true })
+        writable.on('data', (batch: string[]) =>
+          listener.onRowsWritten(batch.length)
+        )
+        writable.resume()
+        return createMockWriter({ init: vi.fn(async () => writable) })
+      }),
+    }
 
     await executePipeline({
       entries: [createEntry({ fetcher })],

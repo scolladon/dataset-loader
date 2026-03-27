@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AsyncChannel } from '../../../src/adapters/async-channel.js'
+import { AsyncChannel } from '../../../src/adapters/pipeline/async-channel.js'
 
 describe('AsyncChannel', () => {
   it('given no items pushed, when closed then iterated, then yields nothing', async () => {

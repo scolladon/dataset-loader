@@ -4,7 +4,7 @@ import { type Connection } from '@salesforce/core'
 import pLimit from 'p-limit'
 import { type QueryResult, type SalesforcePort } from '../ports/types.js'
 
-export interface SalesforceClientOptions {
+interface SalesforceClientOptions {
   readonly concurrency?: number
   readonly retryBaseDelayMs?: number
 }

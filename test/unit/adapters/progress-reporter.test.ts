@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ProgressReporter } from '../../../src/adapters/progress-reporter.js'
+import { type ProgressListener } from '../../../src/ports/types.js'
 
 describe('ProgressReporter', () => {
   it('given zero total, when creating phase, then returns callable tick, trackGroup and stop', () => {
@@ -112,5 +113,23 @@ describe('ProgressReporter', () => {
     tracker1.stop()
     tracker2.stop()
     phase.stop()
+  })
+
+  it('given active tracker, when onRowsWritten called via listener, then does not throw', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('ds', true)
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
+      onRowsWritten: (count: number) => tracker.addRows(count),
+    }
+
+    // Act
+    const act = () => listener.onRowsWritten(100)
+
+    // Assert
+    expect(act).not.toThrow()
   })
 })

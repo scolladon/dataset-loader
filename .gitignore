@@ -9,3 +9,4 @@ spike/
 profiles/
 crma-load.config.profiling.json
 .crma-load.state.profiling.json
+*.csv

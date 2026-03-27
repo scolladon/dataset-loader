@@ -1,13 +1,13 @@
 import { StringDecoder } from 'node:string_decoder'
-import { Watermark } from '../domain/watermark.js'
+import { Watermark } from '../../domain/watermark.js'
 import {
   type FetchResult,
   type QueryResult,
   type ReaderPort,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
-} from '../ports/types.js'
-import { AsyncChannel } from './async-channel.js'
+} from '../../ports/types.js'
+import { AsyncChannel } from '../pipeline/async-channel.js'
 
 const BATCH_SIZE = 2000
 

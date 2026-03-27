@@ -1,6 +1,5 @@
 import { Org } from '@salesforce/core'
 import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
-import { buildAugmentHeaderSuffix } from '../../adapters/augment-transform.js'
 import {
   type ConfigEntry,
   type ElfEntry,
@@ -10,14 +9,15 @@ import {
   resolveConfig,
   type SObjectEntry,
 } from '../../adapters/config-loader.js'
-import { CsvReader } from '../../adapters/csv-reader.js'
-import { DatasetWriterFactory } from '../../adapters/dataset-writer.js'
-import { ElfReader } from '../../adapters/elf-reader.js'
-import { FileWriterFactory } from '../../adapters/file-writer.js'
+import { buildAugmentHeaderSuffix } from '../../adapters/pipeline/augment-transform.js'
 import { ProgressReporter } from '../../adapters/progress-reporter.js'
+import { CsvReader } from '../../adapters/readers/csv-reader.js'
+import { ElfReader } from '../../adapters/readers/elf-reader.js'
+import { SObjectReader } from '../../adapters/readers/sobject-reader.js'
 import { SalesforceClient } from '../../adapters/sf-client.js'
-import { SObjectReader } from '../../adapters/sobject-reader.js'
 import { FileStateManager } from '../../adapters/state-manager.js'
+import { DatasetWriterFactory } from '../../adapters/writers/dataset-writer.js'
+import { FileWriterFactory } from '../../adapters/writers/file-writer.js'
 import { buildAuditChecks, runAudit } from '../../domain/auditor.js'
 import { DatasetKey } from '../../domain/dataset-key.js'
 import { executePipeline, type PipelineEntry } from '../../domain/pipeline.js'
@@ -33,7 +33,7 @@ import {
   type StatePort,
 } from '../../ports/types.js'
 
-export interface CrmaLoadResult {
+interface CrmaLoadResult {
   entriesProcessed: number
   entriesSkipped: number
   entriesFailed: number
@@ -289,7 +289,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
   }
 
   // Entries sharing the same readerKey share one ReaderPort instance so that header() returns
-  // a valid value for all of them after the single fetch() call made by fanOutEntries.
+  // a valid value for all of them after the shared fetch() call.
   private getOrCreateReader(
     cacheKey: string,
     cache: Map<string, ReaderPort>,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SObjectReader } from '../../../src/adapters/sobject-reader.js'
+import { SObjectReader } from '../../../src/adapters/readers/sobject-reader.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { type SalesforcePort } from '../../../src/ports/types.js'
 

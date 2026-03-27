@@ -1,5 +1,3 @@
-import { Transform, type TransformCallback } from 'node:stream'
-
 function csvQuote(value: string): string {
   return `"${value.replaceAll('"', '""')}"`
 }
@@ -16,13 +14,4 @@ export function buildAugmentHeaderSuffix(
   const keys = Object.keys(columns)
   if (keys.length === 0) return ''
   return ',' + keys.join(',')
-}
-
-export function createAugmentTransform(suffix: string): Transform {
-  return new Transform({
-    objectMode: true,
-    transform(batch: string[], _enc: string, cb: TransformCallback) {
-      cb(null, suffix ? batch.map(line => line + suffix) : batch)
-    },
-  })
 }

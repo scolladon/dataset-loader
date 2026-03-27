@@ -49,6 +49,7 @@ export interface QueryResult<T> {
 
 export type EntryType = 'elf' | 'sobject' | 'csv'
 export type Operation = 'Append' | 'Overwrite'
+export type BatchMiddleware = (batch: string[]) => string[]
 
 export interface FetchResult {
   readonly lines: AsyncIterable<string[]>
@@ -83,6 +84,7 @@ export class SkipDatasetError extends Error {
 export interface ProgressListener {
   onSinkReady(parentId: string): void
   onChunkWritten(): void
+  onRowsWritten(count: number): void
 }
 
 export interface HeaderProvider {

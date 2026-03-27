@@ -1,4 +1,5 @@
 import { finished } from 'node:stream/promises'
+import { constants } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DatasetWriter,
@@ -6,7 +7,7 @@ import {
   GzipChunkingWritable,
   LazyGzipChunkingWritable,
   UPLOAD_HIGH_WATER,
-} from '../../../src/adapters/dataset-writer.js'
+} from '../../../src/adapters/writers/dataset-writer.js'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
   type ProgressListener,
@@ -36,6 +37,19 @@ const dsKey = DatasetKey.fromEntry({
 })
 
 describe('GzipChunkingWritable', () => {
+  it('given new GzipChunkingWritable, when initialized, then uses level 3 compression', () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act
+    const gz = (sut as unknown as { chunk: { gz: { _level: number } } }).chunk
+      .gz
+
+    // Assert
+    expect(gz._level).toBe(3)
+  })
+
   it('given lines written, when stream ends, then uploads one gzipped base64 part', async () => {
     // Arrange
     const sfPort = makeSfPort()
@@ -88,6 +102,7 @@ describe('GzipChunkingWritable', () => {
     const listener: ProgressListener = {
       onSinkReady: vi.fn(),
       onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
     }
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId, listener)
 
@@ -98,6 +113,25 @@ describe('GzipChunkingWritable', () => {
 
     // Assert
     expect(listener.onChunkWritten).toHaveBeenCalled()
+  })
+
+  it('given listener, when batch written, then onRowsWritten called with batch length', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
+    }
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId, listener)
+
+    // Act
+    sut.write(['"a"', '"b"', '"c"'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(listener.onRowsWritten).toHaveBeenCalledWith(3)
   })
 
   it('given no lines written, when stream ends, then no parts uploaded', async () => {
@@ -628,6 +662,7 @@ describe('DatasetWriter', () => {
     const listener: ProgressListener = {
       onSinkReady: vi.fn(),
       onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
     }
 
     // Act
@@ -669,6 +704,7 @@ describe('DatasetWriter', () => {
     const listener: ProgressListener = {
       onSinkReady: vi.fn(),
       onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
     }
 
     // Act
@@ -732,6 +768,7 @@ describe('DatasetWriterFactory', () => {
     const listener: ProgressListener = {
       onSinkReady: vi.fn(),
       onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
     }
     const headerProvider = { resolveHeader: vi.fn() }
     const sut = new DatasetWriterFactory(sfPort)
@@ -758,6 +795,7 @@ describe('DatasetWriterFactory', () => {
     const listener: ProgressListener = {
       onSinkReady: vi.fn(),
       onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
     }
     const headerProvider = { resolveHeader: vi.fn() }
     const sut = new DatasetWriterFactory(sfPort)

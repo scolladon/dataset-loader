@@ -1,12 +1,10 @@
 import { PassThrough, Readable, Writable } from 'node:stream'
 import { finished, pipeline } from 'node:stream/promises'
+import { buildAugmentSuffix } from '../adapters/pipeline/augment-transform.js'
+import { FanInStream } from '../adapters/pipeline/fan-in-stream.js'
+import { createFanOutTransform } from '../adapters/pipeline/fan-out-transform.js'
 import {
-  buildAugmentSuffix,
-  createAugmentTransform,
-} from '../adapters/augment-transform.js'
-import { createFanOutTransform } from '../adapters/fan-out-transform.js'
-import { createRowCounter } from '../adapters/row-counter.js'
-import {
+  type BatchMiddleware,
   type CreateWriterPort,
   type FetchResult,
   formatErrorMessage,
@@ -65,7 +63,7 @@ export function groupByReader(
   return [...map.values()]
 }
 
-export interface PipelineInput {
+interface PipelineInput {
   readonly entries: readonly PipelineEntry[]
   readonly watermarks: WatermarkStore
   readonly createWriter: CreateWriterPort
@@ -74,7 +72,7 @@ export interface PipelineInput {
   readonly logger: LoggerPort
 }
 
-export interface PipelineResult {
+interface PipelineResult {
   readonly entriesProcessed: number
   readonly entriesSkipped: number
   readonly entriesFailed: number
@@ -82,7 +80,7 @@ export interface PipelineResult {
   readonly exitCode: number
 }
 
-export class DatasetGroup implements HeaderProvider {
+export class DatasetGroup {
   private constructor(
     readonly key: string,
     readonly datasetKey: DatasetKey,
@@ -98,15 +96,19 @@ export class DatasetGroup implements HeaderProvider {
   ): DatasetGroup {
     return new DatasetGroup(key, datasetKey, operation, entries)
   }
+}
 
-  async resolveHeader(): Promise<string> {
-    if (this.entries.length === 0)
-      throw new Error('DatasetGroup has no entries')
-    for (const entry of this.entries) {
-      const h = await entry.header()
-      if (h) return h
-    }
-    return ''
+export function createHeaderProvider(
+  entries: readonly PipelineEntry[]
+): HeaderProvider {
+  return {
+    resolveHeader: async () => {
+      for (const entry of entries) {
+        const h = await entry.header()
+        if (h) return h
+      }
+      return ''
+    },
   }
 }
 
@@ -125,11 +127,13 @@ interface GroupResult {
 interface WriterSlot {
   readonly writer: Writer
   readonly chunker: Writable
+  readonly fanIn: FanInStream
   readonly group: DatasetGroup
   readonly tracker: GroupTracker
-  pendingEntries: number
-  entryResults: EntryResult[]
+  readonly entryResults: EntryResult[]
 }
+
+type Sink = { entry: PipelineEntry; slot: WriterSlot; sink: Writable }
 
 export async function executePipeline(
   input: PipelineInput
@@ -150,21 +154,22 @@ export async function executePipeline(
     const listener: ProgressListener = {
       onSinkReady: (id: string) => tracker.updateParentId(id),
       onChunkWritten: () => tracker.incrementParts(),
+      onRowsWritten: (count: number) => tracker.addRows(count),
     }
     const writer = input.createWriter.create(
       group.datasetKey,
       group.operation,
       listener,
-      group
+      createHeaderProvider(group.entries)
     )
     try {
       const chunker = await writer.init()
       slots.set(group.key, {
         writer,
         chunker,
+        fanIn: new FanInStream(chunker, group.entries.length),
         group,
         tracker,
-        pendingEntries: group.entries.length,
         entryResults: [],
       })
     } catch (error) {
@@ -200,11 +205,9 @@ export async function executePipeline(
         bundle.entries.some(e => slots.has(e.datasetKey.toString()))
       )
       .map(bundle =>
-        processBundleEntries(bundle, slots, input, phase).catch(
-          (error: unknown) => {
-            input.logger.warn(`Bundle failed: ${formatErrorMessage(error)}`)
-          }
-        )
+        processBundle(bundle, slots, input, phase).catch((error: unknown) => {
+          input.logger.warn(`Bundle failed: ${formatErrorMessage(error)}`)
+        })
       )
   )
 
@@ -223,60 +226,32 @@ export async function executePipeline(
   return pipelineResult
 }
 
-async function processBundleEntries(
+async function processBundle(
   bundle: ReaderBundle,
-  slots: Map<string, WriterSlot>,
-  input: PipelineInput,
-  phase: Pick<PhaseProgress, 'tick' | 'trackGroup'>
-): Promise<void> {
-  const active = bundle.entries.filter(e => slots.has(e.datasetKey.toString()))
-  if (active.length === 0) return
-
-  if (active.length === 1) {
-    const entry = active[0]
-    const slot = slots.get(entry.datasetKey.toString())!
-    const result = await pipeEntry(
-      entry,
-      input,
-      slot.chunker,
-      phase,
-      slot.tracker
-    )
-    slot.entryResults.push(result)
-  } else {
-    await fanOutEntries(active, bundle.watermark, slots, input, phase)
-  }
-
-  for (const entry of active) {
-    const slot = slots.get(entry.datasetKey.toString())!
-    slot.pendingEntries--
-    if (slot.pendingEntries === 0) {
-      slot.chunker.end()
-      await finished(slot.chunker)
-    }
-  }
-}
-
-interface ChannelOutcome {
-  readonly entry: PipelineEntry
-  readonly slot: WriterSlot
-  readonly ok: boolean
-}
-
-async function fanOutEntries(
-  entries: readonly PipelineEntry[],
-  watermark: Watermark | undefined,
   slots: Map<string, WriterSlot>,
   input: PipelineInput,
   phase: Pick<PhaseProgress, 'tick'>
 ): Promise<void> {
-  // all entries in a fan-out bundle share the same reader key and therefore the same fetcher
+  const active = bundle.entries.filter(e => slots.has(e.datasetKey.toString()))
+  if (active.length === 0) return
+
+  // Create fanIn slots upfront — FanInStream counter must decrement even if fetch fails
+  const sinks = active.map(entry => {
+    const slot = slots.get(entry.datasetKey.toString())!
+    const suffix = buildAugmentSuffix(entry.augmentColumns)
+    const transforms: BatchMiddleware[] = []
+    if (suffix) {
+      transforms.push(batch => batch.map(line => line + suffix))
+    }
+    return { entry, slot, sink: slot.fanIn.createSlot(transforms) }
+  })
+
   let result: FetchResult
   try {
-    result = await entries[0].fetcher.fetch(watermark)
+    result = await active[0].fetcher.fetch(bundle.watermark)
   } catch (err) {
-    for (const entry of entries) {
-      const slot = slots.get(entry.datasetKey.toString())!
+    for (const { entry, slot, sink } of sinks) {
+      sink.destroy()
       input.logger.warn(
         `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
       )
@@ -286,79 +261,90 @@ async function fanOutEntries(
     return
   }
 
-  const channels = entries.map(() => new PassThrough({ objectMode: true }))
+  if (sinks.length === 1) {
+    await pipeSingleEntry(sinks[0], result, input, phase)
+  } else {
+    await pipeFanOutEntries(sinks, result, input, phase)
+  }
+}
 
+async function pipeSingleEntry(
+  { entry, slot, sink }: Sink,
+  result: FetchResult,
+  input: PipelineInput,
+  phase: Pick<PhaseProgress, 'tick'>
+): Promise<void> {
+  await pipeline(Readable.from(result.lines), sink)
+    .then((): void => {
+      slot.entryResults.push(
+        resolveEntryResult(
+          entry,
+          result.fileCount(),
+          result.watermark(),
+          slot.tracker,
+          phase
+        )
+      )
+    })
+    .catch((err: Error): void => {
+      input.logger.warn(
+        `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
+      )
+      slot.entryResults.push({ status: 'failed' })
+    })
+}
+
+async function pipeFanOutEntries(
+  sinks: Sink[],
+  result: FetchResult,
+  input: PipelineInput,
+  phase: Pick<PhaseProgress, 'tick'>
+): Promise<void> {
+  const channels = sinks.map(() => new PassThrough({ objectMode: true }))
   const fanOut = createFanOutTransform(channels, (err, ch) => {
     const idx = channels.indexOf(ch as PassThrough)
     if (idx >= 0) {
       input.logger.warn(
-        `Entry '${entries[idx].label}' fan-out write failed: ${formatErrorMessage(err)}`
+        `Entry '${sinks[idx].entry.label}' fan-out write failed: ${formatErrorMessage(err)}`
       )
     }
   })
-
-  const sourcePipeline = pipeline(Readable.from(result.lines), fanOut).catch(
-    (err: Error) => {
+  await Promise.all([
+    pipeline(Readable.from(result.lines), fanOut).catch((err: Error) => {
       input.logger.warn(`Fan-out source failed: ${formatErrorMessage(err)}`)
       channels.forEach(ch => ch.destroy(err))
-    }
-  )
-
-  const outcomes = await Promise.all([
-    sourcePipeline,
-    ...entries.map((entry, i): Promise<ChannelOutcome> => {
-      const slot = slots.get(entry.datasetKey.toString())!
-      const augmented = createAugmentTransform(
-        buildAugmentSuffix(entry.augmentColumns)
-      )
-      const counted = createRowCounter(slot.tracker)
-      const forwarder = new Writable({
-        objectMode: true,
-        write(line, _enc, cb) {
-          slot.chunker.write(line, cb)
-        },
-      })
-      // Absorb chunker's async 'error' event — already propagated via write callback
-      const absorb = (_err: Error) => {
-        /* absorbed — already propagated via write callback */
-      }
-      slot.chunker.on('error', absorb)
-
-      return pipeline(channels[i], augmented, counted, forwarder)
-        .then((): ChannelOutcome => {
-          slot.chunker.removeListener('error', absorb)
-          return { entry, slot, ok: true }
+    }),
+    ...sinks.map(({ entry, slot, sink }, i) =>
+      pipeline(channels[i], sink)
+        .then((): void => {
+          slot.entryResults.push(
+            resolveEntryResult(
+              entry,
+              result.fileCount(),
+              result.watermark(),
+              slot.tracker,
+              phase
+            )
+          )
         })
-        .catch((err: Error): ChannelOutcome => {
-          slot.chunker.removeListener('error', absorb)
+        .catch((err: Error): void => {
           input.logger.warn(
             `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
           )
-          return { entry, slot, ok: false }
+          slot.entryResults.push({ status: 'failed' })
         })
-    }),
+    ),
   ])
-
-  // Read shared values once — all pipelines (source + channels) are now complete
-  const fileCount = result.fileCount()
-  const wm = result.watermark()
-
-  for (const outcome of outcomes.slice(1) as ChannelOutcome[]) {
-    const { entry, slot, ok } = outcome
-    if (!ok) {
-      slot.entryResults.push({ status: 'failed' })
-      continue
-    }
-    slot.entryResults.push(
-      resolveEntryResult(entry, fileCount, wm, slot.tracker, phase)
-    )
-  }
 }
 
 async function finalizeSlot(
   slot: WriterSlot,
   input: PipelineInput
 ): Promise<GroupResult> {
+  // Wait for chunker to finish — FanInStream owns end() and calls it when all producer slots close
+  await finished(slot.chunker).catch(() => {
+    // chunker errors are already reflected in slot.entryResults
+  })
   try {
     return await finalizeGroup(slot.group, slot.entryResults, slot.writer)
   } catch (error) {
@@ -376,53 +362,6 @@ async function finalizeSlot(
     }
   } finally {
     slot.tracker.stop()
-  }
-}
-
-async function pipeEntry(
-  entry: PipelineEntry,
-  input: PipelineInput,
-  chunker: Writable,
-  phase: { tick: (detail: string) => void },
-  tracker: Pick<GroupTracker, 'addFiles' | 'addRows'>
-): Promise<EntryResult> {
-  try {
-    const watermark = input.watermarks.get(entry.watermarkKey)
-    const result = await entry.fetcher.fetch(watermark)
-
-    const suffix = buildAugmentSuffix(entry.augmentColumns)
-    const source = Readable.from(result.lines)
-    const augmented = createAugmentTransform(suffix)
-    const counted = createRowCounter(tracker)
-    const forwarder = new Writable({
-      objectMode: true,
-      write(line, _enc, cb) {
-        chunker.write(line, cb)
-      },
-    })
-    // Absorb chunker's async 'error' event — already propagated via write callback
-    const absorb = (_err: Error) => {
-      /* absorbed — already propagated via write callback */
-    }
-    chunker.on('error', absorb)
-    try {
-      await pipeline(source, augmented, counted, forwarder)
-    } finally {
-      chunker.removeListener('error', absorb)
-    }
-
-    return resolveEntryResult(
-      entry,
-      result.fileCount(),
-      result.watermark(),
-      tracker,
-      phase
-    )
-  } catch (error) {
-    input.logger.warn(
-      `Entry '${entry.label}' failed: ${formatErrorMessage(error)}`
-    )
-    return { status: 'failed' }
   }
 }
 

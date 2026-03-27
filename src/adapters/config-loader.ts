@@ -10,7 +10,7 @@ import {
   SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../ports/types.js'
 
-export interface BaseEntry {
+interface BaseEntry {
   name?: string
   sourceOrg: string
   targetOrg?: string
@@ -48,7 +48,7 @@ export interface CsvEntry {
 
 export type ConfigEntry = ElfEntry | SObjectEntry | CsvEntry
 
-export interface Config {
+interface Config {
   entries: ConfigEntry[]
 }
 
@@ -290,6 +290,51 @@ function validateNameUniqueness(entries: ConfigEntry[]): void {
   }
 }
 
+function validateAugmentColumnConsistency(entries: ConfigEntry[]): void {
+  const groups = groupEntriesByDatasetKey(entries)
+
+  for (const [, { datasetKey, ops }] of groups) {
+    const groupEntries = ops.flatMap(o => o.indices).map(i => entries[i])
+    if (groupEntries.length < 2) continue
+
+    const firstKeys = Object.keys(groupEntries[0].augmentColumns ?? {})
+      .sort()
+      .join(',')
+    for (const entry of groupEntries.slice(1)) {
+      const keys = Object.keys(entry.augmentColumns ?? {})
+        .sort()
+        .join(',')
+      if (firstKeys !== keys) {
+        throw new Error(
+          `Entries targeting '${datasetKey.toString()}' have different augment column names: [${firstKeys}] vs [${keys}]`
+        )
+      }
+    }
+  }
+}
+
+function validateSObjectFieldConsistency(entries: ConfigEntry[]): void {
+  const groups = groupEntriesByDatasetKey(entries)
+
+  for (const [, { datasetKey, ops }] of groups) {
+    const sobjectEntries = ops
+      .flatMap(o => o.indices)
+      .map(i => entries[i])
+      .filter((e): e is SObjectEntry => e.type === 'sobject')
+    if (sobjectEntries.length < 2) continue
+
+    const firstFields = [...sobjectEntries[0].fields].sort()
+    for (const entry of sobjectEntries.slice(1)) {
+      const fields = [...entry.fields].sort()
+      if (firstFields.join(',') !== fields.join(',')) {
+        throw new Error(
+          `SObject entries targeting '${datasetKey.toString()}' have different fields: [${firstFields}] vs [${fields}]`
+        )
+      }
+    }
+  }
+}
+
 function resolveAugmentColumnsForEntry(
   columns: Record<string, string> | undefined,
   entry: ElfEntry | SObjectEntry,
@@ -321,6 +366,8 @@ export async function parseConfig(configPath: string): Promise<Config> {
   const config: Config = configSchema.parse(JSON.parse(raw))
   validateOperationConsistency(config.entries)
   validateNameUniqueness(config.entries)
+  validateAugmentColumnConsistency(config.entries)
+  validateSObjectFieldConsistency(config.entries)
   return config
 }
 

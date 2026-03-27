@@ -8,16 +8,15 @@ import {
 } from 'node:fs'
 import { dirname } from 'node:path'
 import { Writable } from 'node:stream'
-import { type DatasetKey } from '../domain/dataset-key.js'
+import { type DatasetKey } from '../../domain/dataset-key.js'
 import {
+  type CreateWriterPort,
   type HeaderProvider,
   type Operation,
   type ProgressListener,
   type Writer,
   type WriterResult,
-} from '../ports/types.js'
-
-const NEWLINE = Buffer.from('\n')
+} from '../../ports/types.js'
 
 export class FileWriter implements Writer {
   private fileStream?: WriteStream
@@ -26,7 +25,8 @@ export class FileWriter implements Writer {
   constructor(
     private readonly filePath: string,
     private readonly operation: Operation,
-    private readonly headerProvider: HeaderProvider
+    private readonly headerProvider: HeaderProvider,
+    private readonly listener?: ProgressListener
   ) {}
 
   async init(): Promise<Writable> {
@@ -46,23 +46,26 @@ export class FileWriter implements Writer {
     }
 
     return new Writable({
+      objectMode: true,
       write: (
-        chunk: Buffer,
+        batch: string[],
         _encoding: string,
         callback: (err?: Error | null) => void
       ) => {
-        this.doWrite(chunk).then(() => callback(), callback)
+        this.listener?.onRowsWritten(batch.length)
+        this.doWrite(batch).then(() => callback(), callback)
       },
     })
   }
 
-  private async doWrite(chunk: Buffer): Promise<void> {
+  private async doWrite(batch: string[]): Promise<void> {
+    if (batch.length === 0) return
     if (!this.headerWritten) {
       this.headerWritten = true
       const header = await this.headerProvider.resolveHeader()
       await this.writeToFile(Buffer.from(header + '\n'))
     }
-    await this.writeToFile(Buffer.concat([chunk, NEWLINE]))
+    await this.writeToFile(Buffer.from(batch.join('\n') + '\n'))
   }
 
   private writeToFile(chunk: Buffer): Promise<void> {
@@ -100,13 +103,13 @@ export class FileWriter implements Writer {
   }
 }
 
-export class FileWriterFactory {
+export class FileWriterFactory implements CreateWriterPort {
   create(
     dataset: DatasetKey,
     operation: Operation,
-    _listener: ProgressListener,
+    listener: ProgressListener,
     headerProvider: HeaderProvider
   ): Writer {
-    return new FileWriter(dataset.name, operation, headerProvider)
+    return new FileWriter(dataset.name, operation, headerProvider, listener)
   }
 }

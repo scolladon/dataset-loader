@@ -1,6 +1,6 @@
 import { Writable } from 'node:stream'
-import { createGzip, type Gzip } from 'node:zlib'
-import { type DatasetKey } from '../domain/dataset-key.js'
+import { constants, createGzip, type Gzip } from 'node:zlib'
+import { type DatasetKey } from '../../domain/dataset-key.js'
 import {
   type CreateWriterPort,
   type HeaderProvider,
@@ -11,8 +11,8 @@ import {
   SkipDatasetError,
   type Writer,
   type WriterResult,
-} from '../ports/types.js'
-import { DEFAULT_CONCURRENCY } from './sf-client.js'
+} from '../../ports/types.js'
+import { DEFAULT_CONCURRENCY } from '../sf-client.js'
 
 interface CreateResponse {
   id: string
@@ -30,7 +30,6 @@ interface CrmaMetadata {
 }
 
 const PART_MAX_BYTES = 10 * 1024 * 1024
-const FLUSH_THRESHOLD = 512 * 1024
 export const UPLOAD_HIGH_WATER = DEFAULT_CONCURRENCY
 
 function base64Length(byteCount: number): number {
@@ -79,6 +78,8 @@ export class GzipChunkingWritable extends Writable {
       callback(this.gzError)
       return
     }
+
+    this.listener?.onRowsWritten(batch.length)
 
     let i = 0
 
@@ -130,18 +131,6 @@ export class GzipChunkingWritable extends Writable {
         }
 
         this.writeLineToGz(line)
-
-        if (this.chunk.pendingBytes >= FLUSH_THRESHOLD) {
-          this.chunk.gz.flush(() => {
-            if (this.gzError) {
-              callback(this.gzError)
-              return
-            }
-            this.chunk.pendingBytes = 0
-            loop()
-          })
-          return
-        }
       }
 
       callback()
@@ -181,7 +170,7 @@ export class GzipChunkingWritable extends Writable {
 
   private createChunkState(): GzipChunkState {
     const state: GzipChunkState = {
-      gz: createGzip(),
+      gz: createGzip({ level: 3 }),
       chunks: [],
       compressedSize: 0,
       pendingBytes: 0,

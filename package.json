@@ -37,6 +37,9 @@
       "@oclif/plugin-help"
     ]
   },
+  "knip": {
+    "ignoreDependencies": ["sinon", "@types/sinon"]
+  },
   "scripts": {
     "build": "wireit",
     "clean": "wireit",
@@ -236,18 +239,20 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
+    "@commitlint/cli": "^20.5.0",
     "@commitlint/config-conventional": "^20.4.2",
     "@oclif/plugin-help": "^6.2.37",
-    "@salesforce/cli-plugins-testkit": "^5.3.41",
+    "@salesforce/ts-types": "^2.0.12",
     "@types/cli-progress": "^3.11.6",
     "@types/node": "^22.0.0",
     "@types/sinon": "^21.0.0",
     "@vitest/coverage-v8": "^3.2.4",
     "husky": "^9.1.7",
+    "jscpd": "^4.0.8",
     "knip": "^5.84.1",
     "oclif": "^4.22.79",
     "shx": "^0.4.0",
-    "sinon": "^21.0.2",
+    "sinon": "^21.0.3",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
     "wireit": "^0.14.12"

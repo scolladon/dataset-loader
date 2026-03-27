@@ -1174,4 +1174,163 @@ describe('ConfigLoader', () => {
       ).toBe('sobject:Account')
     })
   })
+
+  describe('augment consistency', () => {
+    it('given two entries sharing DatasetKey with different augment column names, when parsing, then throws', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src1',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+            augmentColumns: { OrgName: 'OrgA' },
+          },
+          {
+            type: 'elf',
+            sourceOrg: 'src2',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+            augmentColumns: { Source: 'OrgB' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /different augment column names/
+      )
+    })
+
+    it('given two entries sharing DatasetKey with same augment column names but different values, when parsing, then succeeds', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src1',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+            augmentColumns: { OrgName: 'OrgA' },
+          },
+          {
+            type: 'elf',
+            sourceOrg: 'src2',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+            augmentColumns: { OrgName: 'OrgB' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries).toHaveLength(2)
+    })
+
+    it('given two sobject entries sharing DatasetKey with different fields, when parsing, then throws', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'sobject',
+            sourceOrg: 'src1',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sobject: 'Account',
+            fields: ['Id', 'Name'],
+          },
+          {
+            type: 'sobject',
+            sourceOrg: 'src2',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sobject: 'Account',
+            fields: ['Id', 'Industry'],
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /different fields/
+      )
+    })
+
+    it('given two sobject entries sharing DatasetKey with same fields, when parsing, then succeeds', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'sobject',
+            sourceOrg: 'src1',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sobject: 'Account',
+            fields: ['Id', 'Name'],
+          },
+          {
+            type: 'sobject',
+            sourceOrg: 'src2',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sobject: 'Account',
+            fields: ['Id', 'Name'],
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries).toHaveLength(2)
+    })
+
+    it('given one entry with augment columns and peer with none targeting same DatasetKey, when parsing, then throws', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src1',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+            augmentColumns: { OrgName: 'OrgA' },
+          },
+          {
+            type: 'elf',
+            sourceOrg: 'src2',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /different augment column names/i
+      )
+    })
+  })
 })

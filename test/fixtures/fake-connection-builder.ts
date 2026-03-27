@@ -11,7 +11,7 @@ interface Route {
 
 const DEFAULT_FALLBACK = { totalSize: 0, done: true, records: [] }
 
-export class RouteAction {
+class RouteAction {
   private readonly commit: (route: Route) => FakeConnectionBuilder
   private readonly methodCheck: ((method: string) => boolean) | null
   private readonly urlIncludes: readonly string[]

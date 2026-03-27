@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { Watermark } from '../domain/watermark.js'
-import { type FetchResult, type ReaderPort } from '../ports/types.js'
+import { Watermark } from '../../domain/watermark.js'
+import { type FetchResult, type ReaderPort } from '../../ports/types.js'
 
 const BATCH_SIZE = 2000
 

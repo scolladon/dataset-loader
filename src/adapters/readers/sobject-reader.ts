@@ -1,5 +1,5 @@
 import { stringify } from 'csv-stringify/sync'
-import { Watermark } from '../domain/watermark.js'
+import { Watermark } from '../../domain/watermark.js'
 import {
   type FetchResult,
   type QueryResult,
@@ -7,9 +7,9 @@ import {
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
   SOQL_RELATIONSHIP_PATH_PATTERN,
-} from '../ports/types.js'
+} from '../../ports/types.js'
 
-export interface SObjectReaderConfig {
+interface SObjectReaderConfig {
   readonly sobject: string
   readonly fields: string[]
   readonly dateField: string

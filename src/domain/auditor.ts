@@ -4,7 +4,7 @@ import {
   type SalesforcePort,
 } from '../ports/types.js'
 
-export interface AuditCheck {
+interface AuditCheck {
   readonly org: string
   readonly label: string
   readonly execute: () => Promise<boolean>
