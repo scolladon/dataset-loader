@@ -80,67 +80,83 @@ export class GzipChunkingWritable extends Writable {
       callback(this.gzError)
       return
     }
-
     this.listener?.onRowsWritten(batch.length)
+    this.writeBatch(batch, 0, callback)
+  }
 
-    let i = 0
-
-    const loop = (): void => {
-      while (i < batch.length) {
-        /* v8 ignore next 4 -- gzip errors are asynchronous; checked before each line as a guard */
-        if (this.gzError) {
-          callback(this.gzError)
-          return
-        }
-        const line = batch[i++]
-        const lineBytes = Buffer.byteLength(line + '\n')
-
-        if (this.wouldExceed(lineBytes)) {
-          this.chunk.gz.flush(() => {
-            /* v8 ignore next 4 -- gzip errors are asynchronous; checked post-flush as a guard */
-            if (this.gzError) {
-              callback(this.gzError)
-              return
-            }
-            this.chunk.pendingBytes = 0
-            if (this.wouldExceed(lineBytes)) {
-              const finished = this.chunk
-              endGzip(finished)
-                .then(async () => {
-                  const compressed = Buffer.concat(finished.chunks)
-                  const upload = this.uploadPart(compressed)
-                  // Auto-remove from pending set on settle; suppress unhandled rejection
-                  // until _final's Promise.all catches it
-                  upload
-                    .finally(() => this.pendingUploads.delete(upload))
-                    .catch(() => {
-                      // Rejection handled by Promise.all in _final
-                    })
-                  this.pendingUploads.add(upload)
-                  this.uploadPromises.push(upload)
-                  if (this.pendingUploads.size >= this.uploadHighWater) {
-                    await Promise.race([...this.pendingUploads])
-                  }
-                  this.chunk = this.createChunkState()
-                  this.writeLineToGz(line)
-                  loop()
-                })
-                .catch((err: Error) => callback(err))
-            } else {
-              this.writeLineToGz(line)
-              loop()
-            }
-          })
-          return
-        }
-
-        this.writeLineToGz(line)
+  private writeBatch(
+    batch: string[],
+    i: number,
+    callback: (error?: Error | null) => void
+  ): void {
+    while (i < batch.length) {
+      /* v8 ignore next 4 -- gzip errors are asynchronous; checked before each line as a guard */
+      if (this.gzError) {
+        callback(this.gzError)
+        return
       }
-
-      callback()
+      const line = batch[i++]
+      const lineBytes = Buffer.byteLength(line + '\n')
+      if (this.wouldExceed(lineBytes)) {
+        this.rotateIfNeeded(line, lineBytes, batch, i, callback)
+        return
+      }
+      this.writeLineToGz(line)
     }
+    callback()
+  }
 
-    loop()
+  private rotateIfNeeded(
+    line: string,
+    lineBytes: number,
+    batch: string[],
+    i: number,
+    callback: (error?: Error | null) => void
+  ): void {
+    this.chunk.gz.flush(() => {
+      /* v8 ignore next 4 -- gzip errors are asynchronous; checked post-flush as a guard */
+      if (this.gzError) {
+        callback(this.gzError)
+        return
+      }
+      this.chunk.pendingBytes = 0
+      if (!this.wouldExceed(lineBytes)) {
+        this.writeLineToGz(line)
+        this.writeBatch(batch, i, callback)
+        return
+      }
+      this.finishAndRotate(line, batch, i, callback)
+    })
+  }
+
+  private finishAndRotate(
+    line: string,
+    batch: string[],
+    i: number,
+    callback: (error?: Error | null) => void
+  ): void {
+    const finished = this.chunk
+    endGzip(finished)
+      .then(async () => {
+        const compressed = Buffer.concat(finished.chunks)
+        const upload = this.uploadPart(compressed)
+        // Auto-remove from pending set on settle; suppress unhandled rejection
+        // until _final's Promise.all catches it
+        upload
+          .finally(() => this.pendingUploads.delete(upload))
+          .catch(() => {
+            // Rejection handled by Promise.all in _final
+          })
+        this.pendingUploads.add(upload)
+        this.uploadPromises.push(upload)
+        if (this.pendingUploads.size >= this.uploadHighWater) {
+          await Promise.race([...this.pendingUploads])
+        }
+        this.chunk = this.createChunkState()
+        this.writeLineToGz(line)
+        this.writeBatch(batch, i, callback)
+      })
+      .catch((err: Error) => callback(err))
   }
 
   private writeLineToGz(line: string): void {

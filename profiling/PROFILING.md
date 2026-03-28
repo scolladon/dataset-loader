@@ -481,3 +481,165 @@ The transport runs in a worker thread (`thread-stream`). On process exit, `signa
 **Can the plugin fix this?** No. The Logger singleton is initialized by the sf CLI before any command `run()` is called. By the time plugin code executes, the thread-stream transport is already running. Setting `SF_DISABLE_LOG_FILE=true` in the environment before launch eliminates it (uses in-memory logger instead), but this is a user/environment concern, not plugin-controllable.
 
 **Is it worth fixing at the sf CLI level?** The 230ms is invisible against network variance (1–3s jitter). It is a fixed constant per process invocation regardless of data volume. Not a target for further optimization.
+
+---
+
+## Post-optimization results — 2026-03-28
+
+### Applied improvements (branch `refactor/performance-tweaks`)
+
+| # | Change | File(s) |
+|---|--------|---------|
+| 1 | Extract `_write` nested closures into named prototype methods (`writeBatch`, `rotateIfNeeded`, `finishAndRotate`) | `src/adapters/writers/dataset-writer.ts` |
+
+Note: `denque` ring buffer was implemented and reverted — see [Denque investigation](#denque-investigation) below.
+
+### Wall-clock results (3 runs)
+
+| Run | Before (2026-03-27) | After |
+|-----|---------------------|-------|
+| 1   | ~35s                | 46s   |
+| 2   | ~36s                | —     |
+| 3   | ~34s                | —     |
+
+Network degraded during this session (~40s → ~50s per run on the 2026-03-27 baseline when re-measured). The 46s run is **within network variance** — wall clock is irreducible network I/O.
+
+Data also grew: state watermark advanced from 2026-03-27 baseline (1.84M rows, ~11 days) to 2.25M rows (~13 days from 2026-03-15), adding ~7% more data and 7 additional parts (42 → 49).
+
+### Instrumented run results (phase + network + memory timing)
+
+**Phase breakdown:**
+
+| Phase | Time | % of pipeline |
+|-------|------|---------------|
+| Phase 1 (writer init + metadata queries) | 270ms | 0.6% |
+| Phase 2 (bundle processing) | 44,281ms | 96.2% |
+| Phase 3 (finalize — drain + PATCH) | 1,487ms | 3.2% |
+| **Total pipeline** | **46,038ms** | — |
+
+**Network call latencies (wait = time in pLimit queue, req = actual HTTP round-trip):**
+
+| Operation | Count | Wait (ms) | Req avg (ms) | Req range (ms) |
+|-----------|-------|-----------|--------------|---------------|
+| GET query (SOQL metadata) | 8 | 0–3 | 193 | 47–331 |
+| GET blob (metadata JSON) | 2 | 0 | 46 | 41–50 |
+| GET stream (ELF blobs, small files) | 14 | 0–5 | 302 | 192–399 |
+| GET stream (ELF blobs, large files) | 11 | 0–5 | 1,571 | 1,372–1,781 |
+| POST InsightsExternalData | 2 | 0 | 193 | 170–215 |
+| POST InsightsExternalDataPart | 50 | 0–16 | 891 | 319–1,803 |
+| PATCH InsightsExternalData | 2 | 0 | 982 | 845–1,118 |
+
+**pLimit saturation**: wait times 0–16ms throughout. pLimit(25) is **never a bottleneck** — the 16ms peak was a momentary burst where all 25 slots were occupied simultaneously.
+
+**Memory:**
+
+| Metric | Value |
+|--------|-------|
+| Peak RSS | 763.0 MB |
+| Final RSS (end of pipeline) | 752.0 MB |
+| Peak heap | ~318 MB |
+| Peak external (Node Buffers) | ~155 MB |
+
+External buffers peak at ~155MB = gzip chunks (up to 10MB × 25 concurrent) + HTTP response buffers.
+
+### Key findings
+
+**Network dominates absolutely.** 50 parts × 891ms avg ÷ 25 concurrent = ~1.8s minimum upload time if perfectly parallelized. But parts are produced sequentially (gzip one chunk at a time) so they stagger out over ~44s. The 11 large ELF blobs also stagger: 11 × 1,571ms serial = ~17s of just blob downloading for the bottleneck bundle.
+
+**Two bottlenecks in Phase 2:**
+1. **ELF blob download rate** — 11 large blobs at 1,372–1,781ms each (serial within each bundle). These drive when parts become available for upload.
+2. **Upload round-trip latency** — 891ms per part, 50 parts, up to 25 concurrent. With staggered production, actual throughput is limited by the pipeline.
+
+**pLimit(25) is appropriately sized.** Wait times confirm headroom even at peak.
+
+**Method extraction (closure → prototype):** no measurable wall-clock impact, as expected. The optimization is GC-pressure/allocation quality, not throughput.
+
+---
+
+## Denque investigation — 2026-03-28 {#denque-investigation}
+
+### Hypothesis
+
+`Array.shift()` in `AsyncChannel` is O(n) — for each dequeue, V8 reindexes all remaining elements. `Denque` (ring buffer, 5M weekly downloads, used by ioredis/bull) offers O(1) push/shift. With 2.25M batches per run, replacing the array should reduce JS CPU.
+
+### Micro-benchmark result
+
+Tight push/shift loop, 1M ops, after JIT warmup:
+
+| Implementation | Time |
+|----------------|------|
+| Denque | 18.6ms |
+| Array | 57.7ms |
+
+3× speedup in isolation.
+
+### Real-workload result
+
+| Run | main (Array) | denque |
+|-----|-------------|--------|
+| 1 | ~40s | 66s |
+| 2 | ~42s | 67s |
+
++26s wall clock (+~8–10s user CPU after controlling for network variance).
+
+### Root cause: V8 cannot optimize Denque
+
+Three compounding factors:
+
+1. **Built-in intrinsics**: `Array.shift()` is a V8 C++ built-in. V8's JIT inlines it and applies SIMD-assisted memory moves for element reindexing. `Denque.shift()` is a JavaScript prototype method in an external CJS module — V8 cannot inline it into the hot `AsyncChannel` loop. Each call crosses a function boundary that prevents the JIT from seeing the loop as a single compilation unit.
+
+2. **HOLEY_ELEMENTS**: Denque v2.1.0 does `this._storage[head] = undefined` after each shift. This creates a sparse internal array that V8 classifies as `HOLEY_ELEMENTS` instead of `PACKED_ELEMENTS`. Holey arrays require slower GC scanning and lose the fast-path element access of packed arrays.
+
+3. **Micro-benchmark deception**: The 3× result measured both implementations in isolation after JIT warmup on tight loops. In production, V8's type feedback system marks the `AsyncChannel` hot path as "requires generic object handling" instead of "known Array fast path", which degrades the surrounding pipeline code. The deoptimization propagates outward, adding ~8–10s of user CPU across 2.25M batches.
+
+### Conclusion
+
+`Array.shift()` is O(n) in theory but for queue depths of 0–16 items, n is tiny and V8's native implementation beats a "theoretically faster" ring buffer that V8 cannot optimize. Denque was reverted. The Array-based queue is the correct choice for this workload.
+
+---
+
+## AsyncChannel queue — further alternatives considered
+
+### Local ring buffer
+
+A ring buffer implemented directly in `AsyncChannel` (no external dependency) avoids the "external module" deoptimization. However the HOLEY_ELEMENTS problem persists: a ring buffer must clear vacated slots (`buf[head] = undefined`) to release references, which transitions V8's internal array from `PACKED_ELEMENTS` to `HOLEY_ELEMENTS`. Skipping the clear would avoid this but requires a type-unsafe sentinel and leaks references until the slot is overwritten. Not worth the complexity for a zero wall-clock payoff.
+
+### Linked list with head/tail pointers
+
+A singly-linked list avoids both Denque failure modes:
+
+- No slot clearing on dequeue (`head = head.next` — old node becomes unreachable and is GC'd naturally) → no HOLEY_ELEMENTS transition
+- Local TypeScript code in the same compilation unit → V8 can inline push/shift
+- Node objects `{ value: T, next: Node | null }` are monomorphic (fixed hidden class) → no hidden-class deoptimization
+
+The trade-off is one heap allocation per `push()`:
+
+```typescript
+push(item: T): ... {
+  const node = { value: item, next: null }  // GC allocation per push
+  if (this.tail) this.tail.next = node
+  else this.head = node
+  this.tail = node
+}
+```
+
+With ~1,125 pushes per run (2.25M rows ÷ 2000 batch size), this adds ~1,125 short-lived object allocations — negligible (GC measured at 24ms total for the entire run).
+
+**The ceiling is the same.** Even granting that a linked list would not regress like Denque, the absolute savings are unmeasurable:
+
+```
+AsyncChannel contributes a fraction of domain code (169ms total)
+Linked list vs Array.shift() on depth 0–3: saves ~20–30ms
+Wall clock: 46,000ms
+Impact: <0.1% — below network jitter floor (±1–3s)
+```
+
+### Decision: keep Array
+
+The Array-based queue is the correct long-term choice — not because it is theoretically fastest, but because:
+
+1. The operation is not the bottleneck (94% of wall clock is Salesforce API I/O)
+2. V8 already fast-paths `Array.shift()` for small packed arrays via native intrinsics
+3. Both alternatives add code complexity for an unmeasurable gain
+4. The linked list is the theoretically cleanest O(1) option and would not regress — but "would not make things worse" is not sufficient justification when the gain is zero
+

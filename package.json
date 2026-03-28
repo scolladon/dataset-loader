@@ -38,7 +38,9 @@
     ]
   },
   "knip": {
-    "ignoreDependencies": ["sinon"]
+    "ignoreDependencies": [
+      "sinon"
+    ]
   },
   "scripts": {
     "build": "wireit",
@@ -60,6 +62,7 @@
     "test:unit": "wireit",
     "test:unit:coverage": "wireit",
     "test:integration": "wireit",
+    "test:mutation": "stryker run",
     "test:watch": "vitest"
   },
   "wireit": {
