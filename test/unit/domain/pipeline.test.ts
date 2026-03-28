@@ -253,6 +253,7 @@ describe('createHeaderProvider', () => {
 
 describe('executePipeline (streaming)', () => {
   it('given entries with data, when executing, then pipes lines into writer and updates watermarks', async () => {
+    // Arrange
     const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher = mockFetcher(async () =>
       createFetchResult(['"v1"', '"v2"'], watermark)
@@ -263,6 +264,7 @@ describe('executePipeline (streaming)', () => {
     }
     const state = createMockState()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -291,12 +293,14 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given empty source (no new records), when executing, then skips entry', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () => createFetchResult([]))
     const writer = createMockWriter()
     const createWriter: CreateWriterPort = {
       create: vi.fn(() => writer),
     }
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -306,6 +310,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesSkipped).toBe(1)
     expect(sut.entriesProcessed).toBe(0)
     expect(writer._writtenLines).toHaveLength(0)
@@ -313,6 +318,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given fetch error, when executing, then counts as failed and aborts writer', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () => {
       throw new Error('network error')
     })
@@ -321,6 +327,7 @@ describe('executePipeline (streaming)', () => {
       create: vi.fn(() => writer),
     }
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -330,6 +337,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(sut.exitCode).toBe(2)
     expect(writer.finalize).not.toHaveBeenCalled()
@@ -337,6 +345,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given source stream errors mid-iteration, when executing, then counts as failed and does not finalize', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () => ({
       lines: (async function* () {
         yield '"v1"'
@@ -351,6 +360,7 @@ describe('executePipeline (streaming)', () => {
     }
     const logger = createMockLogger()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -360,6 +370,7 @@ describe('executePipeline (streaming)', () => {
       logger,
     })
 
+    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(sut.entriesProcessed).toBe(0)
     expect(writer.abort).toHaveBeenCalled()
@@ -404,6 +415,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given two entries same dataset, when executing, then both pipe into same writer', async () => {
+    // Arrange
     const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher1 = mockFetcher(async () => createFetchResult(['"a"'], wm))
     const fetcher2 = mockFetcher(async () => createFetchResult(['"b"'], wm))
@@ -411,7 +423,6 @@ describe('executePipeline (streaming)', () => {
     const createWriter: CreateWriterPort = {
       create: vi.fn(() => writer),
     }
-
     const entry1 = createEntry({ fetcher: fetcher1, index: 0 })
     const entry2 = createEntry({
       fetcher: fetcher2,
@@ -425,6 +436,7 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
+    // Act
     const sut = await executePipeline({
       entries: [entry1, entry2],
       watermarks: WatermarkStore.empty(),
@@ -434,6 +446,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(createWriter.create).toHaveBeenCalledTimes(1)
     expect(writer._writtenLines).toHaveLength(2)
     expect(writer.finalize).toHaveBeenCalledTimes(1)
@@ -442,6 +455,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given augmentColumns, when piping, then lines contain augmented data', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () =>
       createFetchResult(
         ['"001"'],
@@ -453,6 +467,7 @@ describe('executePipeline (streaming)', () => {
       create: vi.fn(() => writer),
     }
 
+    // Act
     await executePipeline({
       entries: [createEntry({ fetcher, augmentColumns: { Org: 'prod' } })],
       watermarks: WatermarkStore.empty(),
@@ -462,11 +477,13 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(writer._writtenLines[0]).toContain('001')
     expect(writer._writtenLines[0]).toContain('prod')
   })
 
   it('given mixed success and failure across datasets, when executing, then partial success with correct exit code', async () => {
+    // Arrange
     const goodFetcher = mockFetcher(async () =>
       createFetchResult(
         ['"v"'],
@@ -476,7 +493,6 @@ describe('executePipeline (streaming)', () => {
     const badFetcher = mockFetcher(async () => {
       throw new Error('fail')
     })
-
     const goodWriter = createMockWriter()
     const badWriter = createMockWriter()
     const createWriter: CreateWriterPort = {
@@ -484,7 +500,6 @@ describe('executePipeline (streaming)', () => {
         dataset.name === 'DS' ? goodWriter : badWriter
       ),
     }
-
     const goodEntry = createEntry({
       fetcher: goodFetcher,
       index: 0,
@@ -507,6 +522,7 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
+    // Act
     const sut = await executePipeline({
       entries: [goodEntry, badEntry],
       watermarks: WatermarkStore.empty(),
@@ -516,12 +532,14 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesProcessed).toBe(1)
     expect(sut.entriesFailed).toBe(1)
     expect(sut.exitCode).toBe(1)
   })
 
   it('given writer.finalize throws, when executing, then catches group error and counts all entries as failed', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () =>
       createFetchResult(
         ['"v"'],
@@ -538,6 +556,7 @@ describe('executePipeline (streaming)', () => {
     }
     const logger = createMockLogger()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -547,6 +566,7 @@ describe('executePipeline (streaming)', () => {
       logger,
     })
 
+    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(sut.entriesProcessed).toBe(0)
     expect(sut.exitCode).toBe(2)
@@ -557,6 +577,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given all entries fail, when executing, then exit code is 2', async () => {
+    // Arrange
     const badFetcher = mockFetcher(async () => {
       throw new Error('fail')
     })
@@ -565,6 +586,7 @@ describe('executePipeline (streaming)', () => {
       create: vi.fn(() => writer),
     }
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher: badFetcher })],
       watermarks: WatermarkStore.empty(),
@@ -574,12 +596,14 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(sut.exitCode).toBe(2)
     expect(writer.abort).toHaveBeenCalled()
   })
 
   it('given entry with data and no watermark returned, when executing, then processes without storing watermark', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () => createFetchResult(['"v"']))
     const writer = createMockWriter()
     const createWriter: CreateWriterPort = {
@@ -587,6 +611,7 @@ describe('executePipeline (streaming)', () => {
     }
     const state = createMockState()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -596,6 +621,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesProcessed).toBe(1)
     expect(writer.finalize).toHaveBeenCalled()
     const writtenStore: WatermarkStore = (
@@ -611,6 +637,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given single empty entry, when executing, then calls skip (not abort) and writes state', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () => createFetchResult([]))
     const writer = createMockWriter()
     const createWriter: CreateWriterPort = {
@@ -618,6 +645,7 @@ describe('executePipeline (streaming)', () => {
     }
     const state = createMockState()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -627,6 +655,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesSkipped).toBe(1)
     expect(sut.groupsUploaded).toBe(0)
     expect(writer.finalize).not.toHaveBeenCalled()
@@ -636,6 +665,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given writer.abort throws during error handling, when executing, then still counts entries as failed', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () =>
       createFetchResult(
         ['"v"'],
@@ -655,6 +685,7 @@ describe('executePipeline (streaming)', () => {
     }
     const logger = createMockLogger()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -664,6 +695,7 @@ describe('executePipeline (streaming)', () => {
       logger,
     })
 
+    // Assert
     expect(sut.entriesFailed).toBe(1)
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('abort also failed')
@@ -671,6 +703,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given entries with data, when executing, then reports files and rows to tracker', async () => {
+    // Arrange
     const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher = mockFetcher(async () =>
       createFetchResult(['"r1"', '"r2"'], watermark)
@@ -688,6 +721,7 @@ describe('executePipeline (streaming)', () => {
       }),
     }
 
+    // Act
     await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -697,6 +731,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(tracker.addFiles).toHaveBeenCalledWith(1)
     expect(tracker.addFiles).toHaveBeenCalledTimes(1)
     expect(tracker.addRows).toHaveBeenCalledWith(2)
@@ -704,6 +739,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given progress listener wired, when writer invokes onSinkReady during init, then updates tracker parentId', async () => {
+    // Arrange
     const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher = mockFetcher(async () =>
       createFetchResult(['"v"'], watermark)
@@ -723,6 +759,7 @@ describe('executePipeline (streaming)', () => {
       }),
     }
 
+    // Act
     await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -732,10 +769,43 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(tracker.updateParentId).toHaveBeenCalledWith('06Vxxx')
   })
 
+  it('given progress listener wired, when writer invokes onChunkWritten, then increments tracker parts', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(['"v"'], watermark)
+    )
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+    const createWriter: CreateWriterPort = {
+      create: vi.fn((_ds, _op, listener) => {
+        const writable = new PassThrough({ objectMode: true })
+        writable.on('data', () => listener.onChunkWritten())
+        writable.resume()
+        return createMockWriter({ init: vi.fn(async () => writable) })
+      }),
+    }
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.incrementParts).toHaveBeenCalled()
+  })
+
   it('given writer.init throws SkipDatasetError, when executing, then warns and skips all entries', async () => {
+    // Arrange
     const fetcher = mockFetcher(async () => createFetchResult(['"data"']))
     const skipWriter = createMockWriter({
       init: vi.fn(async () => {
@@ -747,6 +817,7 @@ describe('executePipeline (streaming)', () => {
     }
     const logger = createMockLogger()
 
+    // Act
     const sut = await executePipeline({
       entries: [createEntry({ fetcher })],
       watermarks: WatermarkStore.empty(),
@@ -756,6 +827,7 @@ describe('executePipeline (streaming)', () => {
       logger,
     })
 
+    // Assert
     expect(sut.entriesSkipped).toBe(1)
     expect(sut.entriesFailed).toBe(0)
     expect(logger.warn).toHaveBeenCalledWith(
@@ -766,6 +838,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given multiple entries piping concurrently, when all finish, then all lines written and finalize called once', async () => {
+    // Arrange
     const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher1 = mockFetcher(async () =>
       createFetchResult(['row_a1', 'row_a2'], wm)
@@ -775,7 +848,6 @@ describe('executePipeline (streaming)', () => {
     const createWriter: CreateWriterPort = {
       create: vi.fn(() => writer),
     }
-
     const entry1 = createEntry({ fetcher: fetcher1, index: 0 })
     const entry2 = createEntry({
       fetcher: fetcher2,
@@ -790,6 +862,7 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
+    // Act
     const sut = await executePipeline({
       entries: [entry1, entry2],
       watermarks: WatermarkStore.empty(),
@@ -799,6 +872,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(writer._writtenLines).toHaveLength(3)
     expect(writer._writtenLines).toEqual(
       expect.arrayContaining(['row_a1', 'row_a2', 'row_b1'])
@@ -810,6 +884,7 @@ describe('executePipeline (streaming)', () => {
   })
 
   it('given partial failure within group, when executing, then aborts entire group', async () => {
+    // Arrange
     const goodFetcher = mockFetcher(async () =>
       createFetchResult(
         ['"v"'],
@@ -823,7 +898,6 @@ describe('executePipeline (streaming)', () => {
     const createWriter: CreateWriterPort = {
       create: vi.fn(() => writer),
     }
-
     const goodEntry = createEntry({ fetcher: goodFetcher, index: 0 })
     const badEntry = createEntry({
       fetcher: badFetcher,
@@ -838,6 +912,7 @@ describe('executePipeline (streaming)', () => {
       }),
     })
 
+    // Act
     const sut = await executePipeline({
       entries: [goodEntry, badEntry],
       watermarks: WatermarkStore.empty(),
@@ -847,6 +922,7 @@ describe('executePipeline (streaming)', () => {
       logger: createMockLogger(),
     })
 
+    // Assert
     expect(sut.entriesFailed).toBe(2)
     expect(sut.entriesProcessed).toBe(0)
     expect(writer.abort).toHaveBeenCalled()
@@ -1018,6 +1094,73 @@ describe('executePipeline (streaming)', () => {
     expect(writer2.finalize).not.toHaveBeenCalled()
   })
 
+  it('given two entries sharing readerKey where one sink write fails, when pipeline executes, then logs fan-out channel write error', async () => {
+    // Arrange
+    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const wmKey = WatermarkKey.fromEntry({
+      type: 'elf',
+      sourceOrg: 'prod',
+      eventType: 'Login',
+      interval: 'Daily',
+    })
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(
+        ['"a","1"\n'],
+        Watermark.fromString('2024-01-02T00:00:00.000Z')
+      )
+    )
+    const writer1 = createMockWriter()
+    const { Writable } = await import('node:stream')
+    const errorWritable = new Writable({
+      objectMode: true,
+      write(_chunk, _enc, cb) {
+        cb(new Error('sink write failure'))
+      },
+    })
+    const writer2 = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const entry1 = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'e1',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
+      augmentColumns: {},
+    })
+    const entry2 = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'e2',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
+      augmentColumns: {},
+    })
+    const mockCreateWriter = vi
+      .fn()
+      .mockReturnValueOnce(writer1)
+      .mockReturnValueOnce(writer2)
+    const logger = createMockLogger()
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: mockCreateWriter },
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert — fan-out channel error logged, only entry2 failed
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('fan-out write failed')
+    )
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.entriesProcessed).toBe(1)
+  })
+
   it('given two entries with same readerKey but different watermarks, when pipeline executes, then fetch called twice', async () => {
     // Arrange
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
@@ -1070,6 +1213,581 @@ describe('executePipeline (streaming)', () => {
 
     // Assert — diverged watermarks → no dedup
     expect(fetcher.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('given writer.init throws generic error, when executing, then counts entry as failed and calls abort', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => createFetchResult(['"data"']))
+    const writer = createMockWriter({
+      init: vi.fn(async () => {
+        throw new Error('init crashed')
+      }),
+    })
+    const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
+    const logger = createMockLogger()
+
+    // Act
+    const sut = await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert — covers the non-SkipDatasetError else-branch (pipeline.ts:186-197)
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.exitCode).toBe(2)
+    expect(writer.abort).toHaveBeenCalled()
+  })
+
+  it('given writer.init throws generic error and abort also throws, when executing, then logs debug for abort failure', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => createFetchResult(['"data"']))
+    const writer = createMockWriter({
+      init: vi.fn(async () => {
+        throw new Error('init crashed')
+      }),
+      abort: vi.fn(async () => {
+        throw new Error('abort also crashed')
+      }),
+    })
+    const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
+    const logger = createMockLogger()
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert — covers the .catch() in abort() call (pipeline.ts:188-190)
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('abort also crashed')
+    )
+  })
+
+  it('given entry with CRMA target org, when executing, then trackGroup is called with org true', async () => {
+    // Arrange — kills L152: org !== undefined → false
+    const trackGroup = vi.fn(() => createMockGroupTracker())
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({ tick: vi.fn(), trackGroup, stop: vi.fn() })),
+    }
+    const fetcher = mockFetcher(async () => createFetchResult([]))
+    const entry = createEntry({
+      fetcher,
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS',
+      }),
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(trackGroup).toHaveBeenCalledWith('DS', true)
+  })
+
+  it('given entry with file target (no targetOrg), when executing, then trackGroup is called with org false', async () => {
+    // Arrange — kills L152: org !== undefined → true (inverted)
+    const trackGroup = vi.fn(() => createMockGroupTracker())
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({ tick: vi.fn(), trackGroup, stop: vi.fn() })),
+    }
+    const fetcher = mockFetcher(async () => createFetchResult([]))
+    const entry = createEntry({
+      fetcher,
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(trackGroup).toHaveBeenCalledWith('./out.csv', false)
+  })
+
+  it('given group with one processed and one skipped entry, when executing, then finalizes and counts correctly', async () => {
+    // Arrange — kills L379 some→every and L394 arithmetic (- skipped → + skipped)
+    const datasetKey = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS',
+    })
+    const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const entry1 = createEntryWithReader(
+      ReaderKey.forElf('src', 'Login', 'Daily'),
+      {
+        index: 0,
+        label: 'elf:Login',
+        fetcher: mockFetcher(async () => createFetchResult(['"v"'], wm)),
+        watermarkKey: WatermarkKey.fromEntry({
+          type: 'elf',
+          sourceOrg: 'src',
+          eventType: 'Login',
+          interval: 'Daily',
+        }),
+        datasetKey,
+        augmentColumns: {},
+      }
+    )
+    const entry2 = createEntryWithReader(
+      ReaderKey.forElf('src', 'Logout', 'Daily'),
+      {
+        index: 1,
+        label: 'elf:Logout',
+        fetcher: mockFetcher(async () => createFetchResult([])),
+        watermarkKey: WatermarkKey.fromEntry({
+          type: 'elf',
+          sourceOrg: 'src',
+          eventType: 'Logout',
+          interval: 'Daily',
+        }),
+        datasetKey,
+        augmentColumns: {},
+      }
+    )
+    const writer = createMockWriter()
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => writer) },
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(writer.finalize).toHaveBeenCalledTimes(1)
+    expect(sut.entriesProcessed).toBe(1)
+    expect(sut.entriesSkipped).toBe(1)
+  })
+
+  it('given group with one failed and one skipped entry, when executing, then aborts and counts correctly', async () => {
+    // Arrange — kills L386: group.entries.length - skipped → + skipped (2+1=3 vs 2-1=1)
+    const datasetKey = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS',
+    })
+    const entry1 = createEntryWithReader(
+      ReaderKey.forElf('src', 'Login', 'Daily'),
+      {
+        index: 0,
+        label: 'elf:Login',
+        fetcher: mockFetcher(async () => {
+          throw new Error('fetch failed')
+        }),
+        watermarkKey: WatermarkKey.fromEntry({
+          type: 'elf',
+          sourceOrg: 'src',
+          eventType: 'Login',
+          interval: 'Daily',
+        }),
+        datasetKey,
+        augmentColumns: {},
+      }
+    )
+    const entry2 = createEntryWithReader(
+      ReaderKey.forElf('src', 'Logout', 'Daily'),
+      {
+        index: 1,
+        label: 'elf:Logout',
+        fetcher: mockFetcher(async () => createFetchResult([])),
+        watermarkKey: WatermarkKey.fromEntry({
+          type: 'elf',
+          sourceOrg: 'src',
+          eventType: 'Logout',
+          interval: 'Daily',
+        }),
+        datasetKey,
+        augmentColumns: {},
+      }
+    )
+    const writer = createMockWriter()
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => writer) },
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(writer.abort).toHaveBeenCalledTimes(1)
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.entriesSkipped).toBe(1)
+  })
+
+  it('given two entries sharing readerKey where first sink write fails, when pipeline executes, then logs first entry label in fan-out error', async () => {
+    // Arrange — kills L308: idx >= 0 → idx > 0 (index 0 never logged with mutation)
+    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const wmKey = WatermarkKey.fromEntry({
+      type: 'elf',
+      sourceOrg: 'prod',
+      eventType: 'Login',
+      interval: 'Daily',
+    })
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(
+        ['"a"'],
+        Watermark.fromString('2024-01-02T00:00:00.000Z')
+      )
+    )
+    const { Writable } = await import('node:stream')
+    const errorWritable = new Writable({
+      objectMode: true,
+      write(_chunk, _enc, cb) {
+        cb(new Error('sink write failure'))
+      },
+    })
+    const writer1 = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const writer2 = createMockWriter()
+    const entry1 = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'e1',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
+      augmentColumns: {},
+    })
+    const entry2 = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'e2',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
+      augmentColumns: {},
+    })
+    const mockCreateWriter = vi
+      .fn()
+      .mockReturnValueOnce(writer1)
+      .mockReturnValueOnce(writer2)
+    const logger = createMockLogger()
+
+    // Act
+    await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: mockCreateWriter },
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert — fan-out channel 0 error logged with entry1's label
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Entry 'e1' fan-out write failed")
+    )
+  })
+
+  it('given entries, when executing, then stops the group tracker after finalizing each slot', async () => {
+    // Arrange — kills L367: finally { slot.tracker.stop() } → {}
+    const tracker = createMockGroupTracker()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick: vi.fn(),
+        trackGroup: vi.fn(() => tracker),
+        stop: vi.fn(),
+      })),
+    }
+    const entry = createEntry({
+      fetcher: mockFetcher(async () => createFetchResult([])),
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — tracker.stop() must be called once per group in the finally block
+    expect(tracker.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('given entries, when executing, then creates progress phase with Processing label and entry count', async () => {
+    // Arrange — kills L143 StringLiteral: 'Processing' → ''
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick: vi.fn(),
+        trackGroup: vi.fn(() => createMockGroupTracker()),
+        stop: vi.fn(),
+      })),
+    }
+    const entries = [
+      createEntry({ fetcher: mockFetcher(async () => createFetchResult([])) }),
+      createEntry({ fetcher: mockFetcher(async () => createFetchResult([])) }),
+    ]
+
+    // Act
+    await executePipeline({
+      entries,
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — progress.create called with 'Processing' and total entry count
+    expect(progress.create).toHaveBeenCalledWith('Processing', 2)
+  })
+
+  it('given fetch error, when executing, then warns with entry label and error message and ticks failed status', async () => {
+    // Arrange — kills L258 (warn template) and L260 (tick template)
+    const tick = vi.fn()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick,
+        trackGroup: vi.fn(() => createMockGroupTracker()),
+        stop: vi.fn(),
+      })),
+    }
+    const logger = createMockLogger()
+    const fetcher = mockFetcher(async () => {
+      throw new Error('network error')
+    })
+    const entry = createEntry({ fetcher, label: 'elf:Login', index: 3 })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger,
+    })
+
+    // Assert — warn includes entry label and error; tick includes 'failed'
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Entry 'elf:Login' failed:")
+    )
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('network error')
+    )
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('failed'))
+  })
+
+  it('given empty source, when executing, then ticks with skipped message including entry label', async () => {
+    // Arrange — kills L482 StringLiteral: tick template → ''
+    const tick = vi.fn()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick,
+        trackGroup: vi.fn(() => createMockGroupTracker()),
+        stop: vi.fn(),
+      })),
+    }
+    const entry = createEntry({
+      fetcher: mockFetcher(async () => createFetchResult([])),
+      label: 'elf:Login',
+      index: 0,
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — tick called with skipped message referencing entry
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('skipped'))
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('elf:Login'))
+  })
+
+  it('given entries with data, when executing, then ticks with done message including entry label', async () => {
+    // Arrange — kills L485 StringLiteral: tick template → ''
+    const tick = vi.fn()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick,
+        trackGroup: vi.fn(() => createMockGroupTracker()),
+        stop: vi.fn(),
+      })),
+    }
+    const entry = createEntry({
+      fetcher: mockFetcher(async () =>
+        createFetchResult(
+          ['"v1"'],
+          Watermark.fromString('2026-03-01T00:00:00.000Z')
+        )
+      ),
+      label: 'elf:Login',
+      index: 0,
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — tick called with done message referencing entry
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('done'))
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('elf:Login'))
+  })
+
+  it('given shared-reader entries with source stream error, when executing, then warns Fan-out source failed', async () => {
+    // Arrange — kills L316 StringLiteral: 'Fan-out source failed: ...' → ''
+    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const wmKey = WatermarkKey.fromEntry({
+      type: 'elf',
+      sourceOrg: 'prod',
+      eventType: 'Login',
+      interval: 'Daily',
+    })
+    const errorFetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield '"a"\n'
+        throw new Error('mid-stream failure')
+      })(),
+      watermark: () => undefined,
+      fileCount: () => 1,
+    }))
+    const logger = createMockLogger()
+    const entry1 = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'e1',
+      fetcher: errorFetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
+      augmentColumns: {},
+    })
+    const entry2 = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'e2',
+      fetcher: errorFetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
+      augmentColumns: {},
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: {
+        create: vi
+          .fn()
+          .mockReturnValueOnce(createMockWriter())
+          .mockReturnValueOnce(createMockWriter()),
+      },
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert — fan-out source error logged
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Fan-out source failed')
+    )
+  })
+
+  it('given shared-reader entries where one sink fails, when executing, then warns with entry-specific failure message', async () => {
+    // Arrange — kills L334 StringLiteral: "Entry '...' failed: ..." → ''
+    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const wmKey = WatermarkKey.fromEntry({
+      type: 'elf',
+      sourceOrg: 'prod',
+      eventType: 'Login',
+      interval: 'Daily',
+    })
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(
+        ['"a"\n'],
+        Watermark.fromString('2024-01-02T00:00:00.000Z')
+      )
+    )
+    const { Writable } = await import('node:stream')
+    const errorWritable = new Writable({
+      objectMode: true,
+      write(_chunk, _enc, cb) {
+        cb(new Error('sink write failure'))
+      },
+    })
+    const writer2 = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const logger = createMockLogger()
+    const entry1 = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'e1',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS1',
+      }),
+      augmentColumns: {},
+    })
+    const entry2 = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'e2',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
+      augmentColumns: {},
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: {
+        create: vi
+          .fn()
+          .mockReturnValueOnce(createMockWriter())
+          .mockReturnValueOnce(writer2),
+      },
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger,
+    })
+
+    // Assert — warn includes entry label and "failed:" (not "fan-out write failed")
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Entry 'e2' failed:")
+    )
   })
 })
 

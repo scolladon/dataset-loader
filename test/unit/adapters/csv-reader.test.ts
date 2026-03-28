@@ -3,6 +3,7 @@ import { Readable } from 'node:stream'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CsvReader } from '../../../src/adapters/readers/csv-reader.js'
 import { Watermark } from '../../../src/domain/watermark.js'
+import { collectLines } from '../../fixtures/collect-lines.js'
 
 vi.mock('node:fs', () => ({
   createReadStream: vi.fn(),
@@ -12,14 +13,6 @@ import { createReadStream } from 'node:fs'
 
 function makeStream(content: string): ReadStream {
   return Readable.from(Buffer.from(content)) as unknown as ReadStream
-}
-
-async function collectLines(
-  iterable: AsyncIterable<string[]>
-): Promise<string[]> {
-  const lines: string[] = []
-  for await (const batch of iterable) lines.push(...batch)
-  return lines
 }
 
 describe('CsvReader', () => {
@@ -125,7 +118,6 @@ describe('CsvReader', () => {
 
       // Assert — verify against the domain's own validator, not an inline regex
       const wm = result.watermark()
-      expect(wm).toBeDefined()
       expect(() => Watermark.fromString(wm!.toString())).not.toThrow()
     })
 
@@ -157,6 +149,38 @@ describe('CsvReader', () => {
       // Assert
       expect(lines).toHaveLength(0)
       expect(result.fileCount()).toBe(1)
+    })
+
+    it('given file with more than BATCH_SIZE rows, when fetching, then yields multiple batches', async () => {
+      // Arrange: 2001 data rows exceeds BATCH_SIZE=2000, triggering a mid-loop yield
+      const rows = Array.from({ length: 2001 }, (_, i) => `row${i}`)
+      const content = `header\n${rows.join('\n')}\n`
+      vi.mocked(createReadStream).mockReturnValue(makeStream(content))
+      const sut = new CsvReader('./data/large.csv')
+
+      // Act
+      const result = await sut.fetch()
+      const batches: string[][] = []
+      for await (const batch of result.lines) batches.push(batch)
+
+      // Assert — kills >= → > mutation: with > only 1 batch of 2001 rows
+      expect(batches).toHaveLength(2)
+      expect(batches[0]).toHaveLength(2000)
+      expect(batches[1]).toHaveLength(1)
+    })
+
+    it('given header-only file, when fetching, then yields no batches', async () => {
+      // Arrange
+      vi.mocked(createReadStream).mockReturnValue(makeStream('header\n'))
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      const batches: string[][] = []
+      for await (const batch of result.lines) batches.push(batch)
+
+      // Assert — kills `batch.length > 0` → `>= 0` mutation (would yield empty batch)
+      expect(batches).toHaveLength(0)
     })
 
     it('given non-existent file, when fetching and iterating lines, then throws', async () => {

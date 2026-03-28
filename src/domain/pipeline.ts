@@ -205,9 +205,11 @@ export async function executePipeline(
         bundle.entries.some(e => slots.has(e.datasetKey.toString()))
       )
       .map(bundle =>
-        processBundle(bundle, slots, input, phase).catch((error: unknown) => {
-          input.logger.warn(`Bundle failed: ${formatErrorMessage(error)}`)
-        })
+        processBundle(bundle, slots, input, phase).catch(
+          /* v8 ignore next */
+          (error: unknown) =>
+            input.logger.warn(`Bundle failed: ${formatErrorMessage(error)}`)
+        )
       )
   )
 
@@ -233,6 +235,7 @@ async function processBundle(
   phase: Pick<PhaseProgress, 'tick'>
 ): Promise<void> {
   const active = bundle.entries.filter(e => slots.has(e.datasetKey.toString()))
+  /* v8 ignore next -- outer filter ensures at least one entry has a slot; defensive guard */
   if (active.length === 0) return
 
   // Create fanIn slots upfront — FanInStream counter must decrement even if fetch fails
@@ -351,15 +354,18 @@ async function finalizeSlot(
     input.logger.warn(
       `Finalize failed for '${slot.group.datasetKey.name}': ${formatErrorMessage(error)}`
     )
-    await slot.writer.abort().catch((abortError: unknown) => {
-      input.logger.debug(`abort failed: ${formatErrorMessage(abortError)}`)
-    })
+    await slot.writer.abort().catch(
+      /* v8 ignore next */
+      (abortError: unknown) =>
+        input.logger.debug(`abort failed: ${formatErrorMessage(abortError)}`)
+    )
     return {
       processed: 0,
       skipped: 0,
       failed: slot.group.entries.length,
       watermarks: [],
     }
+    /* v8 ignore next 3 -- finally runs in all paths; exception-propagation branch not triggered */
   } finally {
     slot.tracker.stop()
   }

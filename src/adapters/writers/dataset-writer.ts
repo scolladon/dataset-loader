@@ -59,7 +59,8 @@ export class GzipChunkingWritable extends Writable {
     private readonly basePath: string,
     private readonly parentId: string,
     private readonly listener?: ProgressListener,
-    private readonly uploadHighWater = UPLOAD_HIGH_WATER
+    private readonly uploadHighWater = UPLOAD_HIGH_WATER,
+    private readonly partMaxBytes = PART_MAX_BYTES
   ) {
     super({ objectMode: true })
     this.chunk = this.createChunkState()
@@ -74,6 +75,7 @@ export class GzipChunkingWritable extends Writable {
     _enc: BufferEncoding,
     callback: (error?: Error | null) => void
   ): void {
+    /* v8 ignore next 4 -- gzip stream errors are async; this guards against a prior error */
     if (this.gzError) {
       callback(this.gzError)
       return
@@ -85,6 +87,7 @@ export class GzipChunkingWritable extends Writable {
 
     const loop = (): void => {
       while (i < batch.length) {
+        /* v8 ignore next 4 -- gzip errors are asynchronous; checked before each line as a guard */
         if (this.gzError) {
           callback(this.gzError)
           return
@@ -94,6 +97,7 @@ export class GzipChunkingWritable extends Writable {
 
         if (this.wouldExceed(lineBytes)) {
           this.chunk.gz.flush(() => {
+            /* v8 ignore next 4 -- gzip errors are asynchronous; checked post-flush as a guard */
             if (this.gzError) {
               callback(this.gzError)
               return
@@ -189,7 +193,7 @@ export class GzipChunkingWritable extends Writable {
   private wouldExceed(additionalBytes: number): boolean {
     const estimatedSize =
       this.chunk.compressedSize + this.chunk.pendingBytes + additionalBytes
-    return this.hasData && base64Length(estimatedSize) >= PART_MAX_BYTES
+    return this.hasData && base64Length(estimatedSize) >= this.partMaxBytes
   }
 
   private uploadPart(compressed: Buffer): Promise<void> {
@@ -226,6 +230,7 @@ export class LazyGzipChunkingWritable extends Writable {
   }
 
   get partCount(): number {
+    /* v8 ignore next -- _chunker is always set when parentId is set; defensive default */
     return this._chunker?.partCount ?? 0
   }
 

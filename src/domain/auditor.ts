@@ -96,6 +96,7 @@ export async function runAudit(
   const results = await Promise.allSettled(promises)
 
   for (const result of results) {
+    /* v8 ignore next -- allSettled always fulfills since each promise has .catch() */
     if (result.status !== 'fulfilled') continue
     const { check, passed } = result.value
     logger.info(`  [${passed ? 'PASS' : 'FAIL'}] ${check.label}`)

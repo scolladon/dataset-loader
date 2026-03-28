@@ -38,7 +38,7 @@
     ]
   },
   "knip": {
-    "ignoreDependencies": ["sinon", "@types/sinon"]
+    "ignoreDependencies": ["sinon"]
   },
   "scripts": {
     "build": "wireit",
@@ -243,9 +243,10 @@
     "@commitlint/config-conventional": "^20.4.2",
     "@oclif/plugin-help": "^6.2.37",
     "@salesforce/ts-types": "^2.0.12",
+    "@stryker-mutator/core": "^9.6.0",
+    "@stryker-mutator/vitest-runner": "^9.6.0",
     "@types/cli-progress": "^3.11.6",
     "@types/node": "^22.0.0",
-    "@types/sinon": "^21.0.0",
     "@vitest/coverage-v8": "^3.2.4",
     "husky": "^9.1.7",
     "jscpd": "^4.0.8",

@@ -58,6 +58,62 @@ describe('createFanOutTransform', () => {
     expect(ch.listenerCount('error')).toBeLessThanOrEqual(2)
   })
 
+  it('given channel emits error while blocked on backpressure, when writing, then onChannelError is called via .catch handler', async () => {
+    // Arrange: highWaterMark=0 so ch1.write() immediately returns false (backpressure)
+    const ch1 = new PassThrough({ objectMode: true, highWaterMark: 0 })
+    ch1.on('error', () => {
+      /* noop */
+    }) // prevent unhandled error event
+
+    const capturedErrors: Error[] = []
+    const sut = createFanOutTransform([ch1], err => capturedErrors.push(err))
+
+    // Act: start pipeline — write returns false → promiseWrite registers once('error', onError)
+    const pipePromise = pipeline(Readable.from([['item1']]), sut).catch(() => {
+      /* noop */
+    })
+
+    // Wait for promiseWrite to have registered its error listener
+    await new Promise<void>(resolve => setImmediate(resolve))
+
+    // Destroy ch1 BEFORE drain fires — triggers onError (lines 11-13) then .catch (lines 40-41)
+    ch1.destroy(new Error('error during backpressure'))
+
+    await pipePromise
+
+    // Assert: onChannelError was called (covers lines 40-41 in the .catch handler)
+    expect(capturedErrors.length).toBeGreaterThanOrEqual(1)
+    expect(
+      capturedErrors.some(e => e.message === 'error during backpressure')
+    ).toBe(true)
+    // Kills L11 StringLiteral: mutation uses stream.off("", onDrain) which leaves
+    // the 'drain' listener registered; the original correctly removes it on error
+    expect(ch1.listenerCount('drain')).toBe(0)
+  })
+
+  it('given channel closes before pipeline runs, when pipeline runs, then only active channel receives data', async () => {
+    // Arrange — kills ch.once('close', () => active.delete(ch)) mutation:
+    // without close handler, ch1 stays in active; writing to destroyed ch1 errors
+    const ch1 = new PassThrough({ objectMode: true })
+    const ch2 = new PassThrough({ objectMode: true })
+    const errors: Error[] = []
+    const sut = createFanOutTransform([ch1, ch2], err => errors.push(err))
+    const p2 = collect(ch2)
+
+    // Destroy ch1 and wait for 'close' to fire → active.delete(ch1) executes
+    ch1.resume() // switch to flowing mode so readable side drains and 'close' can fire
+    ch1.destroy()
+    await new Promise<void>(resolve => ch1.once('close', resolve))
+
+    // Act: pipeline only writes to ch2 (ch1 removed from active)
+    await pipeline(Readable.from([['a', 'b'], ['c']]), sut)
+    const r2 = await p2
+
+    // Assert — no error thrown; ch2 received all batches
+    expect(r2).toEqual(['a', 'b', 'c'])
+    expect(errors).toHaveLength(0)
+  })
+
   it('given one channel errors, when source emits batches, then onChannelError is called and other channel still receives all lines', async () => {
     // Arrange
     const ch1 = new PassThrough({ objectMode: true })

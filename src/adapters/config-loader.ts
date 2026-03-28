@@ -345,6 +345,7 @@ function resolveAugmentColumnsForEntry(
 
   const getOrgInfo = (alias: string): OrgInfo => {
     const info = orgInfos.get(alias)
+    /* v8 ignore next -- orgInfos is built from the same entries; missing alias is a programming error */
     if (!info) throw new Error(`Org info not resolved for '${alias}'`)
     return info
   }

@@ -105,7 +105,9 @@ describe('ConfigLoader', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ entries: [] }))
 
       // Act & Assert
-      await expect(loadConfig('config.json', new Map())).rejects.toThrow()
+      await expect(loadConfig('config.json', new Map())).rejects.toThrow(
+        /Too small/
+      )
     })
 
     it('given missing required fields, when loading, then throws validation error', async () => {
@@ -115,7 +117,9 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(loadConfig('config.json', new Map())).rejects.toThrow()
+      await expect(loadConfig('config.json', new Map())).rejects.toThrow(
+        /Invalid input/
+      )
     })
 
     it('given sobject entry with relationship traversal field Owner.Name, when parsing, then accepts the config', async () => {
@@ -135,7 +139,32 @@ describe('ConfigLoader', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
       // Act & Assert
-      await expect(parseConfig('config.json')).resolves.toBeDefined()
+      await expect(parseConfig('config.json')).resolves.toMatchObject({
+        entries: [{ type: 'sobject' }],
+      })
+    })
+
+    it('given sobject entry with invalid SOQL field path, when parsing, then rejects with field path message', async () => {
+      // Arrange — kills L72: soqlRelationshipPath error message '' vs specific text
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'sobject',
+              sourceOrg: 'source',
+              targetOrg: 'analytic',
+              targetDataset: 'DS_Account',
+              sobject: 'Account',
+              fields: ['@invalid!field'],
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be a valid SOQL field or relationship path'
+      )
     })
 
     it('given invalid orgAlias with colons, when parsing, then rejects', async () => {
@@ -155,7 +184,9 @@ describe('ConfigLoader', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be a valid org alias'
+      )
     })
 
     it('given invalid sfIdentifier starting with number, when parsing, then rejects', async () => {
@@ -175,7 +206,9 @@ describe('ConfigLoader', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be a valid Salesforce identifier'
+      )
     })
 
     it('given ELF config with name field, when parsing, then preserves name in entry', async () => {
@@ -220,7 +253,9 @@ describe('ConfigLoader', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be alphanumeric'
+      )
     })
 
     it('given invalid interval value, when parsing, then rejects', async () => {
@@ -240,7 +275,7 @@ describe('ConfigLoader', () => {
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(/Invalid option/)
     })
 
     it('given sobject entry with where and limit, when parsing, then accepts', async () => {
@@ -447,160 +482,333 @@ describe('ConfigLoader', () => {
     })
   })
 
-  describe('Given file-target entry (no targetOrg)', () => {
-    describe('When parsing valid config', () => {
-      it('Then parses successfully with file path as targetFile', async () => {
-        // Arrange
-        const config = {
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              eventType: 'Login',
-              interval: 'Daily',
-              targetFile: './output/login.csv',
-            },
-          ],
-        }
-        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+  it('given file-target entry (no targetOrg), when parsing valid config, then parses successfully with file path as targetFile', async () => {
+    // Arrange
+    const config = {
+      entries: [
+        {
+          type: 'elf',
+          sourceOrg: 'src-org',
+          eventType: 'Login',
+          interval: 'Daily',
+          targetFile: './output/login.csv',
+        },
+      ],
+    }
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
-        // Act & Assert
-        await expect(parseConfig('config.json')).resolves.not.toThrow()
-      })
-    })
-
-    it('given augmentColumns key with dot notation, when parsing ELF entry, then accepts it', async () => {
-      // Arrange
-      vi.mocked(fs.readFile).mockResolvedValue(
-        JSON.stringify({
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              targetOrg: 'target-org',
-              targetDataset: 'MyDataset',
-              eventType: 'Login',
-              interval: 'Daily',
-              augmentColumns: { 'Org.Name': 'MyOrg' },
-            },
-          ],
-        })
-      )
-
-      // Act
-      const sut = await parseConfig('config.json')
-
-      // Assert
-      expect(sut.entries[0].type).toBe('elf')
-    })
-
-    it('given {{targetOrg.Id}} in augmentColumns when no targetOrg, when parsing, then rejects', async () => {
-      // Arrange
-      vi.mocked(fs.readFile).mockResolvedValue(
-        JSON.stringify({
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              eventType: 'Login',
-              interval: 'Daily',
-              targetFile: './output/login.csv',
-              augmentColumns: { Org: '{{targetOrg.Id}}' },
-            },
-          ],
-        })
-      )
-
-      // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow(/targetOrg/)
-    })
-
-    describe('When augmentColumns reference {{targetOrg.*}}', () => {
-      it('Then throws validation error', async () => {
-        // Arrange
-        const config = {
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              eventType: 'Login',
-              interval: 'Daily',
-              targetFile: './output/login.csv',
-              augmentColumns: { Org: '{{targetOrg.Id}}' },
-            },
-          ],
-        }
-        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
-
-        // Act & Assert
-        await expect(parseConfig('config.json')).rejects.toThrow(/targetOrg/)
-      })
+    // Act & Assert
+    await expect(parseConfig('config.json')).resolves.toMatchObject({
+      entries: [{ type: 'elf', targetFile: './output/login.csv' }],
     })
   })
 
-  describe('Given org-target entry (targetOrg present)', () => {
-    describe('When targetDataset uses SF identifier', () => {
-      it('Then parses successfully', async () => {
-        // Arrange
-        const config = {
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              targetOrg: 'my-org',
-              targetDataset: 'LoginEvents',
-              eventType: 'Login',
-              interval: 'Daily',
-            },
-          ],
-        }
-        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
-
-        // Act & Assert
-        await expect(parseConfig('config.json')).resolves.not.toThrow()
+  it('given elf entry without operation, when parsing, then defaults to Append', async () => {
+    // Arrange — kills L130: operation default 'Append' → ''
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            targetOrg: 'my-org',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+          },
+        ],
       })
-    })
+    )
 
-    describe('When targetOrg set but targetDataset missing', () => {
-      it('Then throws validation error', async () => {
-        // Arrange
-        const config = {
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              targetOrg: 'my-org',
-              eventType: 'Login',
-              interval: 'Daily',
-            },
-          ],
-        }
-        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+    // Act
+    const sut = await parseConfig('config.json')
 
-        // Act & Assert
-        await expect(parseConfig('config.json')).rejects.toThrow()
+    // Assert
+    expect(sut.entries[0].operation).toBe('Append')
+  })
+
+  it('given elf entry with Hourly interval, when parsing, then accepts it', async () => {
+    // Arrange — kills L151: enum ['Daily', ''] would reject 'Hourly'
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            targetOrg: 'my-org',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Hourly',
+          },
+        ],
       })
-    })
+    )
 
-    describe('When neither targetOrg nor targetFile set', () => {
-      it('Then throws validation error', async () => {
-        // Arrange
-        const config = {
-          entries: [
-            {
-              type: 'elf',
-              sourceOrg: 'src-org',
-              eventType: 'Login',
-              interval: 'Daily',
-            },
-          ],
-        }
-        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+    // Act
+    const sut = await parseConfig('config.json')
 
-        // Act & Assert
-        await expect(parseConfig('config.json')).rejects.toThrow()
+    // Assert
+    expect(sut.entries[0]).toMatchObject({ interval: 'Hourly' })
+  })
+
+  it('given file-target entry with plain augmentColumns, when parsing, then accepts without mustache error', async () => {
+    // Arrange — kills L137: if (true) always validates MUSTACHE_TARGETORG, even for plain values
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            eventType: 'Login',
+            interval: 'Daily',
+            targetFile: './output/login.csv',
+            augmentColumns: { OrgName: 'StaticValue' },
+          },
+        ],
       })
+    )
+
+    // Act
+    const sut = await parseConfig('config.json')
+
+    // Assert — with L137 mutation, the plain value triggers a ZodError
+    expect(sut.entries).toHaveLength(1)
+  })
+
+  it('given elf entry {{targetOrg.Id}} in augmentColumns when no targetOrg, when parsing, then error path starts with augmentColumns', async () => {
+    // Arrange — kills L141 path: ['augmentColumns', key] → []
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            eventType: 'Login',
+            interval: 'Daily',
+            targetFile: './output/login.csv',
+            augmentColumns: { OrgId: '{{targetOrg.Id}}' },
+          },
+        ],
+      })
+    )
+
+    // Act
+    const error = await parseConfig('config.json').catch((e: unknown) => e)
+
+    // Assert
+    expect(
+      (error as { issues: Array<{ path: string[] }> }).issues.some(i =>
+        i.path.includes('augmentColumns')
+      )
+    ).toBe(true)
+  })
+
+  it('given augmentColumns key with dot notation, when parsing ELF entry, then accepts it', async () => {
+    // Arrange
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            targetOrg: 'target-org',
+            targetDataset: 'MyDataset',
+            eventType: 'Login',
+            interval: 'Daily',
+            augmentColumns: { 'Org.Name': 'MyOrg' },
+          },
+        ],
+      })
+    )
+
+    // Act
+    const sut = await parseConfig('config.json')
+
+    // Assert
+    expect(sut.entries[0].type).toBe('elf')
+  })
+
+  it('given {{targetOrg.Id}} in augmentColumns when no targetOrg, when parsing, then rejects', async () => {
+    // Arrange
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            eventType: 'Login',
+            interval: 'Daily',
+            targetFile: './output/login.csv',
+            augmentColumns: { Org: '{{targetOrg.Id}}' },
+          },
+        ],
+      })
+    )
+
+    // Act & Assert
+    await expect(parseConfig('config.json')).rejects.toThrow(/targetOrg/)
+  })
+
+  it('given org-target entry with valid SF identifier as targetDataset, when parsing, then parses successfully', async () => {
+    // Arrange
+    const config = {
+      entries: [
+        {
+          type: 'elf',
+          sourceOrg: 'src-org',
+          targetOrg: 'my-org',
+          targetDataset: 'LoginEvents',
+          eventType: 'Login',
+          interval: 'Daily',
+        },
+      ],
+    }
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+    // Act & Assert
+    await expect(parseConfig('config.json')).resolves.toMatchObject({
+      entries: [{ type: 'elf', targetDataset: 'LoginEvents' }],
     })
+  })
+
+  it('given org-target entry with targetOrg but missing targetDataset, when parsing, then throws validation error', async () => {
+    // Arrange
+    const config = {
+      entries: [
+        {
+          type: 'elf',
+          sourceOrg: 'src-org',
+          targetOrg: 'my-org',
+          eventType: 'Login',
+          interval: 'Daily',
+        },
+      ],
+    }
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+    // Act & Assert
+    await expect(parseConfig('config.json')).rejects.toThrow(
+      'targetDataset is required when targetOrg is set'
+    )
+  })
+
+  it('given org-target entry with both targetOrg and targetFile, when parsing, then throws validation error', async () => {
+    // Arrange
+    const config = {
+      entries: [
+        {
+          type: 'elf',
+          sourceOrg: 'src-org',
+          targetOrg: 'my-org',
+          targetFile: './output.csv',
+          targetDataset: 'DS',
+          eventType: 'Login',
+          interval: 'Daily',
+        },
+      ],
+    }
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+    // Act & Assert
+    await expect(parseConfig('config.json')).rejects.toThrow(
+      /Cannot specify both/
+    )
+  })
+
+  it('given org-target entry with targetFile and targetDataset but no targetOrg, when parsing, then throws validation error', async () => {
+    // Arrange
+    const config = {
+      entries: [
+        {
+          type: 'elf',
+          sourceOrg: 'src-org',
+          targetFile: './output.csv',
+          targetDataset: 'DS',
+          eventType: 'Login',
+          interval: 'Daily',
+        },
+      ],
+    }
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+    // Act & Assert — kills L117: message '' still contains 'targetDataset' via path in ZodError JSON,
+    // but the exact message text is absent
+    await expect(parseConfig('config.json')).rejects.toThrow(
+      'targetDataset requires targetOrg to be set'
+    )
+  })
+
+  it('given org-target entry with targetOrg but no targetDataset, when parsing, then error path includes targetDataset', async () => {
+    // Arrange
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            targetOrg: 'my-org',
+            eventType: 'Login',
+            interval: 'Daily',
+          },
+        ],
+      })
+    )
+
+    // Act — kills L111 path: ['targetDataset'] → []: path mutation keeps message but drops the path field
+    const error = await parseConfig('config.json').catch((e: unknown) => e)
+
+    // Assert
+    expect(
+      (error as { issues: Array<{ path: string[] }> }).issues.some(i =>
+        i.path.includes('targetDataset')
+      )
+    ).toBe(true)
+  })
+
+  it('given org-target entry with targetDataset but no targetOrg, when parsing, then error path includes targetDataset', async () => {
+    // Arrange
+    vi.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        entries: [
+          {
+            type: 'elf',
+            sourceOrg: 'src-org',
+            targetFile: './output.csv',
+            targetDataset: 'DS',
+            eventType: 'Login',
+            interval: 'Daily',
+          },
+        ],
+      })
+    )
+
+    // Act — kills L118 path: ['targetDataset'] → []
+    const error = await parseConfig('config.json').catch((e: unknown) => e)
+
+    // Assert
+    expect(
+      (error as { issues: Array<{ path: string[] }> }).issues.some(i =>
+        i.path.includes('targetDataset')
+      )
+    ).toBe(true)
+  })
+
+  it('given org-target entry with neither targetOrg nor targetFile, when parsing, then throws validation error', async () => {
+    // Arrange
+    const config = {
+      entries: [
+        {
+          type: 'elf',
+          sourceOrg: 'src-org',
+          eventType: 'Login',
+          interval: 'Daily',
+        },
+      ],
+    }
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+    // Act & Assert
+    await expect(parseConfig('config.json')).rejects.toThrow('Either targetOrg')
   })
 
   describe('CSV entry', () => {
@@ -668,7 +876,7 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(/Too small/)
     })
 
     it('given CSV config with {{sourceOrg.Id}} in augmentColumns value, when parsing, then rejects', async () => {
@@ -687,7 +895,9 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'dynamic expression'
+      )
     })
 
     it('given CSV config with {{targetOrg.Name}} in augmentColumns value, when parsing, then rejects', async () => {
@@ -706,7 +916,9 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'dynamic expression'
+      )
     })
 
     it('given CSV config with static augmentColumns value, when parsing, then accepts it as literal', async () => {
@@ -725,7 +937,9 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert — any plain string is accepted as-is
-      await expect(parseConfig('config.json')).resolves.toBeDefined()
+      await expect(parseConfig('config.json')).resolves.toMatchObject({
+        entries: [{ type: 'csv' }],
+      })
     })
 
     it('given augmentColumns key with dot notation, when parsing, then accepts it', async () => {
@@ -788,7 +1002,9 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be a valid Salesforce identifier'
+      )
     })
 
     it('given CSV config with absolute sourceFile, when parsing, then accepts', async () => {
@@ -806,7 +1022,9 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(parseConfig('config.json')).resolves.toBeDefined()
+      await expect(parseConfig('config.json')).resolves.toMatchObject({
+        entries: [{ type: 'csv' }],
+      })
     })
 
     it('given CSV config with path traversal in sourceFile, when parsing, then rejects', async () => {
@@ -824,7 +1042,60 @@ describe('ConfigLoader', () => {
       )
 
       // Act & Assert
-      await expect(parseConfig('config.json')).rejects.toThrow()
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'sourceFile must not traverse parent directories'
+      )
+    })
+
+    it('given CSV config with explicit operation Append, when parsing, then accepts it', async () => {
+      // Arrange — kills L178: z.enum(['', 'Overwrite']) rejects explicit 'Append'
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              sourceFile: './data/login-events.csv',
+              targetFile: './out/login-events.csv',
+              operation: 'Append',
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0].type).toBe('csv')
+      if (sut.entries[0].type === 'csv') {
+        expect(sut.entries[0].operation).toBe('Append')
+      }
+    })
+
+    it('given CSV config with {{sourceOrg.Id}} in augmentColumns, when parsing, then error path starts with augmentColumns', async () => {
+      // Arrange — kills L193 path: ['augmentColumns', key] → []
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              sourceFile: './data/login-events.csv',
+              targetFile: './out/login-events.csv',
+              augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
+            },
+          ],
+        })
+      )
+
+      // Act
+      const error = await parseConfig('config.json').catch((e: unknown) => e)
+
+      // Assert
+      expect(
+        (error as { issues: Array<{ path: string[] }> }).issues.some(i =>
+          i.path.includes('augmentColumns')
+        )
+      ).toBe(true)
     })
   })
 
@@ -855,6 +1126,10 @@ describe('ConfigLoader', () => {
 
       // Assert
       expect(sut[0].augmentColumns).toEqual({ OrgId: '00Dsrc' })
+      // Kills L388: query('') — empty string doesn't select org info
+      expect(sfPorts.get('source')!.query).toHaveBeenCalledWith(
+        'SELECT Id, Name FROM Organization LIMIT 1'
+      )
     })
 
     it('given mixed static and {{sourceOrg.Name}} in value, when loading, then interpolates', async () => {
@@ -1098,6 +1373,27 @@ describe('ConfigLoader', () => {
       expect(sut[0].augmentColumns).toEqual({ Source: 'manual' })
     })
 
+    it('given CSV entry without augmentColumns, when resolving, then defaults to empty object', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'csv',
+              sourceFile: './data/login-events.csv',
+              targetFile: './out/login-events.csv',
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await loadConfig('config.json', new Map())
+
+      // Assert — augmentColumns ?? {} branch
+      expect(sut[0].augmentColumns).toEqual({})
+    })
+
     it('given CSV entry, when resolving, then augmentColumns are literal values (no dynamic resolution)', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
@@ -1123,55 +1419,63 @@ describe('ConfigLoader', () => {
 
   describe('entryLabel', () => {
     it('given CSV entry without name, when getting label, then returns csv-prefixed sourceFile', () => {
-      expect(
-        entryLabel({
-          type: 'csv',
-          sourceFile: './data/login.csv',
-          targetFile: './out/login.csv',
-          operation: 'Append',
-        })
-      ).toBe('csv:./data/login.csv')
+      // Arrange / Act
+      const sut = entryLabel({
+        type: 'csv',
+        sourceFile: './data/login.csv',
+        targetFile: './out/login.csv',
+        operation: 'Append',
+      })
+
+      // Assert
+      expect(sut).toBe('csv:./data/login.csv')
     })
 
     it('given CSV entry with name, when getting label, then returns name', () => {
-      expect(
-        entryLabel({
-          type: 'csv',
-          sourceFile: './data/login.csv',
-          targetFile: './out/login.csv',
-          operation: 'Append',
-          name: 'login-data',
-        })
-      ).toBe('login-data')
+      // Arrange / Act
+      const sut = entryLabel({
+        type: 'csv',
+        sourceFile: './data/login.csv',
+        targetFile: './out/login.csv',
+        operation: 'Append',
+        name: 'login-data',
+      })
+
+      // Assert
+      expect(sut).toBe('login-data')
     })
 
     it('given ELF entry without name, when getting label, then returns elf-prefixed eventType', () => {
-      expect(
-        entryLabel({
-          type: 'elf',
-          sourceOrg: 'prod',
-          eventType: 'Login',
-          interval: 'Daily',
-          targetOrg: 'my-org',
-          targetDataset: 'LoginEvents',
-          operation: 'Append',
-        })
-      ).toBe('elf:Login')
+      // Arrange / Act
+      const sut = entryLabel({
+        type: 'elf',
+        sourceOrg: 'prod',
+        eventType: 'Login',
+        interval: 'Daily',
+        targetOrg: 'my-org',
+        targetDataset: 'LoginEvents',
+        operation: 'Append',
+      })
+
+      // Assert
+      expect(sut).toBe('elf:Login')
     })
 
     it('given SObject entry without name, when getting label, then returns sobject-prefixed sobject', () => {
-      expect(
-        entryLabel({
-          type: 'sobject',
-          sourceOrg: 'prod',
-          sobject: 'Account',
-          fields: ['Id'],
-          dateField: 'LastModifiedDate',
-          targetOrg: 'my-org',
-          targetDataset: 'Accounts',
-          operation: 'Append',
-        })
-      ).toBe('sobject:Account')
+      // Arrange / Act
+      const sut = entryLabel({
+        type: 'sobject',
+        sourceOrg: 'prod',
+        sobject: 'Account',
+        fields: ['Id'],
+        dateField: 'LastModifiedDate',
+        targetOrg: 'my-org',
+        targetDataset: 'Accounts',
+        operation: 'Append',
+      })
+
+      // Assert
+      expect(sut).toBe('sobject:Account')
     })
   })
 
@@ -1331,6 +1635,253 @@ describe('ConfigLoader', () => {
       await expect(parseConfig('config.json')).rejects.toThrow(
         /different augment column names/i
       )
+    })
+  })
+
+  describe('regex boundary validation', () => {
+    it('given augmentColumns key starting with a digit, when parsing, then rejects with CRMA column name error', async () => {
+      // Arrange — kills L77 regex ^-anchor removal: without ^, '1abc' matches [a-zA-Z_][a-zA-Z0-9_.]*$
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'Login',
+              interval: 'Daily',
+              augmentColumns: { '1InvalidKey': 'value' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be a valid CRMA column name'
+      )
+    })
+
+    it('given augmentColumns key ending with a special character, when parsing, then rejects with CRMA column name error', async () => {
+      // Arrange — kills L77 regex $-anchor removal: without $, 'col!' matches ^[a-zA-Z_][a-zA-Z0-9_.]*
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'Login',
+              interval: 'Daily',
+              augmentColumns: { 'col!': 'value' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be a valid CRMA column name'
+      )
+    })
+
+    it('given entry name starting with a special character, when parsing, then rejects with alphanumeric error', async () => {
+      // Arrange — kills L86 regex ^-anchor removal: without ^, '!valid' matches [a-zA-Z0-9_-]+$
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              name: '!valid-name',
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'Login',
+              interval: 'Daily',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Must be alphanumeric'
+      )
+    })
+  })
+
+  describe('validateOperationConsistency error detail', () => {
+    it('given conflicting operations, when parsing, then error message contains operation names', async () => {
+      // Arrange — kills L269 ArrowFunction → () => undefined (loses operation names in detail)
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E1',
+              interval: 'Daily',
+              operation: 'Append',
+            },
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E2',
+              interval: 'Daily',
+              operation: 'Overwrite',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow("'Append'")
+    })
+
+    it('given conflicting operations, when parsing, then error message contains " vs " separator', async () => {
+      // Arrange — kills L270 StringLiteral '' → ' vs ' (detail loses separator)
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E1',
+              interval: 'Daily',
+              operation: 'Append',
+            },
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E2',
+              interval: 'Daily',
+              operation: 'Overwrite',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(' vs ')
+    })
+
+    it('given three entries where two share same operation, when parsing, then error lists indices with comma separator', async () => {
+      // Arrange — kills L269:63 StringLiteral: join(', ') → join('')
+      // Two Append entries (indices 0 and 2) conflict with one Overwrite entry (index 1)
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E1',
+              interval: 'Daily',
+              operation: 'Append',
+            },
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E2',
+              interval: 'Daily',
+              operation: 'Overwrite',
+            },
+            {
+              type: 'elf',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'E3',
+              interval: 'Daily',
+              operation: 'Append',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert — indices 0 and 2 both have Append; format is "0, 2" not "02"
+      await expect(parseConfig('config.json')).rejects.toThrow('0, 2')
+    })
+  })
+
+  describe('augmentColumn key sort consistency', () => {
+    it('given two entries with same augment keys in different insertion order, when parsing, then succeeds', async () => {
+      // Arrange — kills L300/L303/L304 sort removal mutations:
+      // without .sort(), keys in different insertion order would not compare equal
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'elf',
+              sourceOrg: 'src1',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'Login',
+              interval: 'Daily',
+              augmentColumns: { B: 'orgA', A: 'extra' },
+            },
+            {
+              type: 'elf',
+              sourceOrg: 'src2',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventType: 'Login',
+              interval: 'Daily',
+              augmentColumns: { B: 'orgB', A: 'extra' },
+            },
+          ],
+        })
+      )
+
+      // Act & Assert — same keys A and B, just in different order → should succeed
+      const sut = await parseConfig('config.json')
+      expect(sut.entries).toHaveLength(2)
+    })
+  })
+
+  describe('sobject field sort consistency', () => {
+    it('given two sobject entries with same fields in different order, when parsing, then succeeds', async () => {
+      // Arrange — kills L326/L327/L328 sort removal mutations:
+      // without .sort(), fields in different insertion order would not compare equal
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              type: 'sobject',
+              sourceOrg: 'src1',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sobject: 'Account',
+              fields: ['Name', 'Id'],
+            },
+            {
+              type: 'sobject',
+              sourceOrg: 'src2',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sobject: 'Account',
+              fields: ['Name', 'Id'],
+            },
+          ],
+        })
+      )
+
+      // Act & Assert — same fields [Name, Id], just in different order → should succeed
+      const sut = await parseConfig('config.json')
+      expect(sut.entries).toHaveLength(2)
     })
   })
 })

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   formatErrorMessage,
   SF_IDENTIFIER_PATTERN,
+  SkipDatasetError,
+  SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../../../src/ports/types.js'
 
 describe('SF_IDENTIFIER_PATTERN', () => {
@@ -102,6 +104,45 @@ describe('SF_IDENTIFIER_PATTERN', () => {
 
     // Assert
     expect(result).toBe(true)
+  })
+})
+
+describe('SOQL_RELATIONSHIP_PATH_PATTERN', () => {
+  it('given simple field name, when testing, then matches', () => {
+    expect(SOQL_RELATIONSHIP_PATH_PATTERN.test('Name')).toBe(true)
+  })
+
+  it('given relationship path, when testing, then matches', () => {
+    expect(SOQL_RELATIONSHIP_PATH_PATTERN.test('Account.Name')).toBe(true)
+  })
+
+  it('given string starting with digit before valid path, when testing, then does not match', () => {
+    // Kills missing ^ anchor mutation: without ^, '123Account' matches 'Account' in the middle
+    expect(SOQL_RELATIONSHIP_PATH_PATTERN.test('123Account')).toBe(false)
+  })
+
+  it('given empty string, when testing, then does not match', () => {
+    expect(SOQL_RELATIONSHIP_PATH_PATTERN.test('')).toBe(false)
+  })
+})
+
+describe('SkipDatasetError', () => {
+  it('given SkipDatasetError, when constructed, then name is SkipDatasetError', () => {
+    // Arrange / Act
+    const sut = new SkipDatasetError('skip this dataset')
+
+    // Assert — kills 'SkipDatasetError' string literal mutation
+    expect(sut.name).toBe('SkipDatasetError')
+  })
+
+  it('given SkipDatasetError, when constructed, then message is preserved', () => {
+    const sut = new SkipDatasetError('skip reason')
+    expect(sut.message).toBe('skip reason')
+  })
+
+  it('given SkipDatasetError, when instanceof checked, then is an Error', () => {
+    const sut = new SkipDatasetError('test')
+    expect(sut instanceof Error).toBe(true)
   })
 })
 

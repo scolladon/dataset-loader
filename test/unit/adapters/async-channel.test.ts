@@ -192,6 +192,22 @@ describe('AsyncChannel', () => {
     ).rejects.toThrow('fail first')
   })
 
+  it('given producers stalled at capacity, when close called, then all pending pushes resolve', async () => {
+    // Arrange: highWater=1 → queue(length=1) >= 1 → first push stalls immediately
+    const sut = new AsyncChannel<string>(1)
+    const push1 = sut.push('a')
+    const push2 = sut.push('b')
+
+    // Act — close while both producers are waiting in waitingProducers
+    sut.close()
+
+    // Assert — both blocked pushes resolve (not reject)
+    await expect(Promise.all([push1, push2])).resolves.toEqual([
+      undefined,
+      undefined,
+    ])
+  })
+
   it('given highWater of 1, when first item pushed without waiting consumer, then producer stalls immediately', async () => {
     // Arrange — highWater=1: queue.length(1) < 1 is false, so first push stalls
     const sut = new AsyncChannel<string>(1)

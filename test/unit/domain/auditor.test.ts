@@ -98,18 +98,20 @@ describe('buildAuditChecks', () => {
   })
 
   it('given sfPorts map missing an org entry, when executing check, then check returns false', async () => {
+    // Arrange
     const entries = [
       { type: 'elf' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
     ]
     const sfPorts = new Map<string, SalesforcePort>()
-
     const checks = buildAuditChecks(entries, sfPorts)
     const authCheck = checks.find(
       c => c.org === 'srcA' && c.label.includes('auth')
     )!
 
+    // Act
     const sut = await authCheck.execute()
 
+    // Assert
     expect(sut).toBe(false)
   })
 
@@ -171,7 +173,78 @@ describe('buildAuditChecks', () => {
     expect(sut).toBe(false)
   })
 
+  it('given auth check, when executing, then queries with Organization SOQL', async () => {
+    // Arrange
+    const sfMock = createMockSfPort()
+    const entries = [
+      { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
+    ]
+    const sfPorts = new Map([
+      ['src', sfMock],
+      ['ana', createMockSfPort()],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const authCheck = checks.find(
+      c => c.org === 'src' && c.label.includes('auth')
+    )!
+
+    // Act
+    await authCheck.execute()
+
+    // Assert — kills 'SELECT Id FROM Organization LIMIT 1' mutation
+    expect(sfMock.query).toHaveBeenCalledWith(
+      'SELECT Id FROM Organization LIMIT 1'
+    )
+  })
+
+  it('given ELF check, when executing, then queries with EventLogFile SOQL', async () => {
+    // Arrange
+    const sfMock = createMockSfPort()
+    const entries = [
+      { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
+    ]
+    const sfPorts = new Map([
+      ['src', sfMock],
+      ['ana', createMockSfPort()],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const elfCheck = checks.find(c => c.label.includes('EventLogFile'))!
+
+    // Act
+    await elfCheck.execute()
+
+    // Assert — kills 'SELECT Id FROM EventLogFile LIMIT 1' mutation
+    expect(sfMock.query).toHaveBeenCalledWith(
+      'SELECT Id FROM EventLogFile LIMIT 1'
+    )
+  })
+
+  it('given InsightsExternalData check, when executing, then queries with InsightsExternalData SOQL', async () => {
+    // Arrange
+    const anaMock = createMockSfPort()
+    const entries = [
+      { type: 'sobject' as const, sourceOrg: 'src', targetOrg: 'ana' },
+    ]
+    const sfPorts = new Map([
+      ['src', createMockSfPort()],
+      ['ana', anaMock],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const insightsCheck = checks.find(c =>
+      c.label.includes('InsightsExternalData')
+    )!
+
+    // Act
+    await insightsCheck.execute()
+
+    // Assert — kills 'SELECT Id FROM InsightsExternalData LIMIT 1' mutation
+    expect(anaMock.query).toHaveBeenCalledWith(
+      'SELECT Id FROM InsightsExternalData LIMIT 1'
+    )
+  })
+
   it('given analytic orgs, when building checks, then includes InsightsExternalData check', () => {
+    // Arrange
     const entries = [
       {
         type: 'sobject' as const,
@@ -184,7 +257,10 @@ describe('buildAuditChecks', () => {
       ['anaA', createMockSfPort()],
     ])
 
+    // Act
     const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
     const insightsChecks = sut.filter(c =>
       c.label.includes('InsightsExternalData')
     )
@@ -194,7 +270,57 @@ describe('buildAuditChecks', () => {
 })
 
 describe('runAudit', () => {
+  it('given passing check, when running audit, then logs [PASS] with check label', async () => {
+    // Arrange
+    const checks = [
+      {
+        org: 'src',
+        label: 'src: auth and connectivity',
+        execute: async () => true,
+      },
+    ]
+    const logger = createMockLogger()
+
+    // Act
+    await runAudit(checks, logger)
+
+    // Assert — kills 'PASS' string literal mutation
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('[PASS]'))
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('src: auth and connectivity')
+    )
+  })
+
+  it('given all checks pass, when running audit, then logs "All checks passed"', async () => {
+    // Arrange
+    const checks = [
+      { org: 'src', label: 'src: auth', execute: async () => true },
+    ]
+    const logger = createMockLogger()
+
+    // Act
+    await runAudit(checks, logger)
+
+    // Assert — kills 'All checks passed' string literal mutation
+    expect(logger.info).toHaveBeenCalledWith('All checks passed')
+  })
+
+  it('given failing check, when running audit, then logs "Some checks failed"', async () => {
+    // Arrange
+    const checks = [
+      { org: 'src', label: 'src: auth', execute: async () => false },
+    ]
+    const logger = createMockLogger()
+
+    // Act
+    await runAudit(checks, logger)
+
+    // Assert — kills 'Some checks failed' string literal mutation
+    expect(logger.info).toHaveBeenCalledWith('Some checks failed')
+  })
+
   it('given all checks pass, when running audit, then returns passed true', async () => {
+    // Arrange
     const entries = [
       { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
     ]
@@ -205,8 +331,10 @@ describe('runAudit', () => {
     const checks = buildAuditChecks(entries, sfPorts)
     const logger = createMockLogger()
 
+    // Act
     const sut = await runAudit(checks, logger)
 
+    // Assert
     expect(sut.passed).toBe(true)
     expect(logger.info).toHaveBeenCalled()
   })
@@ -235,6 +363,7 @@ describe('runAudit', () => {
   })
 
   it('given check that throws, when running audit, then audit marks it as failed', async () => {
+    // Arrange
     const checks = [
       {
         org: 'src',
@@ -246,12 +375,15 @@ describe('runAudit', () => {
     ]
     const logger = createMockLogger()
 
+    // Act
     const sut = await runAudit(checks, logger)
 
+    // Assert
     expect(sut.passed).toBe(false)
   })
 
   it('given auth check fails, when running audit, then returns passed false', async () => {
+    // Arrange
     const entries = [
       { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
     ]
@@ -262,8 +394,10 @@ describe('runAudit', () => {
     const checks = buildAuditChecks(entries, sfPorts)
     const logger = createMockLogger()
 
+    // Act
     const sut = await runAudit(checks, logger)
 
+    // Assert
     expect(sut.passed).toBe(false)
   })
 })

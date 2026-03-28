@@ -154,6 +154,7 @@ export class ElfReader implements ReaderPort {
 
         await producer
       })(),
+      /* v8 ignore next 2 -- lastRecord is always set when records exist; defensive null guard */
       watermark: () =>
         lastRecord ? Watermark.fromString(lastRecord.LogDate) : undefined,
       fileCount: () => filesProcessed,

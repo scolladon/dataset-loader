@@ -1,6 +1,6 @@
 import { finished } from 'node:stream/promises'
-import { constants } from 'node:zlib'
-import { describe, expect, it, vi } from 'vitest'
+import { type Gzip, type ZlibOptions } from 'node:zlib'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DatasetWriter,
   DatasetWriterFactory,
@@ -14,6 +14,27 @@ import {
   type SalesforcePort,
   SkipDatasetError,
 } from '../../../src/ports/types.js'
+
+let createGzipOptions: ZlibOptions[] = []
+let capturedGzipInstances: Gzip[] = []
+
+vi.mock('node:zlib', async importOriginal => {
+  const real = await importOriginal<typeof import('node:zlib')>()
+  return {
+    ...real,
+    createGzip: (opts?: ZlibOptions) => {
+      createGzipOptions.push(opts ?? {})
+      const gz = real.createGzip(opts)
+      capturedGzipInstances.push(gz)
+      return gz
+    },
+  }
+})
+
+beforeEach(() => {
+  createGzipOptions = []
+  capturedGzipInstances = []
+})
 
 function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
   return {
@@ -40,14 +61,12 @@ describe('GzipChunkingWritable', () => {
   it('given new GzipChunkingWritable, when initialized, then uses level 3 compression', () => {
     // Arrange
     const sfPort = makeSfPort()
-    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Act
-    const gz = (sut as unknown as { chunk: { gz: { _level: number } } }).chunk
-      .gz
+    new GzipChunkingWritable(sfPort, basePath, parentId)
 
     // Assert
-    expect(gz._level).toBe(3)
+    expect(createGzipOptions[0]).toEqual(expect.objectContaining({ level: 3 }))
   })
 
   it('given lines written, when stream ends, then uploads one gzipped base64 part', async () => {
@@ -168,15 +187,19 @@ describe('GzipChunkingWritable', () => {
     const sfPort = makeSfPort({
       post: vi.fn().mockRejectedValue(new Error('upload failed during write')),
     })
-    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+    // Use a 1-byte threshold so the second item in a batch triggers rotation
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      undefined,
+      1
+    )
 
-    // Force the current chunk to appear nearly full so the next write triggers rotation
-    const chunk = (sut as unknown as { chunk: { compressedSize: number } })
-      .chunk
-    chunk.compressedSize = 8 * 1024 * 1024
-
-    // Act — write triggers rotation: upload fires in _write() before _final()
-    sut.write(['"data"'])
+    // Act — two-item batch: first item populates the chunk, second triggers rotation
+    // so the upload fires in _write() before _final()
+    sut.write(['"data1"', '"data2"'])
     sut.end()
 
     // Assert
@@ -190,12 +213,7 @@ describe('GzipChunkingWritable', () => {
 
     // Act
     sut.write(['"first line"'])
-    // Force a gzip error by destroying the internal gzip stream
-    // Access the chunk's gz through the stream internals
-    const chunk = (
-      sut as unknown as { chunk: { gz: { destroy: (err: Error) => void } } }
-    ).chunk
-    chunk.gz.destroy(new Error('zlib compression failed'))
+    capturedGzipInstances[0].destroy(new Error('zlib compression failed'))
 
     // Assert
     await expect(finished(sut)).rejects.toThrow('zlib compression failed')
@@ -224,6 +242,49 @@ describe('GzipChunkingWritable', () => {
     expect(sfPort.post).toHaveBeenCalled()
     expect(sut.partCount).toBeGreaterThan(0)
     expect(sfPort.post).toHaveBeenCalledTimes(sut.partCount)
+  })
+
+  it('given upload started during rotation, when drainUploads called, then waits for upload to settle', async () => {
+    // Arrange — upload resolves only when manually triggered
+    const uploadResolvers: Array<() => void> = []
+    const sfPort = makeSfPort({
+      post: vi.fn().mockImplementation(
+        () =>
+          new Promise<{ id: string }>(resolve => {
+            uploadResolvers.push(() => resolve({ id: '06W' }))
+          })
+      ),
+    })
+    // Use 1-byte partMaxBytes to guarantee rotation on the second line
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      1
+    )
+
+    // Act — write two lines: first writes to gz, second triggers rotation and starts an upload
+    await new Promise<void>((resolve, reject) => {
+      sut.write(['"a"', '"b"'], err => (err ? reject(err) : resolve()))
+    })
+    expect(uploadResolvers.length).toBeGreaterThan(0)
+
+    let drainResolved = false
+    const drainPromise = sut.drainUploads().then(() => {
+      drainResolved = true
+    })
+
+    // Upload is still pending — drain should be waiting, not resolved
+    await Promise.resolve()
+    // Kills L167 BlockStatement: empty drainUploads resolves immediately → drainResolved=true
+    expect(drainResolved).toBe(false)
+
+    // Resolve all uploads and verify drain completes
+    for (const r of uploadResolvers) r()
+    await drainPromise
+    expect(drainResolved).toBe(true)
   })
 
   it(
@@ -312,6 +373,104 @@ describe('GzipChunkingWritable', () => {
       expect(batch2Completed).toBe(true)
     }
   )
+
+  it('given pendingUploads reaches HIGH_WATER, when rotation triggers in _write, then write blocks until slot freed', async () => {
+    // Arrange — uploads never auto-resolve
+    const uploadResolvers: Array<() => void> = []
+    const sfPort = makeSfPort({
+      post: vi.fn().mockImplementation(
+        () =>
+          new Promise<{ id: string }>(resolve => {
+            uploadResolvers.push(() => resolve({ id: '06W' }))
+          })
+      ),
+    })
+    // HIGH_WATER=2, 1-byte partMaxBytes: any non-empty chunk triggers a rotation
+    const TEST_HIGH_WATER = 2
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      TEST_HIGH_WATER,
+      1
+    )
+
+    // Batch1: fills HIGH_WATER-1=1 slot.
+    // Lines '"a"' + '"b"': '"b"' triggers rotation 1 (upload1, size=1, no block).
+    // After write callback: chunk still holds '"b"' with pendingBytes > 0.
+    await new Promise<void>((resolve, reject) => {
+      sut.write(['"a"', '"b"'], err => (err ? reject(err) : resolve()))
+    })
+    expect(uploadResolvers.length).toBe(1)
+
+    // Batch2: single line. Chunk is non-empty ('"b"' pending), so '"c"' immediately
+    // triggers rotation 2 (upload2, size=2=HIGH_WATER) → must block.
+    // With mutations (>2 / false / {}): no block → write completes immediately.
+    let secondWriteCompleted = false
+    sut.write(['"c"'], err => {
+      secondWriteCompleted = !err
+    })
+
+    // Allow async flush + endGzip + backpressure check to settle
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // Kills L121:73 (BlockStatement={}), L121:23 (ConditionalExpression false), L121:23 (EqualityOperator >)
+    expect(secondWriteCompleted).toBe(false)
+    expect(uploadResolvers.length).toBe(TEST_HIGH_WATER)
+
+    // Release one slot — write should unblock and complete
+    uploadResolvers[0]()
+    await vi.waitFor(() => expect(secondWriteCompleted).toBe(true), {
+      timeout: 5000,
+    })
+  })
+
+  it('given two lines written to GzipChunkingWritable, when stream ends, then decompressed content has each line followed by a newline', async () => {
+    // Arrange
+    const { gunzip } = await import('node:zlib')
+    const { promisify } = await import('node:util')
+    const gunzipAsync = promisify(gunzip)
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act
+    sut.write(['"line1"', '"line2"'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    const b64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
+      .DataFile as string
+    const compressed = Buffer.from(b64, 'base64')
+    const decompressed = await gunzipAsync(compressed)
+    expect(decompressed.toString()).toBe('"line1"\n"line2"\n')
+  })
+
+  it('given a batch of three lines written, when stream ends, then decompressed content contains exactly three lines (not four)', async () => {
+    // Arrange
+    const { gunzip } = await import('node:zlib')
+    const { promisify } = await import('node:util')
+    const gunzipAsync = promisify(gunzip)
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act
+    sut.write(['"a"', '"b"', '"c"'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    const b64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
+      .DataFile as string
+    const compressed = Buffer.from(b64, 'base64')
+    const decompressed = await gunzipAsync(compressed)
+    const lines = decompressed
+      .toString()
+      .split('\n')
+      .filter(l => l.length > 0)
+    expect(lines).toHaveLength(3)
+  })
 })
 
 describe('DatasetWriter', () => {
@@ -339,10 +498,11 @@ describe('DatasetWriter', () => {
     chunker.end()
     await finished(chunker)
 
-    // Assert
-    expect(chunker).toBeDefined()
+    // Assert — kills L300: basePath '' would produce '/InsightsExternalData' not '/services/data/v62.0/...'
     expect(sfPort.post).toHaveBeenCalledWith(
-      expect.stringContaining('InsightsExternalData'),
+      expect.stringContaining(
+        '/services/data/v62.0/sobjects/InsightsExternalData'
+      ),
       expect.objectContaining({
         EdgemartAlias: 'MyDataset',
         Format: 'Csv',
@@ -407,7 +567,6 @@ describe('DatasetWriter', () => {
     await finished(chunker)
 
     // Assert
-    expect(chunker).toBeDefined()
     const metaB64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
       .MetadataJson as string
     const decoded = JSON.parse(Buffer.from(metaB64, 'base64').toString('utf-8'))
@@ -421,8 +580,8 @@ describe('DatasetWriter', () => {
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
 
-    // Assert
-    await expect(sut.init()).rejects.toThrow(SkipDatasetError)
+    // Assert — kills L311: empty message would not contain 'No existing metadata'
+    await expect(sut.init()).rejects.toThrow('No existing metadata')
   })
 
   it('given initialized and data written, when finalize called, then patches Action Process', async () => {
@@ -452,6 +611,8 @@ describe('DatasetWriter', () => {
       { Action: 'Process', Mode: 'Incremental' }
     )
     expect(result.parentId).toBe(parentId)
+    // Kills L232 (empty partCount getter body) and L234 (&&0 mutation):
+    expect(result.partCount).toBe(1)
   })
 
   it('given initialized and data written, when finalize called, then drains uploads before patching Action Process', async () => {
@@ -562,11 +723,13 @@ describe('DatasetWriter', () => {
     const chunker = await sut.init()
     chunker.end()
     await finished(chunker)
-    await sut.finalize()
+    const result = await sut.finalize()
 
     // Assert
     expect(sfPort.post).not.toHaveBeenCalled()
     expect(sfPort.patch).not.toHaveBeenCalled()
+    // Kills L331: {} vs { parentId: '', partCount: 0 }
+    expect(result).toEqual({ parentId: '', partCount: 0 })
   })
 
   it('given init called but no data written, when abort called, then does NOT post parent and does NOT delete', async () => {
@@ -715,6 +878,48 @@ describe('DatasetWriter', () => {
     expect(listener.onSinkReady).not.toHaveBeenCalled()
   })
 
+  it('given not initialized, when finalize called, then throws Not initialized', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+
+    // Act & Assert
+    await expect(sut.finalize()).rejects.toThrow('Not initialized')
+  })
+
+  it('given two batches written, when finalizing, then second write uses existing chunker', async () => {
+    // Arrange
+    const existingMeta = JSON.stringify({ objects: [{ fields: [] }] })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(existingMeta),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+
+    // Act — two separate writes trigger the _chunker early-return on the second call
+    chunker.write(['"row1"'])
+    chunker.write(['"row2"'])
+    chunker.end()
+    await finished(chunker)
+
+    // Assert — both rows uploaded in one part
+    expect(sfPort.post).toHaveBeenCalledWith(
+      expect.stringContaining('InsightsExternalDataPart'),
+      expect.objectContaining({
+        InsightsExternalDataId: parentId,
+        PartNumber: 1,
+      })
+    )
+    // Kills L246:9/L246:24: second write reuses _chunker, so InsightsExternalData created only once
+    expect(sfPort.post).toHaveBeenCalledTimes(2)
+  })
+
   it('given invalid dataset name, when constructing, then throws', () => {
     // Arrange
     const sfPort = makeSfPort()
@@ -728,6 +933,32 @@ describe('DatasetWriter', () => {
 
     // Assert
     expect(act).toThrow('Invalid dataset name')
+  })
+
+  it('given existing metadata without objects field, when data written, then normalizes without crashing', async () => {
+    // Arrange — kills L363: meta.objects.map() throws when objects is undefined
+    const metaWithoutObjects = JSON.stringify({
+      fileFormat: { charsetName: 'UTF-8' },
+    })
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(metaWithoutObjects),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+
+    // Act
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+    const chunker = await sut.init()
+    chunker.write(['"data"'])
+    chunker.end()
+    await finished(chunker)
+
+    // Assert — no crash; data was uploaded
+    expect(sfPort.post).toHaveBeenCalled()
   })
 
   it('given existing metadata as JSON object, when data written, then stringifies it', async () => {

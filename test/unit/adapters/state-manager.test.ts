@@ -56,14 +56,27 @@ describe('FileStateManager', () => {
       expect(store.toRecord()).toEqual({})
     })
 
-    it('given invalid JSON, when reading, then throws', async () => {
+    it('given state file with invalid ISO timestamp, when reading, then throws with ISO 8601 message', async () => {
+      // Arrange
+      const path = join(testDir, 'bad-watermark.json')
+      await writeFile(
+        path,
+        JSON.stringify({ watermarks: { 'org:elf:Login:Daily': 'not-a-date' } })
+      )
+      const sut = new FileStateManager(path)
+
+      // Act & Assert — kills 'Must be ISO 8601 datetime' string mutation
+      await expect(sut.read()).rejects.toThrow('Must be ISO 8601 datetime')
+    })
+
+    it('given invalid JSON, when reading, then throws a JSON parse error', async () => {
       // Arrange
       const path = join(testDir, 'bad.json')
       await writeFile(path, 'not json')
       const sut = new FileStateManager(path)
 
       // Act & Assert
-      await expect(sut.read()).rejects.toThrow()
+      await expect(sut.read()).rejects.toThrow(SyntaxError)
     })
   })
 
@@ -93,8 +106,22 @@ describe('FileStateManager', () => {
       )
     })
 
-    it('given rename fails, when writing, then cleans up temp file and rethrows', async () => {
+    it('given a WatermarkStore, when writing, then file ends with a newline', async () => {
       // Arrange
+      const path = join(testDir, 'state.json')
+      const store = WatermarkStore.empty()
+      const sut = new FileStateManager(path)
+
+      // Act
+      await sut.write(store)
+
+      // Assert — kills '\n' trailing newline mutation
+      const raw = await readFile(path, 'utf-8')
+      expect(raw.endsWith('\n')).toBe(true)
+    })
+
+    it('given rename fails, when writing, then cleans up temp file and rethrows', async () => {
+      // Arrange — write to a non-existent directory so rename will fail
       const path = join(testDir, 'readonly', 'state.json')
       const key = WatermarkKey.fromEntry({
         type: 'elf',
@@ -109,7 +136,7 @@ describe('FileStateManager', () => {
       const sut = new FileStateManager(path)
 
       // Act & Assert
-      await expect(sut.write(store)).rejects.toThrow()
+      await expect(sut.write(store)).rejects.toThrow(/ENOENT/)
     })
 
     it('given an existing file, when writing new state, then overwrites atomically', async () => {
