@@ -322,11 +322,9 @@ async function pipeFanOutEntries(
   const channels = sinks.map(() => new PassThrough({ objectMode: true }))
   const fanOut = createFanOutTransform(channels, (err, ch) => {
     const idx = channels.indexOf(ch as PassThrough)
-    if (idx >= 0) {
-      input.logger.warn(
-        `Entry '${sinks[idx].entry.label}' fan-out write failed: ${formatErrorMessage(err)}`
-      )
-    }
+    input.logger.warn(
+      `Entry '${sinks[idx].entry.label}' fan-out write failed: ${formatErrorMessage(err)}`
+    )
   })
   await Promise.all([
     pipeline(Readable.from(result.lines), fanOut).catch((err: Error) => {

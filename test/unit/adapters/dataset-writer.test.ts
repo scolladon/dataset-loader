@@ -206,6 +206,34 @@ describe('GzipChunkingWritable', () => {
     await expect(finished(sut)).rejects.toThrow('upload failed during write')
   })
 
+  it('given post throws synchronously during chunk rotation, when writing, then finishAndRotate catch propagates error', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      post: vi.fn().mockImplementation(() => {
+        throw new Error('sync post failure')
+      }),
+    })
+    // Small partMaxBytes forces rotation after minimal data
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      25,
+      100
+    )
+
+    // Act — write enough data to trigger a chunk rotation
+    const batch = Array.from(
+      { length: 200 },
+      (_, i) => `"line-${i}-${'x'.repeat(50)}"`
+    )
+    sut.write(batch)
+
+    // Assert
+    await expect(finished(sut)).rejects.toThrow('sync post failure')
+  })
+
   it('given gzip stream error, when writing, then error propagates to finished', async () => {
     // Arrange
     const sfPort = makeSfPort()

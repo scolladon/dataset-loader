@@ -57,7 +57,7 @@ export class ElfReader implements ReaderPort {
     }
 
     let filesProcessed = 0
-    let lastRecord: EventLogFileRecord | undefined
+    let lastRecord: EventLogFileRecord = firstPage.records.at(-1)!
 
     const sfPort = this.sfPort
     const blobUrl = (record: EventLogFileRecord): string =>
@@ -75,7 +75,7 @@ export class ElfReader implements ReaderPort {
       if (page.records.length > 0) {
         // Set synchronously — pages are fetched in ascending order so the last
         // page to start always has the highest LogDate.
-        lastRecord = page.records.at(-1)
+        lastRecord = page.records.at(-1)!
       }
 
       const nextPagePromise =
@@ -154,9 +154,7 @@ export class ElfReader implements ReaderPort {
 
         await producer
       })(),
-      /* v8 ignore next 2 -- lastRecord is always set when records exist; defensive null guard */
-      watermark: () =>
-        lastRecord ? Watermark.fromString(lastRecord.LogDate) : undefined,
+      watermark: () => Watermark.fromString(lastRecord.LogDate),
       fileCount: () => filesProcessed,
     }
   }
