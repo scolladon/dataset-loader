@@ -39,6 +39,9 @@
   "knip": {
     "ignoreDependencies": [
       "sinon"
+    ],
+    "ignoreBinaries": [
+      "npm-check-updates"
     ]
   },
   "scripts": {
