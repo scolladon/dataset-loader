@@ -33,7 +33,10 @@ function setStderrIsTTY(value: boolean): void {
 
 vi.mock('cli-progress', () => ({
   default: {
-    MultiBar: vi.fn((options: Record<string, unknown>) => {
+    MultiBar: vi.fn(function MockMultiBarCtor(
+      this: MockMultiBar,
+      options: Record<string, unknown>
+    ) {
       lastMultiBarOptions = options
       const bars: MockBar[] = []
       lastMultiBar = {

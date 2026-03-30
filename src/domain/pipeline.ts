@@ -271,13 +271,14 @@ async function processBundle(
   }
 }
 
-async function pipeSingleEntry(
+function pipelineWithEntryTracking(
+  source: Readable,
   { entry, slot, sink }: Sink,
   result: FetchResult,
   input: PipelineInput,
   phase: Pick<PhaseProgress, 'tick'>
 ): Promise<void> {
-  await pipeline(Readable.from(result.lines), sink)
+  return pipeline(source, sink)
     .then((): void => {
       slot.entryResults.push(
         resolveEntryResult(
@@ -295,6 +296,21 @@ async function pipeSingleEntry(
       )
       slot.entryResults.push({ status: 'failed' })
     })
+}
+
+async function pipeSingleEntry(
+  sink: Sink,
+  result: FetchResult,
+  input: PipelineInput,
+  phase: Pick<PhaseProgress, 'tick'>
+): Promise<void> {
+  await pipelineWithEntryTracking(
+    Readable.from(result.lines),
+    sink,
+    result,
+    input,
+    phase
+  )
 }
 
 async function pipeFanOutEntries(
@@ -317,25 +333,8 @@ async function pipeFanOutEntries(
       input.logger.warn(`Fan-out source failed: ${formatErrorMessage(err)}`)
       channels.forEach(ch => ch.destroy(err))
     }),
-    ...sinks.map(({ entry, slot, sink }, i) =>
-      pipeline(channels[i], sink)
-        .then((): void => {
-          slot.entryResults.push(
-            resolveEntryResult(
-              entry,
-              result.fileCount(),
-              result.watermark(),
-              slot.tracker,
-              phase
-            )
-          )
-        })
-        .catch((err: Error): void => {
-          input.logger.warn(
-            `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
-          )
-          slot.entryResults.push({ status: 'failed' })
-        })
+    ...sinks.map((sink, i) =>
+      pipelineWithEntryTracking(channels[i], sink, result, input, phase)
     ),
   ])
 }

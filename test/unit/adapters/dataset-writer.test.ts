@@ -287,92 +287,88 @@ describe('GzipChunkingWritable', () => {
     expect(drainResolved).toBe(true)
   })
 
-  it(
-    'given upload concurrency cap is reached, when a new chunk rotation is triggered, then producer blocks until a slot is freed',
-    { timeout: 30000 },
-    async () => {
-      // Arrange: uploads complete only when explicitly resolved.
-      // Use a small uploadHighWater (4) so the test only needs ~4 rotations instead
-      // of the production UPLOAD_HIGH_WATER (DEFAULT_CONCURRENCY = 25).
-      const TEST_HIGH_WATER = 4
-      const { randomBytes } = await import('node:crypto')
-      const uploadResolvers: Array<() => void> = []
-      let concurrentUploads = 0
-      let maxConcurrentUploads = 0
-      const sfPort = makeSfPort({
-        post: vi.fn().mockImplementation(
-          () =>
-            new Promise<{ id: string }>(resolve => {
-              concurrentUploads++
-              maxConcurrentUploads = Math.max(
-                maxConcurrentUploads,
-                concurrentUploads
-              )
-              uploadResolvers.push(() => {
-                concurrentUploads--
-                resolve({ id: '06W' })
-              })
-            })
-        ),
-      })
-      const sut = new GzipChunkingWritable(
-        sfPort,
-        basePath,
-        parentId,
-        undefined,
-        TEST_HIGH_WATER
-      )
-
-      // Pre-generate a pool then slice into lines. 20000 lines per batch ensures ≥ 4
-      // chunk rotations across both batches regardless of gzip compression ratio.
-      const pool = randomBytes(1024 * 20000)
-      const batch = Array.from(
-        { length: 20000 },
-        (_, i) =>
-          `"${pool.subarray(i * 1024, (i + 1) * 1024).toString('base64')}"`
-      )
-
-      // Act
-      // Batch 1: completes without backpressure (uploads started, held in-flight)
-      await new Promise<void>((resolve, reject) => {
-        sut.write(batch, err => (err ? reject(err) : resolve()))
-      })
-
-      // Batch 2: pauses when TEST_HIGH_WATER rotations are in-flight
-      let batch2Completed = false
-      const batch2Promise = new Promise<void>((resolve, reject) => {
-        sut.write(batch, err => {
-          batch2Completed = true
-          if (err) reject(err)
-          else resolve()
-        })
-      })
-
-      // Wait for all TEST_HIGH_WATER uploads to be in-flight
-      await vi.waitFor(
+  it('given upload concurrency cap is reached, when a new chunk rotation is triggered, then producer blocks until a slot is freed', {
+    timeout: 30000,
+  }, async () => {
+    // Arrange: uploads complete only when explicitly resolved.
+    // Use a small uploadHighWater (4) so the test only needs ~4 rotations instead
+    // of the production UPLOAD_HIGH_WATER (DEFAULT_CONCURRENCY = 25).
+    const TEST_HIGH_WATER = 4
+    const { randomBytes } = await import('node:crypto')
+    const uploadResolvers: Array<() => void> = []
+    let concurrentUploads = 0
+    let maxConcurrentUploads = 0
+    const sfPort = makeSfPort({
+      post: vi.fn().mockImplementation(
         () =>
-          expect(uploadResolvers.length).toBeGreaterThanOrEqual(
-            TEST_HIGH_WATER
-          ),
-        { timeout: 10000 }
-      )
+          new Promise<{ id: string }>(resolve => {
+            concurrentUploads++
+            maxConcurrentUploads = Math.max(
+              maxConcurrentUploads,
+              concurrentUploads
+            )
+            uploadResolvers.push(() => {
+              concurrentUploads--
+              resolve({ id: '06W' })
+            })
+          })
+      ),
+    })
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      TEST_HIGH_WATER
+    )
 
-      // Assert: backpressure is holding the second write
-      expect(batch2Completed).toBe(false)
-      expect(maxConcurrentUploads).toBeLessThanOrEqual(TEST_HIGH_WATER)
+    // Pre-generate a pool then slice into lines. 20000 lines per batch ensures ≥ 4
+    // chunk rotations across both batches regardless of gzip compression ratio.
+    const pool = randomBytes(1024 * 20000)
+    const batch = Array.from(
+      { length: 20000 },
+      (_, i) =>
+        `"${pool.subarray(i * 1024, (i + 1) * 1024).toString('base64')}"`
+    )
 
-      // Release slots; batch2 may stall again on subsequent rotations so drain continuously
-      const drainInterval = setInterval(() => {
-        while (uploadResolvers.length > 0) uploadResolvers.shift()!()
-      }, 1)
-      await batch2Promise
-      clearInterval(drainInterval)
+    // Act
+    // Batch 1: completes without backpressure (uploads started, held in-flight)
+    await new Promise<void>((resolve, reject) => {
+      sut.write(batch, err => (err ? reject(err) : resolve()))
+    })
 
+    // Batch 2: pauses when TEST_HIGH_WATER rotations are in-flight
+    let batch2Completed = false
+    const batch2Promise = new Promise<void>((resolve, reject) => {
+      sut.write(batch, err => {
+        batch2Completed = true
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+
+    // Wait for all TEST_HIGH_WATER uploads to be in-flight
+    await vi.waitFor(
+      () =>
+        expect(uploadResolvers.length).toBeGreaterThanOrEqual(TEST_HIGH_WATER),
+      { timeout: 10000 }
+    )
+
+    // Assert: backpressure is holding the second write
+    expect(batch2Completed).toBe(false)
+    expect(maxConcurrentUploads).toBeLessThanOrEqual(TEST_HIGH_WATER)
+
+    // Release slots; batch2 may stall again on subsequent rotations so drain continuously
+    const drainInterval = setInterval(() => {
       while (uploadResolvers.length > 0) uploadResolvers.shift()!()
-      await sut.drainUploads()
-      expect(batch2Completed).toBe(true)
-    }
-  )
+    }, 1)
+    await batch2Promise
+    clearInterval(drainInterval)
+
+    while (uploadResolvers.length > 0) uploadResolvers.shift()!()
+    await sut.drainUploads()
+    expect(batch2Completed).toBe(true)
+  })
 
   it('given pendingUploads reaches HIGH_WATER, when rotation triggers in _write, then write blocks until slot freed', async () => {
     // Arrange — uploads never auto-resolve

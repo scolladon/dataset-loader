@@ -120,28 +120,47 @@ function validateTargetFields(
   }
 }
 
+function rejectAugmentColumns(
+  columns: Record<string, string>,
+  predicate: (value: string) => boolean,
+  messageFor: (key: string) => string,
+  ctx: z.RefinementCtx
+): void {
+  for (const [key, value] of Object.entries(columns)) {
+    if (predicate(String(value))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: messageFor(key),
+        path: ['augmentColumns', key],
+      })
+    }
+  }
+}
+
+const targetFields = {
+  targetOrg: orgAlias.optional(),
+  targetDataset: sfIdentifier.optional(),
+  targetFile: z.string().min(1).optional(),
+  operation: z.enum(['Append', 'Overwrite']).default('Append'),
+  augmentColumns: z.record(datasetColumnName, z.string()).optional(),
+} as const
+
 const baseEntrySchema = z
   .object({
     name: entryName.optional(),
     sourceOrg: orgAlias,
-    targetOrg: orgAlias.optional(),
-    targetDataset: sfIdentifier.optional(),
-    targetFile: z.string().min(1).optional(),
-    operation: z.enum(['Append', 'Overwrite']).default('Append'),
-    augmentColumns: z.record(datasetColumnName, z.string()).optional(),
+    ...targetFields,
   })
   .superRefine((entry, ctx) => {
     validateTargetFields(entry, ctx)
     if (!entry.targetOrg && entry.augmentColumns) {
-      for (const [key, value] of Object.entries(entry.augmentColumns)) {
-        if (MUSTACHE_TARGETORG.test(String(value))) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `augmentColumns['${key}'] uses {{targetOrg.*}} which is not allowed for file-target entries (targetOrg is absent)`,
-            path: ['augmentColumns', key],
-          })
-        }
-      }
+      rejectAugmentColumns(
+        entry.augmentColumns,
+        value => MUSTACHE_TARGETORG.test(value),
+        key =>
+          `augmentColumns['${key}'] uses {{targetOrg.*}} which is not allowed for file-target entries (targetOrg is absent)`,
+        ctx
+      )
     }
   })
 
@@ -172,28 +191,20 @@ const csvEntrySchema = z
       .refine(p => path.isAbsolute(p) || !path.normalize(p).startsWith('..'), {
         message: 'sourceFile must not traverse parent directories',
       }),
-    targetOrg: orgAlias.optional(),
-    targetDataset: sfIdentifier.optional(),
-    targetFile: z.string().min(1).optional(),
-    operation: z.enum(['Append', 'Overwrite']).default('Append'),
-    augmentColumns: z.record(datasetColumnName, z.string()).optional(),
+    ...targetFields,
   })
   .strict()
   .superRefine((entry, ctx) => {
     validateTargetFields(entry, ctx)
     if (entry.augmentColumns) {
-      for (const [key, value] of Object.entries(entry.augmentColumns)) {
-        if (
-          MUSTACHE_SOURCEORG.test(String(value)) ||
-          MUSTACHE_TARGETORG.test(String(value))
-        ) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `augmentColumns['${key}'] uses a dynamic expression which is not allowed for csv entries`,
-            path: ['augmentColumns', key],
-          })
-        }
-      }
+      rejectAugmentColumns(
+        entry.augmentColumns,
+        value =>
+          MUSTACHE_SOURCEORG.test(value) || MUSTACHE_TARGETORG.test(value),
+        key =>
+          `augmentColumns['${key}'] uses a dynamic expression which is not allowed for csv entries`,
+        ctx
+      )
     }
   })
 

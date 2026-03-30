@@ -62,7 +62,8 @@
     "test:unit:coverage": "wireit",
     "test:integration": "wireit",
     "test:mutation": "wireit",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dependencies:upgrade": "npx npm-check-updates -u ; npm install ; npm audit fix"
   },
   "wireit": {
     "build": {
@@ -248,32 +249,32 @@
     }
   },
   "dependencies": {
-    "@salesforce/core": "^8.0.0",
-    "@salesforce/sf-plugins-core": "^12.0.0",
+    "@salesforce/core": "^8.27.1",
+    "@salesforce/sf-plugins-core": "^12.2.6",
     "cli-progress": "^3.12.0",
-    "csv-stringify": "^6.5.0",
-    "p-limit": "^6.2.0",
-    "zod": "^4.0.0"
+    "csv-stringify": "^6.7.0",
+    "p-limit": "^7.3.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.4",
+    "@biomejs/biome": "2.4.9",
     "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.4.2",
-    "@oclif/plugin-help": "^6.2.37",
+    "@commitlint/config-conventional": "^20.5.0",
+    "@oclif/plugin-help": "^6.2.41",
     "@salesforce/ts-types": "^2.0.12",
     "@stryker-mutator/core": "^9.6.0",
     "@stryker-mutator/vitest-runner": "^9.6.0",
     "@types/cli-progress": "^3.11.6",
-    "@types/node": "^22.0.0",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@types/node": "^25.5.0",
+    "@vitest/coverage-v8": "^4.1.2",
     "husky": "^9.1.7",
     "jscpd": "^4.0.8",
-    "knip": "^5.84.1",
-    "oclif": "^4.22.79",
+    "knip": "^6.1.0",
+    "oclif": "^4.22.96",
     "shx": "^0.4.0",
     "sinon": "^21.0.3",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2",
     "wireit": "^0.14.12"
   },
   "files": [
