@@ -62,7 +62,7 @@
     "test:unit": "wireit",
     "test:unit:coverage": "wireit",
     "test:integration": "wireit",
-    "test:mutation": "stryker run",
+    "test:mutation": "wireit",
     "test:watch": "vitest"
   },
   "wireit": {
@@ -230,6 +230,22 @@
         "tsconfig.json"
       ],
       "output": []
+    },
+    "test:mutation": {
+      "command": "stryker run",
+      "dependencies": [
+        "lint"
+      ],
+      "files": [
+        "src/**/*.ts",
+        "test/unit/**/*.test.ts",
+        "vitest.config.ts",
+        "stryker.config.mjs",
+        "tsconfig.json"
+      ],
+      "output": [
+        "reports/mutation/**"
+      ]
     }
   },
   "dependencies": {
