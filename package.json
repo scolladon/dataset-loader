@@ -1,20 +1,19 @@
 {
-  "name": "crma-data-loader",
+  "name": "dataset-loader",
   "version": "0.0.0",
-  "description": "SF CLI plugin to load Event Log Files and SObject data into CRMA datasets",
+  "description": "SF CLI plugin to load Event Log Files and SObject data into CRM Analytics datasets",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "author": "Sébastien Colladon (colladonsebastien@gmail.com)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/scolladon/crma-data-loader.git"
+    "url": "git+https://github.com/scolladon/dataset-loader.git"
   },
   "license": "MIT",
   "keywords": [
     "sf",
     "sf-plugin",
-    "crma",
     "elf",
     "event-log-files",
     "analytics",
@@ -29,8 +28,8 @@
     "topicSeparator": " ",
     "flexibleTaxonomy": true,
     "topics": {
-      "crma": {
-        "description": "CRMA data loading commands"
+      "dataset": {
+        "description": "Dataset loading commands"
       }
     },
     "devPlugins": [
@@ -73,13 +72,13 @@
       ]
     },
     "clean": {
-      "command": "shx rm -rf 'reports/*' oclif.manifest.json package.tgz 'crma-data-loader-*.tgz'",
+      "command": "shx rm -rf 'reports/*' oclif.manifest.json package.tgz 'dataset-loader-*.tgz'",
       "files": [
         "lib",
         "reports/*",
         "oclif.manifest.json",
         "package.tgz",
-        "crma-data-loader-*.tgz"
+        "dataset-loader-*.tgz"
       ],
       "dependencies": [
         "clean:build"

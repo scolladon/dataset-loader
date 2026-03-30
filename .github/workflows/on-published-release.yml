@@ -22,9 +22,9 @@ jobs:
             Version `{release_tag}` will be assigned to the `latest` npm channel soon
             Install it using either `{release_tag}` or the `latest-rc` npm channel
             ```sh
-            $ sf plugins install crma-data-loader@latest-rc
+            $ sf plugins install dataset-loader@latest-rc
             # Or
-            $ sf plugins install crma-data-loader@{release_tag}
+            $ sf plugins install dataset-loader@{release_tag}
             ```
 
             ---

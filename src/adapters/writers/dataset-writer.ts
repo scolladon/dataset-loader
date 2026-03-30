@@ -25,7 +25,7 @@ interface GzipChunkState {
   pendingBytes: number
 }
 
-interface CrmaMetadata {
+interface DatasetMetadata {
   objects?: { numberOfLinesToIgnore?: number }[]
 }
 
@@ -373,7 +373,7 @@ export class DatasetWriter implements Writer {
   }
 
   private normalizeMetadata(metadataJson: string): string {
-    const meta: CrmaMetadata = JSON.parse(metadataJson)
+    const meta: DatasetMetadata = JSON.parse(metadataJson)
     return JSON.stringify({
       ...meta,
       objects: meta.objects?.map(obj => ({

@@ -33,16 +33,16 @@ import {
   type StatePort,
 } from '../../ports/types.js'
 
-interface CrmaLoadResult {
+interface DatasetLoadResult {
   entriesProcessed: number
   entriesSkipped: number
   entriesFailed: number
   groupsUploaded: number
 }
 
-export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
+export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   public static readonly summary =
-    'Load Event Log Files and SObject data into CRMA datasets'
+    'Load Event Log Files and SObject data into CRM Analytics datasets'
   public static readonly examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --config-file my-config.json --dry-run',
@@ -52,12 +52,12 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     'config-file': Flags.file({
       char: 'c',
       summary: 'Path to config JSON',
-      default: 'crma-load.config.json',
+      default: 'dataset-load.config.json',
     }),
     'state-file': Flags.file({
       char: 's',
       summary: 'Path to watermark state file',
-      default: '.crma-load.state.json',
+      default: '.dataset-load.state.json',
     }),
     audit: Flags.boolean({
       summary: 'Pre-flight checks only (auth, connectivity, permissions)',
@@ -72,8 +72,8 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     }),
   }
 
-  public async run(): Promise<CrmaLoadResult> {
-    const { flags } = await this.parse(CrmaLoad)
+  public async run(): Promise<DatasetLoadResult> {
+    const { flags } = await this.parse(DatasetLoad)
     const sfPorts = new Map<string, SalesforcePort>()
     const logger = this.createLogger()
 
@@ -157,7 +157,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     entries: ResolvedEntry[],
     sfPorts: Map<string, SalesforcePort>,
     logger: LoggerPort
-  ): Promise<CrmaLoadResult> {
+  ): Promise<DatasetLoadResult> {
     const orgEntries = entries
       .filter(({ entry }) => entry.type !== 'csv' && entry.targetOrg)
       .map(({ entry }) => ({
@@ -180,7 +180,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
   private handleDryRun(
     entries: ResolvedEntry[],
     watermarks: WatermarkStore
-  ): CrmaLoadResult {
+  ): DatasetLoadResult {
     this.log('Dry run — planned entries:')
     for (const { entry } of entries) {
       const wk = WatermarkKey.fromEntry(entry)
@@ -202,7 +202,7 @@ export default class CrmaLoad extends SfCommand<CrmaLoadResult> {
     watermarks: WatermarkStore,
     state: StatePort,
     logger: LoggerPort
-  ): Promise<CrmaLoadResult> {
+  ): Promise<DatasetLoadResult> {
     const sharedReaders = new Map<string, ReaderPort>()
     const pipelineEntries: PipelineEntry[] = []
     for (const resolvedEntry of entries) {

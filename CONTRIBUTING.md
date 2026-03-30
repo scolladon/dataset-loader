@@ -13,7 +13,7 @@ npm install
 
 ```
 src/
-├── commands/crma/
+├── commands/dataset/
 │   └── load.ts              # SF CLI command (composition root)
 ├── domain/                   # Pure business logic, value objects
 │   ├── pipeline.ts          # Core orchestration engine
@@ -31,7 +31,7 @@ src/
     ├── augment-transform.ts  # Appends extra columns to CSV lines
     ├── fan-out-transform.ts  # Tees a stream to multiple writable channels
     ├── row-counter.ts        # PassThrough that counts rows for progress
-    ├── dataset-writer.ts     # CRMA upload lifecycle
+    ├── dataset-writer.ts     # CRM Analytics upload lifecycle
     ├── file-writer.ts        # Local file writer (CSV output)
     ├── config-loader.ts      # Config parsing & validation (Zod)
     ├── state-manager.ts      # Atomic watermark state file
@@ -122,7 +122,7 @@ The plugin follows **Hexagonal Architecture** (Ports & Adapters):
 - **Domain** (`src/domain/`) contains pure business logic and value objects. No infrastructure dependencies.
 - **Ports** (`src/ports/`) define interface contracts between domain and adapters.
 - **Adapters** (`src/adapters/`) implement ports with infrastructure concerns (Salesforce API, file system, CLI).
-- **Command** (`src/commands/crma/load.ts`) is the composition root — it wires adapters to domain services.
+- **Command** (`src/commands/dataset/load.ts`) is the composition root — it wires adapters to domain services.
 
 See [DESIGN.md](DESIGN.md) for the full architecture documentation.
 
@@ -137,7 +137,7 @@ See [DESIGN.md](DESIGN.md) for the full architecture documentation.
 1. Define or extend port interfaces in `ports/types.ts` if new I/O is needed
 2. Add domain logic in `domain/` with tests (TDD: red → green → refactor)
 3. Implement adapter in `adapters/` with tests
-4. Wire in `commands/crma/load.ts`
+4. Wire in `commands/dataset/load.ts`
 5. Add NUT test for CLI integration
 6. Update manual test scenarios if applicable
 

@@ -11,7 +11,7 @@ import { MockTestOrgData, TestContext } from '@salesforce/core/testSetup'
 import { ensureJsonMap, ensureString } from '@salesforce/ts-types'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import CrmaLoad from '../../src/commands/crma/load.js'
+import DatasetLoad from '../../src/commands/dataset/load.js'
 import {
   FakeConnectionBuilder,
   type RequestHandler,
@@ -62,7 +62,7 @@ function removeLeakedSignalListeners(
 async function runCommand(argv: string[]): Promise<unknown> {
   const before = captureSignalListeners()
   try {
-    return await CrmaLoad.run(argv, process.cwd())
+    return await DatasetLoad.run(argv, process.cwd())
   } finally {
     removeLeakedSignalListeners(before)
   }
@@ -162,7 +162,7 @@ function readState(statePath: string): Record<string, string> {
   }
 }
 
-describe('CrmaLoad NUT', () => {
+describe('DatasetLoad NUT', () => {
   const $$ = new TestContext({ setup: false })
   const sourceOrg = new MockTestOrgData('src-test-id', { username: 'src-org' })
   const analyticOrg = new MockTestOrgData('ana-test-id', {
@@ -361,17 +361,17 @@ describe('CrmaLoad NUT', () => {
   describe('help output', () => {
     it('given command class, when inspecting summary, then summary describes the command purpose', () => {
       // Act
-      const sut = CrmaLoad.summary
+      const sut = DatasetLoad.summary
 
       // Assert
       expect(sut).toBeDefined()
       expect(sut).toContain('Load')
-      expect(sut).toContain('CRMA')
+      expect(sut).toContain('CRM Analytics')
     })
 
     it('given command class, when inspecting flags, then all expected flags are defined', () => {
       // Act
-      const sut = CrmaLoad.flags
+      const sut = DatasetLoad.flags
 
       // Assert
       expect(sut).toHaveProperty('config-file')
@@ -383,7 +383,7 @@ describe('CrmaLoad NUT', () => {
 
     it('given command class, when inspecting examples, then examples are provided', () => {
       // Act
-      const sut = CrmaLoad.examples
+      const sut = DatasetLoad.examples
 
       // Assert
       expect(sut).toBeDefined()
@@ -1497,8 +1497,8 @@ describe('CrmaLoad NUT', () => {
       tmp = createTempFiles(makeConfigJson([fileElfEntry(outputPath)]))
       orgOnlyConnection()
       const loggedLines: string[] = []
-      const originalLog = CrmaLoad.prototype.log
-      CrmaLoad.prototype.log = (msg: string) => {
+      const originalLog = DatasetLoad.prototype.log
+      DatasetLoad.prototype.log = (msg: string) => {
         loggedLines.push(msg ?? '')
       }
 
@@ -1523,7 +1523,7 @@ describe('CrmaLoad NUT', () => {
         expect(planLine).toBeDefined()
         expect(planLine).toContain(`file:${outputPath}`)
       } finally {
-        CrmaLoad.prototype.log = originalLog
+        DatasetLoad.prototype.log = originalLog
       }
     })
   })
@@ -1621,7 +1621,7 @@ describe('CrmaLoad NUT', () => {
 
   describe('e2e pipeline - reader fan-out', () => {
     it('given two entries sharing same ELF reader, when pipeline runs, then both targets receive data and watermarks advance', async () => {
-      // Arrange — one CRMA org target + one file target, same ELF source
+      // Arrange — one CRM Analytics org target + one file target, same ELF source
       const elfCsv = csvContent(ELF_CSV_HEADERS, [
         ['Login', '005xx0000001'],
         ['Login', '005xx0000002'],

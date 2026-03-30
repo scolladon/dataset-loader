@@ -1,4 +1,4 @@
-# CRMA ELF Loader — Profiling Guide
+# Dataset Loader — Profiling Guide
 
 ## Directory contents
 
@@ -16,7 +16,7 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand).
 
 ## Scenario
 
-**8 entries**, 3 source orgs (`xrmru`, `alm-prod`, `alm-dev`), 1 target CRMA org (`alm-devops`).
+**8 entries**, 3 source orgs (`xrmru`, `alm-prod`, `alm-dev`), 1 target CRM Analytics org (`alm-devops`).
 
 **Reader bundles** (grouped by ReaderKey + watermark):
 
@@ -37,13 +37,13 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand).
 
 ```bash
 # Copy profiling baseline config over the active config
-cp profiling/profiling.config.json crma-load.config.json
+cp profiling/profiling.config.json dataset-load.config.json
 
 # Ensure profiles/ output directory exists
 mkdir -p profiles
 ```
 
-The config copy is only needed if `crma-load.config.json` has been modified since the baseline was created.
+The config copy is only needed if `dataset-load.config.json` has been modified since the baseline was created.
 
 ---
 
@@ -56,7 +56,7 @@ bash profiling/reset.sh
 ```
 
 This:
-1. Restores `.crma-load.state.json` from `profiling/state.json`
+1. Restores `.dataset-load.state.json` from `profiling/state.json`
 2. Removes generated CSV output files: `AllLightningPageView.csv`, `ProdLightningPageView.csv`, `XrmruUser.csv`
 
 ---
@@ -66,9 +66,9 @@ This:
 ### Wall-clock baseline (3 runs, reset between each)
 
 ```bash
-bash profiling/reset.sh && time sf crma load
-bash profiling/reset.sh && time sf crma load
-bash profiling/reset.sh && time sf crma load
+bash profiling/reset.sh && time sf dataset load
+bash profiling/reset.sh && time sf dataset load
+bash profiling/reset.sh && time sf dataset load
 ```
 
 Record real time from each. If variance > 20%, network noise is high — take 5 runs and drop the outlier.
@@ -78,7 +78,7 @@ Record real time from each. If variance > 20%, network noise is high — take 5 
 ```bash
 bash profiling/reset.sh
 mkdir -p profiles
-NODE_OPTIONS="--cpu-prof --cpu-prof-dir=./profiles --cpu-prof-interval=100" sf crma load
+NODE_OPTIONS="--cpu-prof --cpu-prof-dir=./profiles --cpu-prof-interval=100" sf dataset load
 ```
 
 Opens as `profiles/CPU.*.cpuprofile` — load in **Chrome DevTools → Performance → Load profile**.
@@ -94,7 +94,7 @@ Focus on:
 ```bash
 bash profiling/reset.sh
 mkdir -p profiles
-NODE_OPTIONS="--heap-prof --heap-prof-dir=./profiles" sf crma load
+NODE_OPTIONS="--heap-prof --heap-prof-dir=./profiles" sf dataset load
 ```
 
 Opens as `profiles/Heap.*.heapprofile` — load in **Chrome DevTools → Memory → Load allocation profile**.
@@ -272,7 +272,7 @@ The `writeSeq` chain exists to serialize concurrent blob writes and prevent MaxL
 - **FLUSH_THRESHOLD 64KB → 512KB** (`src/adapters/writers/dataset-writer.ts`)
   - Effect: 13% fewer gzip parts (46 → 40), compression ratio slightly better
   - Wall-clock impact: within network variance (no measurable gain)
-  - Keep: reduces CRMA API round-trips at no cost
+  - Keep: reduces CRM Analytics API round-trips at no cost
 
 ### Recommended (ordered by expected impact)
 

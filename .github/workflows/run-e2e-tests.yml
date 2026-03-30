@@ -24,7 +24,7 @@ jobs:
       - name: Install plugin
         env:
           CHANNEL: ${{ inputs.channel }}
-        run: sf plugins install "crma-data-loader@$CHANNEL"
+        run: sf plugins install "dataset-loader@$CHANNEL"
 
       - name: Verify plugin installation
-        run: sf crma load --help
+        run: sf dataset load --help

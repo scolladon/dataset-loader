@@ -1272,7 +1272,7 @@ describe('executePipeline (streaming)', () => {
     )
   })
 
-  it('given entry with CRMA target org, when executing, then trackGroup is called with org true', async () => {
+  it('given entry with CRM Analytics target org, when executing, then trackGroup is called with org true', async () => {
     // Arrange — kills L152: org !== undefined → false
     const trackGroup = vi.fn(() => createMockGroupTracker())
     const progress: ProgressPort = {

@@ -1,4 +1,4 @@
-# CRMA Data Loader
+# Dataset Loader
 
 SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_eventlogfile.htm) (ELF) and SObject data into CRM Analytics datasets using the [Analytics External Data API](https://developer.salesforce.com/docs/atlas.en-us.bi_dev_guide_ext_data.meta/bi_dev_guide_ext_data/bi_ext_data_object_externaldata.htm).
 
@@ -27,7 +27,7 @@ sf plugins link .
 
 ```bash
 # 1. Create a config file
-cat crma-load.config.json
+cat dataset-load.config.json
 ```
 
 ```json
@@ -47,32 +47,32 @@ cat crma-load.config.json
 
 ```bash
 # 2. Verify auth and permissions
-sf crma load --audit
+sf dataset load --audit
 
 # 3. Preview the plan
-sf crma load --dry-run
+sf dataset load --dry-run
 
 # 4. Run
-sf crma load
+sf dataset load
 ```
 
-For CRMA targets: the dataset must already exist with at least one prior completed upload (so metadata is available). Create it via the CRMA UI or a one-time dataflow before the first load. For file targets: omit `targetOrg` and set `targetFile` to a local file path — the file is created automatically.
+For CRM Analytics targets: the dataset must already exist with at least one prior completed upload (so metadata is available). Create it via the CRM Analytics UI or a one-time dataflow before the first load. For file targets: omit `targetOrg` and set `targetFile` to a local file path — the file is created automatically.
 
 <!-- commands -->
-* [`sf crma load`](#sf-crma-load)
+* [`sf dataset load`](#sf-dataset-load)
 
-## `sf crma load`
+## `sf dataset load`
 
-Load Event Log Files and SObject data into CRMA datasets
+Load Event Log Files and SObject data into CRM Analytics datasets
 
 ```
 USAGE
-  $ sf crma load [--json] [--flags-dir <value>] [-c <value>] [-s <value>] [--audit] [--dry-run] [--entry
+  $ sf dataset load [--json] [--flags-dir <value>] [-c <value>] [-s <value>] [--audit] [--dry-run] [--entry
     <value>]
 
 FLAGS
-  -c, --config-file=<value>  [default: crma-load.config.json] Path to config JSON
-  -s, --state-file=<value>   [default: .crma-load.state.json] Path to watermark state file
+  -c, --config-file=<value>  [default: dataset-load.config.json] Path to config JSON
+  -s, --state-file=<value>   [default: .dataset-load.state.json] Path to watermark state file
       --audit                Pre-flight checks only (auth, connectivity, permissions)
       --dry-run              Show plan without executing
       --entry=<value>        Process only the entry with this name
@@ -82,12 +82,12 @@ GLOBAL FLAGS
   --json               Format output as json.
 
 EXAMPLES
-  $ sf crma load
+  $ sf dataset load
 
-  $ sf crma load --config-file my-config.json --dry-run
+  $ sf dataset load --config-file my-config.json --dry-run
 ```
 
-_See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-loader/blob/main/src/commands/crma/load.ts)_
+_See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-loader/blob/main/src/commands/dataset/load.ts)_
 <!-- commandsstop -->
 
 ### Exit Codes
@@ -100,7 +100,7 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 
 ## Config Format
 
-### Config File (`crma-load.config.json`)
+### Config File (`dataset-load.config.json`)
 
 ```json
 {
@@ -144,8 +144,8 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"elf"` |
 | `sourceOrg` | yes | SF CLI alias of the org containing EventLogFiles |
-| `targetOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
-| `targetDataset` | no | CRMA dataset API name (`EdgemartAlias`). Required when `targetOrg` is set |
+| `targetOrg` | no | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead |
+| `targetDataset` | no | CRM Analytics dataset API name (`EdgemartAlias`). Required when `targetOrg` is set |
 | `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `eventType` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
 | `interval` | yes | `"Daily"` or `"Hourly"` (Hourly requires Shield license) |
@@ -158,8 +158,8 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"sobject"` |
 | `sourceOrg` | yes | SF CLI alias of the source org |
-| `targetOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
-| `targetDataset` | no | CRMA dataset API name. Required when `targetOrg` is set |
+| `targetOrg` | no | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead |
+| `targetDataset` | no | CRM Analytics dataset API name. Required when `targetOrg` is set |
 | `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `sobject` | yes | SObject API name (e.g. `Account`, `Opportunity`) |
 | `fields` | yes | Array of field API names to query |
@@ -175,8 +175,8 @@ _See code: [src/commands/crma/load.ts](https://github.com/scolladon/crma-data-lo
 | --- | --- | --- |
 | `type` | yes | `"csv"` |
 | `sourceFile` | yes | Path to the local CSV file to load |
-| `targetOrg` | no | SF CLI alias of the CRMA org. Omit to write to a local file instead |
-| `targetDataset` | no | CRMA dataset API name. Required when `targetOrg` is set |
+| `targetOrg` | no | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead |
+| `targetDataset` | no | CRM Analytics dataset API name. Required when `targetOrg` is set |
 | `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
 | `augmentColumns` | no | Extra static columns to append. Dynamic `{{sourceOrg.*}}` / `{{targetOrg.*}}` expressions are not supported for CSV entries |
@@ -189,21 +189,21 @@ Append static or dynamic columns to every fetched row. Values support mustache-s
 | --- | --- |
 | `{{sourceOrg.Id}}` | 18-char Organization Id of the source org |
 | `{{sourceOrg.Name}}` | Organization Name of the source org |
-| `{{targetOrg.Id}}` | 18-char Organization Id of the target CRMA org |
-| `{{targetOrg.Name}}` | Organization Name of the target CRMA org |
+| `{{targetOrg.Id}}` | 18-char Organization Id of the target CRM Analytics org |
+| `{{targetOrg.Name}}` | Organization Name of the target CRM Analytics org |
 | Any other string | Used as-is (static value) |
 
-Column names may contain dots (e.g. `"Org.Name"`) as CRMA supports dotted dimension names.
+Column names may contain dots (e.g. `"Org.Name"`) as CRM Analytics supports dotted dimension names.
 
 #### Grouping
 
 Entries targeting the same destination are merged into a single write job:
-- **CRMA targets**: same `(targetOrg, targetDataset)` → single `InsightsExternalData` upload
+- **CRM Analytics targets**: same `(targetOrg, targetDataset)` → single `InsightsExternalData` upload
 - **File targets**: same `targetFile` path → single file write
 
 All entries in a group must use the same `operation`.
 
-### State File (`.crma-load.state.json`)
+### State File (`.dataset-load.state.json`)
 
 Watermarks are stored separately from config to keep config declarative:
 
@@ -226,7 +226,7 @@ Without a state file, the first ELF run fetches only the latest record (bootstra
 2. **Resolve** — authenticate orgs, resolve mustache tokens in augmentColumns (`{{sourceOrg.Id}}`, etc.)
 3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access
 4. **Execute pipeline** — group entries by dataset, stream through Reader → Augment → Writer
-5. **Write** — CRMA: batch gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API; File: stream rows directly to a local CSV file
+5. **Write** — CRM Analytics: batch gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API; File: stream rows directly to a local CSV file
 6. **Update watermarks** — only for entries whose group uploaded successfully
 
 ## Development

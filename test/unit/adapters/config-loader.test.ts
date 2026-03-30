@@ -838,7 +838,7 @@ describe('ConfigLoader', () => {
       }
     })
 
-    it('given CSV config with CRMA target, when parsing, then accepts targetOrg', async () => {
+    it('given CSV config with CRM Analytics target, when parsing, then accepts targetOrg', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
@@ -1639,7 +1639,7 @@ describe('ConfigLoader', () => {
   })
 
   describe('regex boundary validation', () => {
-    it('given augmentColumns key starting with a digit, when parsing, then rejects with CRMA column name error', async () => {
+    it('given augmentColumns key starting with a digit, when parsing, then rejects with dataset column name error', async () => {
       // Arrange — kills L77 regex ^-anchor removal: without ^, '1abc' matches [a-zA-Z_][a-zA-Z0-9_.]*$
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
@@ -1659,11 +1659,11 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).rejects.toThrow(
-        'Must be a valid CRMA column name'
+        'Must be a valid dataset column name'
       )
     })
 
-    it('given augmentColumns key ending with a special character, when parsing, then rejects with CRMA column name error', async () => {
+    it('given augmentColumns key ending with a special character, when parsing, then rejects with dataset column name error', async () => {
       // Arrange — kills L77 regex $-anchor removal: without $, 'col!' matches ^[a-zA-Z_][a-zA-Z0-9_.]*
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
@@ -1683,7 +1683,7 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).rejects.toThrow(
-        'Must be a valid CRMA column name'
+        'Must be a valid dataset column name'
       )
     })
 

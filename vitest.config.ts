@@ -6,7 +6,7 @@ export default defineConfig({
     include: ['test/unit/**/*.test.ts', 'test/nut/**/*.nut.ts'],
     coverage: {
       include: ['src/**/*.ts'],
-      exclude: ['src/ports/types.ts', 'src/commands/crma/load.ts'],
+      exclude: ['src/ports/types.ts', 'src/commands/dataset/load.ts'],
       thresholds: {
         lines: 100,
         functions: 100,

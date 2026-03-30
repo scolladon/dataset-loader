@@ -71,11 +71,11 @@ const soqlRelationshipPath = z
     SOQL_RELATIONSHIP_PATH_PATTERN,
     'Must be a valid SOQL field or relationship path (e.g. Name, Owner.Name)'
   )
-const crmaColumnName = z
+const datasetColumnName = z
   .string()
   .regex(
     /^[a-zA-Z_][a-zA-Z0-9_.]*$/,
-    'Must be a valid CRMA column name (letters, digits, underscores, dots)'
+    'Must be a valid dataset column name (letters, digits, underscores, dots)'
   )
 const orgAlias = z
   .string()
@@ -89,29 +89,29 @@ function validateTargetFields(
   entry: { targetOrg?: string; targetDataset?: string; targetFile?: string },
   ctx: z.RefinementCtx
 ): void {
-  const hasCrma = !!entry.targetOrg
+  const hasDatasetTarget = !!entry.targetOrg
   const hasFile = !!entry.targetFile
 
-  if (hasCrma && hasFile) {
+  if (hasDatasetTarget && hasFile) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Cannot specify both targetOrg and targetFile',
     })
   }
-  if (!hasCrma && !hasFile) {
+  if (!hasDatasetTarget && !hasFile) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'Either targetOrg+targetDataset or targetFile must be specified',
     })
   }
-  if (hasCrma && !entry.targetDataset) {
+  if (hasDatasetTarget && !entry.targetDataset) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'targetDataset is required when targetOrg is set',
       path: ['targetDataset'],
     })
   }
-  if (!hasCrma && entry.targetDataset) {
+  if (!hasDatasetTarget && entry.targetDataset) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'targetDataset requires targetOrg to be set',
@@ -128,7 +128,7 @@ const baseEntrySchema = z
     targetDataset: sfIdentifier.optional(),
     targetFile: z.string().min(1).optional(),
     operation: z.enum(['Append', 'Overwrite']).default('Append'),
-    augmentColumns: z.record(crmaColumnName, z.string()).optional(),
+    augmentColumns: z.record(datasetColumnName, z.string()).optional(),
   })
   .superRefine((entry, ctx) => {
     validateTargetFields(entry, ctx)
@@ -176,7 +176,7 @@ const csvEntrySchema = z
     targetDataset: sfIdentifier.optional(),
     targetFile: z.string().min(1).optional(),
     operation: z.enum(['Append', 'Overwrite']).default('Append'),
-    augmentColumns: z.record(crmaColumnName, z.string()).optional(),
+    augmentColumns: z.record(datasetColumnName, z.string()).optional(),
   })
   .strict()
   .superRefine((entry, ctx) => {

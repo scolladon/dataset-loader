@@ -84,7 +84,7 @@ jobs:
           message: |
             Published under `${{ env.DEV_CHANNEL }}` npm channel.
             ```sh
-            $ sf plugins install crma-data-loader@${{ env.DEV_CHANNEL }}
+            $ sf plugins install dataset-loader@${{ env.DEV_CHANNEL }}
             ```
           comment-tag: dev-publish
           mode: recreate

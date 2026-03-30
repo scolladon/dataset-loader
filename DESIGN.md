@@ -1,8 +1,8 @@
-# Design Document: CRMA Data Loader — SF CLI Plugin
+# Design Document: Dataset Loader — SF CLI Plugin
 
 ## Problem Statement
 
-Organizations need to load Salesforce Event Log Files (ELF) and SObject data into CRM Analytics (CRMA) datasets for long-term analysis. The data may come from multiple source orgs and target multiple analytic orgs, requiring column augmentation (e.g., OrgId), parallel fetching, grouped uploads, and incremental watermark-based loading.
+Organizations need to load Salesforce Event Log Files (ELF) and SObject data into CRM Analytics datasets for long-term analysis. The data may come from multiple source orgs and target multiple analytic orgs, requiring column augmentation (e.g., OrgId), parallel fetching, grouped uploads, and incremental watermark-based loading.
 
 ## Why an SF CLI Plugin (TypeScript)
 
@@ -17,13 +17,13 @@ Organizations need to load Salesforce Event Log Files (ELF) and SObject data int
 | Concern | SFDMU Limitation |
 |---------|-----------------|
 | **ELF blob access** | Cannot download `EventLogFile.LogFile` blobs — the Add-On API has no mechanism for arbitrary blob field access |
-| **CRMA upload** | InsightsExternalData lifecycle (header + compressed base64 parts + process trigger) is not a CRUD operation and cannot be expressed as SFDMU object operations |
+| **CRM Analytics upload** | InsightsExternalData lifecycle (header + compressed base64 parts + process trigger) is not a CRUD operation and cannot be expressed as SFDMU object operations |
 | **Org model** | Strictly 2-org (source → target). This project requires N orgs (multiple sources + multiple analytics per entry) |
 | **Add-On API surface** | No authenticated Salesforce connection exposed to add-on code — arbitrary REST/SOQL calls require managing your own auth ([GitHub issue #787](https://github.com/forcedotcom/SFDX-Data-Move-Utility/issues/787)) |
 | **Concurrency control** | SFDMU controls its own parallelism internally; per-org `p-limit(25)` semaphores are not possible |
 | **Grouping** | No equivalent to merging CSVs from multiple entries targeting the same `(analyticOrg, dataset)` |
 
-SFDMU is the right tool for SObject-to-SObject migration, but the ELF download → augment → group → CRMA upload pipeline is outside its design scope.
+SFDMU is the right tool for SObject-to-SObject migration, but the ELF download → augment → group → CRM Analytics upload pipeline is outside its design scope.
 
 ## Architecture: Hexagonal with Streaming Pipeline
 
@@ -32,7 +32,7 @@ The codebase follows **Hexagonal Architecture** (Ports & Adapters) with a stream
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Command Layer — Composition Root                                          │
-│  commands/crma/load.ts                                                     │
+│  commands/dataset/load.ts                                                     │
 │  Decomposed into focused methods: config loading, SF port creation,        │
 │  audit, dry-run, pipeline execution, reader factory                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -57,7 +57,7 @@ The codebase follows **Hexagonal Architecture** (Ports & Adapters) with a stream
 
 ```
 src/
-├── commands/crma/
+├── commands/dataset/
 │   └── load.ts              # SF CLI command — composition root
 ├── domain/
 │   ├── pipeline.ts          # Core orchestration engine
@@ -78,7 +78,7 @@ src/
     │   ├── sobject-reader.ts  # SObject query reader (yields CSV lines)
     │   └── csv-reader.ts      # Local CSV file reader
     ├── writers/
-    │   ├── dataset-writer.ts  # CRMA upload (InsightsExternalData)
+    │   ├── dataset-writer.ts  # CRM Analytics upload (InsightsExternalData)
     │   └── file-writer.ts     # Local file writer (CSV output)
     └── pipeline/
         ├── async-channel.ts       # Bounded async channel (multi-producer, single-consumer)
@@ -127,7 +127,7 @@ All value objects are **immutable** and **self-validating** (Object Calisthenics
 
 - **Watermark** — Wraps ISO 8601 timestamp string. Validates format on construction. Converts to SOQL literal via `toSoqlLiteral()`.
 - **WatermarkKey** — Composite key: `{sourceOrg}:elf:{eventType}:{interval}` or `{sourceOrg}:sobject:{sobject}`. Static factory `fromEntry()`.
-- **DatasetKey** — Composite key: `org:{targetOrg}:{targetDataset}` (CRMA target) or `file:{targetFile}` (file target). Used for grouping entries into write jobs.
+- **DatasetKey** — Composite key: `org:{targetOrg}:{targetDataset}` (CRM Analytics target) or `file:{targetFile}` (file target). Used for grouping entries into write jobs.
 - **WatermarkStore** — Immutable map from WatermarkKey → Watermark. `set()` returns a new store instance.
 
 ## Data Flow
@@ -148,8 +148,8 @@ executePipeline()
   │
   ├── For each group (parallel via Promise.all with .catch()):
   │   │
-  │   ├── Init Writer (CRMA: queries metadata, creates parent record; File: opens stream)
-  │   │   └── Throws SkipDatasetError if no existing CRMA metadata found
+  │   ├── Init Writer (CRM Analytics: queries metadata, creates parent record; File: opens stream)
+  │   │   └── Throws SkipDatasetError if no existing CRM Analytics metadata found
   │   ├── Returns shared chunker Writable for the group
   │   │
   │   ├── For each reader bundle (entries sharing same reader + watermark):
@@ -160,7 +160,7 @@ executePipeline()
   │   │
   │   ├── End chunker stream and await completion
   │   ├── Finalize Writer
-  │   │   └── CRMA: PATCH InsightsExternalData with Action='Process'
+  │   │   └── CRM Analytics: PATCH InsightsExternalData with Action='Process'
   │   │   └── File: close WriteStream
   │   │
   │   └── Update watermarks for successful entries
@@ -178,7 +178,7 @@ Data never fully materializes in memory. The pipeline streams through three laye
 2. **AugmentTransform + RowCounter** — Transform stream that appends augment columns to each batch; PassThrough that counts rows for progress tracking
 3. **FanOutTransform** — When multiple entries share the same reader (same org + eventType/sobject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
 4. **Writer chunker** — Writable stream returned by `Writer.init()`:
-   - CRMA (`GzipChunkingWritable`): batch gzip-compresses (512KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently up to `UPLOAD_HIGH_WATER` (= 25) in-flight
+   - CRM Analytics (`GzipChunkingWritable`): batch gzip-compresses (512KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently up to `UPLOAD_HIGH_WATER` (= 25) in-flight
    - File (`FileWriter` internal): streams CSV rows directly to a `fs.WriteStream`; writes header on first row via `HeaderProvider`
 
 Key types:
@@ -209,7 +209,7 @@ interface Writer {
 |-------|----------|-------|
 | Dataset groups | `Promise.all` with `.catch()` wrappers | Unbounded |
 | Entries within a group | Concurrent via `Promise.all` | Unbounded (Node.js stream backpressure serializes writes to shared chunker) |
-| Part uploads within a group | Bounded in-flight set (`pendingUploads`) with `Promise.race` backpressure | `UPLOAD_HIGH_WATER` = 25 (CRMA only) |
+| Part uploads within a group | Bounded in-flight set (`pendingUploads`) with `Promise.race` backpressure | `UPLOAD_HIGH_WATER` = 25 (CRM Analytics only) |
 | ELF blob downloads | Concurrent within each page; pages chained sequentially | All blobs pre-fetched per page |
 | Salesforce API calls per org | `pLimit` semaphore | 25 concurrent |
 | HTTP 429 responses | Exponential backoff retry | 3 attempts (1s, 2s, 4s) |
@@ -229,7 +229,7 @@ Error isolation: a failed entry aborts the entire group (sink is aborted, all en
    └── DataFile (base64-encoded gzip)
 
 3. PATCH InsightsExternalData
-   ├── Action='Process' (triggers CRMA ingestion)
+   ├── Action='Process' (triggers CRM Analytics ingestion)
    └── Mode='Incremental' (faster processing)
 ```
 
@@ -248,7 +248,7 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 | `FanOutTransform` | `adapters/pipeline/fan-out-transform.ts` | Transform stream that tees each chunk to N `PassThrough` channels concurrently via `Promise.all`. Used when multiple entries share the same reader (same org + type + watermark). Channels that error are removed from the active set. |
 | `RowCounter` | `adapters/pipeline/row-counter.ts` | PassThrough stream that counts rows for progress tracking via `GroupTracker.addRows()`. |
 | `AsyncChannel<T>` | `adapters/pipeline/async-channel.ts` | Bounded multi-producer, single-consumer async queue. Producers call `push()` and await backpressure when the queue reaches `highWater`. Consumer iterates with `for await`. `close()` signals end-of-stream; `fail(err)` propagates an error to both producers and consumer. |
-| `DatasetWriterFactory` | `adapters/writers/dataset-writer.ts` | Creates `DatasetWriter` instances per CRMA dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 512KB flush threshold, splits at 10 MB base64 boundaries, and keeps at most `UPLOAD_HIGH_WATER` (= 25) part uploads in-flight via `Promise.race` backpressure. |
+| `DatasetWriterFactory` | `adapters/writers/dataset-writer.ts` | Creates `DatasetWriter` instances per CRM Analytics dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 512KB flush threshold, splits at 10 MB base64 boundaries, and keeps at most `UPLOAD_HIGH_WATER` (= 25) part uploads in-flight via `Promise.race` backpressure. |
 | `FileWriterFactory` | `adapters/writers/file-writer.ts` | Creates `FileWriter` instances per output file path. `FileWriter.init()` opens a `fs.WriteStream` (append or overwrite). Header is written on first row via `HeaderProvider.resolveHeader()`. `skip()` deletes the file on overwrite. |
 | `ConfigLoader` | `adapters/config-loader.ts` | Reads JSON config, Zod schema validation, operation consistency checks, mustache token resolution (`{{sourceOrg.Id}}`, etc.) |
 | `FileStateManager` | `adapters/state-manager.ts` | Atomic read/write of watermark state file (temp file + rename, mode `0o600`) |

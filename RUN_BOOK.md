@@ -1,8 +1,8 @@
-# Run Book: CRMA Data Loader
+# Run Book: Dataset Loader
 
 ## Overview
 
-The CRMA Data Loader is an SF CLI plugin that extracts Salesforce Event Log Files (ELF) and SObject data from source orgs and writes them either into CRM Analytics datasets (CRMA target) or to local CSV files (file target). It runs outside the Salesforce platform to avoid governor limits, uses a streaming pipeline for memory-bounded processing, supports parallel fetching with gzip compression for CRMA uploads, and tracks ingestion progress through a JSON-based watermark system. See the [README](README.md) for full command usage and config format.
+The Dataset Loader is an SF CLI plugin that extracts Salesforce Event Log Files (ELF) and SObject data from source orgs and writes them either into CRM Analytics datasets (CRM Analytics target) or to local CSV files (file target). It runs outside the Salesforce platform to avoid governor limits, uses a streaming pipeline for memory-bounded processing, supports parallel fetching with gzip compression for CRM Analytics uploads, and tracks ingestion progress through a JSON-based watermark system. See the [README](README.md) for full command usage and config format.
 
 ## Prerequisites & Setup
 
@@ -16,7 +16,7 @@ The CRMA Data Loader is an SF CLI plugin that extracts Salesforce Event Log File
 ### Installation
 
 ```bash
-cd /path/to/crma-data-loader
+cd /path/to/dataset-loader
 npm install
 npm run build
 sf plugins link .
@@ -25,12 +25,12 @@ sf plugins link .
 Verify the plugin is registered:
 
 ```bash
-sf crma load --help
+sf dataset load --help
 ```
 
 ### Org Authentication
 
-Authenticate both the source org (where data lives) and the analytic org (where CRMA datasets live):
+Authenticate both the source org (where data lives) and the analytic org (where CRM Analytics datasets live):
 
 ```bash
 sf org login web --alias my-source-org
@@ -56,7 +56,7 @@ Assign via Permission Set or Profile. The `sf` CLI alias must authenticate as a 
 
 ### Config File Setup
 
-Create `crma-load.config.json` at the project root. See the [README](README.md#config-format) for the full schema. Minimal example:
+Create `dataset-load.config.json` at the project root. See the [README](README.md#config-format) for the full schema. Minimal example:
 
 ```json
 {
@@ -80,13 +80,13 @@ Create `crma-load.config.json` at the project root. See the [README](README.md#c
 Run daily at 6:00 AM (after Salesforce generates daily log files around 3:00 AM):
 
 ```
-0 6 * * * cd /path/to/crma-data-loader && sf crma load >> /var/log/crma-loader.log 2>&1
+0 6 * * * cd /path/to/dataset-loader && sf dataset load >> /var/log/dataset-loader.log 2>&1
 ```
 
 For JSON-structured logs:
 
 ```
-0 6 * * * cd /path/to/crma-data-loader && sf crma load --json >> /var/log/crma-loader.json 2>&1
+0 6 * * * cd /path/to/dataset-loader && sf dataset load --json >> /var/log/dataset-loader.json 2>&1
 ```
 
 ## Running Manually
@@ -96,7 +96,7 @@ For JSON-structured logs:
 Check auth, connectivity, InsightsExternalData write permissions (analytic orgs), and ViewEventLogFiles access (ELF source orgs) without touching data:
 
 ```bash
-sf crma load --audit
+sf dataset load --audit
 ```
 
 ### Dry Run
@@ -104,7 +104,7 @@ sf crma load --audit
 Preview what would be fetched and uploaded:
 
 ```bash
-sf crma load --dry-run
+sf dataset load --dry-run
 ```
 
 ### Full Run
@@ -112,13 +112,13 @@ sf crma load --dry-run
 Process all entries:
 
 ```bash
-sf crma load
+sf dataset load
 ```
 
 With a custom config:
 
 ```bash
-sf crma load --config-file path/to/config.json --state-file path/to/state.json
+sf dataset load --config-file path/to/config.json --state-file path/to/state.json
 ```
 
 ### Single Entry
@@ -126,7 +126,7 @@ sf crma load --config-file path/to/config.json --state-file path/to/state.json
 Test one entry by its name:
 
 ```bash
-sf crma load --entry login-events
+sf dataset load --entry login-events
 ```
 
 ### JSON Output
@@ -134,7 +134,7 @@ sf crma load --entry login-events
 Get structured output for scripting:
 
 ```bash
-sf crma load --json
+sf dataset load --json
 ```
 
 Returns:
@@ -178,7 +178,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 | processed | Entries that fetched and streamed data successfully |
 | skipped | Entries with no new records since last watermark |
 | failed | Entries that encountered errors |
-| groups uploaded | Distinct CRMA upload jobs completed |
+| groups uploaded | Distinct CRM Analytics upload jobs completed |
 
 ## Troubleshooting
 
@@ -204,7 +204,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
   sf org login web --alias <alias>
 
   # Verify
-  sf crma load --audit
+  sf dataset load --audit
   ```
   For headless environments, use `sf org login jwt`. For 403, verify permissions in the [Prerequisites](#required-permissions) section.
 
@@ -223,18 +223,18 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 ### "No existing metadata for dataset, skipping"
 
 - **Symptom**: Log shows `No existing metadata for dataset '<name>', skipping` and the entry is skipped.
-- **Cause**: The CRMA target dataset has no prior completed upload, so metadata cannot be resolved. This only affects CRMA targets (`targetOrg` set); file targets are always writable.
-- **Resolution**: Create the dataset manually via the CRMA UI (Analytics Studio > Data Manager) or perform a one-time dataflow upload first, then re-run.
+- **Cause**: The CRM Analytics target dataset has no prior completed upload, so metadata cannot be resolved. This only affects CRM Analytics targets (`targetOrg` set); file targets are always writable.
+- **Resolution**: Create the dataset manually via the CRM Analytics UI (Analytics Studio > Data Manager) or perform a one-time dataflow upload first, then re-run.
 
 ### "field-count and header's column-count do not match"
 
-- **Symptom**: CRMA reports `field-count, N, and header's column-count, 1, do not match` after upload.
-- **Cause**: The dataset metadata is missing `fieldsEnclosedBy: '"'`, so CRMA cannot parse the quoted CSV correctly.
-- **Resolution**: Delete the dataset in the CRMA UI, remove its watermark from `.crma-load.state.json`, and re-upload with corrected metadata.
+- **Symptom**: CRM Analytics reports `field-count, N, and header's column-count, 1, do not match` after upload.
+- **Cause**: The dataset metadata is missing `fieldsEnclosedBy: '"'`, so CRM Analytics cannot parse the quoted CSV correctly.
+- **Resolution**: Delete the dataset in the CRM Analytics UI, remove its watermark from `.dataset-load.state.json`, and re-upload with corrected metadata.
 
 ### Dataset Processing Stuck
 
-- **Symptom**: Data does not appear in CRMA after a successful upload.
+- **Symptom**: Data does not appear in CRM Analytics after a successful upload.
 - **Cause**: Salesforce processing is delayed or stuck.
 - **Resolution**:
   1. Query upload status:
@@ -259,9 +259,9 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 
 To re-fetch from scratch:
 
-1. Open `.crma-load.state.json`
+1. Open `.dataset-load.state.json`
 2. Delete the key for the target entry (or delete the entire file for a full reset)
-3. Re-run `sf crma load`
+3. Re-run `sf dataset load`
 
 Note: ELF entries without a watermark fetch only the latest record (bootstrap mode). SObject entries without a watermark fetch all matching records — use the `limit` config field to cap initial loads.
 
@@ -279,11 +279,11 @@ To re-ingest from a specific point, set the watermark to an ISO 8601 date before
 
 If a dataset has corrupted metadata or an incompatible schema:
 
-1. Delete the dataset in the CRMA UI (Analytics Studio > Data Manager > Datasets)
-2. Remove the corresponding watermark(s) from `.crma-load.state.json`
-3. Run `sf crma load`
+1. Delete the dataset in the CRM Analytics UI (Analytics Studio > Data Manager > Datasets)
+2. Remove the corresponding watermark(s) from `.dataset-load.state.json`
+3. Run `sf dataset load`
 
-Re-create the dataset via the CRMA UI or a one-time dataflow, then re-run the loader. The loader requires existing metadata from a prior completed upload.
+Re-create the dataset via the CRM Analytics UI or a one-time dataflow, then re-run the loader. The loader requires existing metadata from a prior completed upload.
 
 ### Expired or Rotated Auth
 
@@ -302,20 +302,20 @@ sf org login jwt --client-id <client_id> --jwt-key-file <key_file> --username <u
 Verify:
 
 ```bash
-sf crma load --audit
+sf dataset load --audit
 ```
 
 ### Rebuilding Config
 
-If `crma-load.config.json` is lost, recreate from the [README config format](README.md#config-format). The state file (`.crma-load.state.json`) is independent — existing watermarks will continue working with a new config.
+If `dataset-load.config.json` is lost, recreate from the [README config format](README.md#config-format). The state file (`.dataset-load.state.json`) is independent — existing watermarks will continue working with a new config.
 
 ## Multi-Environment Setup
 
 Use separate config and state files per environment:
 
 ```bash
-sf crma load -c configs/prod.json -s state/prod.state.json
-sf crma load -c configs/staging.json -s state/staging.state.json
+sf dataset load -c configs/prod.json -s state/prod.state.json
+sf dataset load -c configs/staging.json -s state/staging.state.json
 ```
 
 ## Reference
@@ -337,4 +337,4 @@ sf crma load -c configs/staging.json -s state/staging.state.json
 | HTTP 429 retry | Exponential backoff, 3 attempts max (1s, 2s, 4s) |
 | Partial failure | Failed entries don't block others; watermarks only advance on success |
 | Atomic state writes | Temp file + rename prevents corruption on crash |
-| Streaming | Memory-bounded processing via async iterables; CRMA targets use chunked uploads (10 MB gzip-compressed parts), file targets stream directly to disk |
+| Streaming | Memory-bounded processing via async iterables; CRM Analytics targets use chunked uploads (10 MB gzip-compressed parts), file targets stream directly to disk |
