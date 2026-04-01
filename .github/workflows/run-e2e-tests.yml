@@ -22,7 +22,7 @@ jobs:
         run: npm install -g @salesforce/cli
 
       - name: Install plugin
-        run: sf plugins install ${{ inputs.channel }}
+        run: echo y | sf plugins install ${{ inputs.channel }}
 
       - name: Verify plugin installation
         run: sf dataset load --help
