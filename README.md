@@ -2,6 +2,10 @@
 
 SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_eventlogfile.htm) (ELF) and SObject data into CRM Analytics datasets using the [Analytics External Data API](https://developer.salesforce.com/docs/atlas.en-us.bi_dev_guide_ext_data.meta/bi_dev_guide_ext_data/bi_ext_data_object_externaldata.htm).
 
+<p align="center">
+  <img src="resources/combined_pipeline.gif" alt="Pipeline demo" />
+</p>
+
 ## Prerequisites
 
 - [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli) (`sf`) with authenticated orgs
