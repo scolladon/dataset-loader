@@ -11,8 +11,14 @@ vi.mock('node:fs', () => ({
 
 import { createReadStream } from 'node:fs'
 
+async function* asyncChunks(content: string): AsyncGenerator<Buffer> {
+  for (const line of content.split('\n')) {
+    yield Buffer.from(`${line}\n`)
+  }
+}
+
 function makeStream(content: string): ReadStream {
-  return Readable.from(Buffer.from(content)) as unknown as ReadStream
+  return Readable.from(asyncChunks(content)) as unknown as ReadStream
 }
 
 describe('CsvReader', () => {
