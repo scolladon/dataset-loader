@@ -22,16 +22,14 @@ SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesfor
 ## Installation
 
 ```bash
-npm install
-npm run build
-sf plugins link .
+sf plugins install dataset-loader
 ```
 
 ## Quick Start
 
 ```bash
 # 1. Create a config file
-cat dataset-load.config.json
+touch dataset-load.config.json
 ```
 
 ```json
@@ -137,6 +135,24 @@ _See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-l
       "augmentColumns": {
         "OrgId": "{{sourceOrg.Id}}"
       }
+    },
+    {
+      "type": "csv",
+      "sourceFile": "./data/accounts-export.csv",
+      "targetOrg": "analytic-org-alias",
+      "targetDataset": "ALM_ImportedAccounts",
+      "operation": "Overwrite",
+      "augmentColumns": {
+        "Source": "ManualExport"
+      }
+    },
+    {
+      "type": "elf",
+      "sourceOrg": "source-org-alias",
+      "targetFile": "./output/login-events.csv",
+      "eventType": "Login",
+      "interval": "Daily",
+      "operation": "Append"
     }
   ]
 }
