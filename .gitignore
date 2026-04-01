@@ -10,3 +10,4 @@ profiles/
 dataset-load.config.profiling.json
 .dataset-load.state.profiling.json
 *.csv
+.vscode/
