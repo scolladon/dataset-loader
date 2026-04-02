@@ -10,4 +10,8 @@ profiles/
 dataset-load.config.profiling.json
 .dataset-load.state.profiling.json
 *.csv
+perf-preview.html
+perf-raw.json
+perf-runtime.json
+perf-memory.json
 .vscode/

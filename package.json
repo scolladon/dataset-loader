@@ -66,7 +66,8 @@
     "test:integration": "wireit",
     "test:mutation": "wireit",
     "test:watch": "vitest",
-    "dependencies:upgrade": "npx npm-check-updates -u ; npm install ; npm audit fix"
+    "dependencies:upgrade": "npx npm-check-updates -u ; npm install ; npm audit fix",
+    "test:perf": "wireit"
   },
   "wireit": {
     "build": {
@@ -76,7 +77,7 @@
       ]
     },
     "clean": {
-      "command": "shx rm -rf 'reports/*' oclif.manifest.json package.tgz 'dataset-loader-*.tgz'",
+      "command": "shx rm -rf 'reports/*' oclif.manifest.json package.tgz 'dataset-loader-*.tgz' perf-raw.json perf-runtime.json perf-memory.json perf-preview.html",
       "files": [
         "lib",
         "reports/*",
@@ -233,6 +234,23 @@
         "tsconfig.json"
       ],
       "output": []
+    },
+    "test:perf": {
+      "command": "node --expose-gc ./node_modules/.bin/vitest bench --config vitest.config.perf.ts && node test/perf/formatResults.mjs",
+      "files": [
+        "src/**/*.ts",
+        "test/perf/**",
+        "**/tsconfig.json",
+        "vitest.config.perf.ts"
+      ],
+      "output": [
+        "perf-raw.json",
+        "perf-runtime.json",
+        "perf-memory.json"
+      ],
+      "dependencies": [
+        "compile"
+      ]
     },
     "test:mutation": {
       "command": "stryker run",
