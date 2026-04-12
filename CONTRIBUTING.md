@@ -11,7 +11,7 @@ npm install
 
 ## Project Structure
 
-```
+```text
 src/
 ├── commands/dataset/
 │   └── load.ts              # SF CLI command (composition root)
