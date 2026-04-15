@@ -318,7 +318,53 @@ describe('ConfigLoader', () => {
 
       // Act / Assert
       await expect(parseConfig('config.json')).rejects.toThrow(
-        'Entry must have exactly one of eventLog, sObject, or csvFile'
+        'found: eventLog, sObject'
+      )
+    })
+
+    it('given entry with all three discriminator fields, when loading, then throws ambiguity error', async () => {
+      // Arrange — kills present.length > 1 → present.length === 2 mutation
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventLog: 'Login',
+            interval: 'Daily',
+            sObject: 'Account',
+            fields: ['Id'],
+            csvFile: './data.csv',
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act / Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'found: eventLog, sObject, csvFile'
+      )
+    })
+
+    it('given null entry, when loading, then throws validation error', async () => {
+      // Arrange — kills val === null guard
+      const config = { entries: [null] }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act / Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Entry must be an object'
+      )
+    })
+
+    it('given array entry instead of object, when loading, then throws validation error', async () => {
+      // Arrange — kills Array.isArray guard
+      const config = { entries: [['a', 'b']] }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act / Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Entry must be an object'
       )
     })
 
@@ -1116,6 +1162,24 @@ describe('ConfigLoader', () => {
       await expect(parseConfig('config.json')).rejects.toThrow('Unrecognized')
     })
 
+    it('given CSV entry with unknown property, when parsing, then rejects with unrecognized key', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              csvFile: './data/login.csv',
+              targetFile: './out/login.csv',
+              unknownProp: 'value',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow('Unrecognized')
+    })
+
     it('given CSV config with explicit operation Append, when parsing, then accepts it', async () => {
       // Arrange — kills L178: z.enum(['', 'Overwrite']) rejects explicit 'Append'
       vi.mocked(fs.readFile).mockResolvedValue(
@@ -1196,6 +1260,39 @@ describe('ConfigLoader', () => {
       expect(sfPorts.get('source')!.query).toHaveBeenCalledWith(
         'SELECT Id, Name FROM Organization LIMIT 1'
       )
+    })
+
+    it('given CSV entry alongside ELF entry with mustache, when loading, then resolves only ELF augment columns', async () => {
+      // Arrange — kills L265: isCsvEntry guard in collectUniqueOrgs
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventLog: 'E1',
+            interval: 'Daily',
+            augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
+          },
+          {
+            csvFile: './data/static.csv',
+            targetFile: './out/static.csv',
+            augmentColumns: { Tag: 'manual' },
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+      const sfPorts = new Map<string, SalesforcePort>([
+        ['source', makeSfPort({ Id: '00Dsrc', Name: 'SourceOrg' })],
+        ['analytic', makeSfPort()],
+      ])
+
+      // Act
+      const sut = await loadConfig('config.json', sfPorts)
+
+      // Assert
+      expect(sut[0].augmentColumns).toEqual({ OrgId: '00Dsrc' })
+      expect(sut[1].augmentColumns).toEqual({ Tag: 'manual' })
     })
 
     it('given mixed static and {{sourceOrg.Name}} in value, when loading, then interpolates', async () => {
