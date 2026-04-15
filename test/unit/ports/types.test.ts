@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   type EntryShape,
   formatErrorMessage,
-  isCsvShape,
-  isElfShape,
-  isSObjectShape,
+  isCsv,
+  isElf,
+  isSObject,
   SF_IDENTIFIER_PATTERN,
   SkipDatasetError,
   SOQL_RELATIONSHIP_PATH_PATTERN,
@@ -150,7 +150,7 @@ describe('SkipDatasetError', () => {
   })
 })
 
-describe('isElfShape', () => {
+describe('isElf', () => {
   it('given ELF entry, when checking, then returns true', () => {
     // Arrange
     const entry: EntryShape = {
@@ -160,7 +160,7 @@ describe('isElfShape', () => {
     }
 
     // Act
-    const sut = isElfShape(entry)
+    const sut = isElf(entry)
 
     // Assert
     expect(sut).toBe(true)
@@ -171,20 +171,20 @@ describe('isElfShape', () => {
     const entry: EntryShape = { sourceOrg: 'org', sObject: 'Account' }
 
     // Act
-    const sut = isElfShape(entry)
+    const sut = isElf(entry)
 
     // Assert
     expect(sut).toBe(false)
   })
 })
 
-describe('isSObjectShape', () => {
+describe('isSObject', () => {
   it('given SObject entry, when checking, then returns true', () => {
     // Arrange
     const entry: EntryShape = { sourceOrg: 'org', sObject: 'Account' }
 
     // Act
-    const sut = isSObjectShape(entry)
+    const sut = isSObject(entry)
 
     // Assert
     expect(sut).toBe(true)
@@ -195,20 +195,20 @@ describe('isSObjectShape', () => {
     const entry: EntryShape = { csvFile: './data.csv' }
 
     // Act
-    const sut = isSObjectShape(entry)
+    const sut = isSObject(entry)
 
     // Assert
     expect(sut).toBe(false)
   })
 })
 
-describe('isCsvShape', () => {
+describe('isCsv', () => {
   it('given CSV entry, when checking, then returns true', () => {
     // Arrange
     const entry: EntryShape = { csvFile: './data.csv' }
 
     // Act
-    const sut = isCsvShape(entry)
+    const sut = isCsv(entry)
 
     // Assert
     expect(sut).toBe(true)
@@ -223,7 +223,7 @@ describe('isCsvShape', () => {
     }
 
     // Act
-    const sut = isCsvShape(entry)
+    const sut = isCsv(entry)
 
     // Assert
     expect(sut).toBe(false)

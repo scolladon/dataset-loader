@@ -3,38 +3,40 @@ import path from 'node:path'
 import { z } from 'zod'
 import { DatasetKey } from '../domain/dataset-key.js'
 import {
+  type CsvShape,
+  type ElfShape,
+  isCsv,
+  isElf,
+  isSObject,
   type Operation,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
+  type SObjectShape,
   SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../ports/types.js'
 
 interface BaseEntry {
-  name?: string
-  sourceOrg: string
-  targetOrg?: string
-  targetDataset?: string
-  targetFile?: string
-  operation: Operation
-  augmentColumns?: Record<string, string>
+  readonly name?: string
+  readonly sourceOrg: string
+  readonly targetOrg?: string
+  readonly targetDataset?: string
+  readonly targetFile?: string
+  readonly operation: Operation
+  readonly augmentColumns?: Record<string, string>
 }
 
-export interface ElfEntry extends BaseEntry {
-  eventLog: string
+export interface ElfEntry extends BaseEntry, ElfShape {
   interval: 'Daily' | 'Hourly'
 }
 
-export interface SObjectEntry extends BaseEntry {
-  sObject: string
+export interface SObjectEntry extends BaseEntry, SObjectShape {
   fields: string[]
   dateField: string
   where?: string
   limit?: number
 }
 
-export interface CsvEntry {
-  name?: string
-  csvFile: string
+export interface CsvEntry extends CsvShape {
   targetOrg?: string
   targetDataset?: string
   targetFile?: string
@@ -44,17 +46,9 @@ export interface CsvEntry {
 
 export type ConfigEntry = ElfEntry | SObjectEntry | CsvEntry
 
-export function isElfEntry(entry: ConfigEntry): entry is ElfEntry {
-  return 'eventLog' in entry
-}
-
-export function isSObjectEntry(entry: ConfigEntry): entry is SObjectEntry {
-  return 'sObject' in entry
-}
-
-export function isCsvEntry(entry: ConfigEntry): entry is CsvEntry {
-  return 'csvFile' in entry
-}
+export const isElfEntry = isElf<ConfigEntry>
+export const isSObjectEntry = isSObject<ConfigEntry>
+export const isCsvEntry = isCsv<ConfigEntry>
 
 interface Config {
   entries: ConfigEntry[]

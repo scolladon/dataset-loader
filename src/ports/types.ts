@@ -37,15 +37,17 @@ export interface CsvShape {
 
 export type EntryShape = ElfShape | SObjectShape | CsvShape
 
-export function isElfShape(entry: EntryShape): entry is ElfShape {
+export function isElf<T extends EntryShape>(entry: T): entry is T & ElfShape {
   return 'eventLog' in entry
 }
 
-export function isSObjectShape(entry: EntryShape): entry is SObjectShape {
+export function isSObject<T extends EntryShape>(
+  entry: T
+): entry is T & SObjectShape {
   return 'sObject' in entry
 }
 
-export function isCsvShape(entry: EntryShape): entry is CsvShape {
+export function isCsv<T extends EntryShape>(entry: T): entry is T & CsvShape {
   return 'csvFile' in entry
 }
 
