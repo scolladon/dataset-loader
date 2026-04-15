@@ -70,11 +70,10 @@ async function runCommand(argv: string[]): Promise<unknown> {
 
 function elfEntry(overrides: Record<string, unknown> = {}) {
   return {
-    type: 'elf' as const,
     sourceOrg: 'src-org',
     targetOrg: 'ana-org',
     targetDataset: 'DS',
-    eventType: 'Login',
+    eventLog: 'Login',
     interval: 'Daily' as const,
     ...overrides,
   }
@@ -82,11 +81,10 @@ function elfEntry(overrides: Record<string, unknown> = {}) {
 
 function sobjectEntry(overrides: Record<string, unknown> = {}) {
   return {
-    type: 'sobject' as const,
     sourceOrg: 'src-org',
     targetOrg: 'ana-org',
     targetDataset: 'DS2',
-    sobject: 'Account',
+    sObject: 'Account',
     fields: ['Id', 'Name'],
     dateField: 'LastModifiedDate',
     ...overrides,
@@ -98,10 +96,9 @@ function fileElfEntry(
   overrides: Record<string, unknown> = {}
 ) {
   return {
-    type: 'elf' as const,
     sourceOrg: 'src-org',
     targetFile: outputPath,
-    eventType: 'Login',
+    eventLog: 'Login',
     interval: 'Daily' as const,
     ...overrides,
   }
@@ -112,10 +109,9 @@ function fileSObjectEntry(
   overrides: Record<string, unknown> = {}
 ) {
   return {
-    type: 'sobject' as const,
     sourceOrg: 'src-org',
     targetFile: outputPath,
-    sobject: 'Account',
+    sObject: 'Account',
     fields: ['Id', 'Name'],
     dateField: 'LastModifiedDate',
     ...overrides,
@@ -513,8 +509,8 @@ describe('DatasetLoad NUT', () => {
       // Arrange
       tmp = createTempFiles(
         makeConfigJson([
-          elfEntry({ name: 'login-events', dataset: 'DS1' }),
-          sobjectEntry({ name: 'accounts', dataset: 'DS2' }),
+          elfEntry({ name: 'login-events', targetDataset: 'DS1' }),
+          sobjectEntry({ name: 'accounts', targetDataset: 'DS2' }),
         ])
       )
       orgOnlyConnection()
@@ -887,8 +883,8 @@ describe('DatasetLoad NUT', () => {
       ]
       tmp = createTempFiles(
         makeConfigJson([
-          elfEntry({ dataset: 'DS1' }),
-          sobjectEntry({ dataset: 'DS2' }),
+          elfEntry({ targetDataset: 'DS1' }),
+          sobjectEntry({ targetDataset: 'DS2' }),
         ])
       )
       applyConnection(
@@ -949,8 +945,8 @@ describe('DatasetLoad NUT', () => {
       const elfCsv = csvContent(ELF_CSV_HEADERS, [['Login', '005xx0000001']])
       tmp = createTempFiles(
         makeConfigJson([
-          elfEntry({ dataset: 'DS1' }),
-          sobjectEntry({ dataset: 'DS2' }),
+          elfEntry({ targetDataset: 'DS1' }),
+          sobjectEntry({ targetDataset: 'DS2' }),
         ])
       )
       applyConnection(
@@ -1010,8 +1006,8 @@ describe('DatasetLoad NUT', () => {
       // Arrange
       tmp = createTempFiles(
         makeConfigJson([
-          elfEntry({ dataset: 'DS1' }),
-          sobjectEntry({ dataset: 'DS2' }),
+          elfEntry({ targetDataset: 'DS1' }),
+          sobjectEntry({ targetDataset: 'DS2' }),
         ])
       )
       applyConnection(
@@ -1063,8 +1059,8 @@ describe('DatasetLoad NUT', () => {
       ]
       tmp = createTempFiles(
         makeConfigJson([
-          elfEntry({ dataset: 'DS1' }),
-          sobjectEntry({ name: 'my-sobject', dataset: 'DS2' }),
+          elfEntry({ targetDataset: 'DS1' }),
+          sobjectEntry({ name: 'my-sobject', targetDataset: 'DS2' }),
         ])
       )
       sobjectPipeline('Account', defaultSObjectQueryResponse(sobjectRecords))
@@ -1099,8 +1095,8 @@ describe('DatasetLoad NUT', () => {
       ]
       tmp = createTempFiles(
         makeConfigJson([
-          elfEntry({ name: 'login-events', dataset: 'DS1' }),
-          sobjectEntry({ name: 'accounts', dataset: 'DS2' }),
+          elfEntry({ name: 'login-events', targetDataset: 'DS1' }),
+          sobjectEntry({ name: 'accounts', targetDataset: 'DS2' }),
         ])
       )
       sobjectPipeline('Account', defaultSObjectQueryResponse(sobjectRecords))
@@ -1175,26 +1171,26 @@ describe('DatasetLoad NUT', () => {
           sourceOrg: 'src-org',
           targetOrg: 'ana-org',
           targetDataset: 'ElfDS1',
-          eventType: 'Login',
+          eventLog: 'Login',
         }),
         elfEntry({
           sourceOrg: 'src-org',
           targetOrg: 'ana-org',
           targetDataset: 'ElfDS2',
-          eventType: 'API',
+          eventLog: 'API',
         }),
         sobjectEntry({
           sourceOrg: 'src-org',
           targetOrg: 'ana2-org',
           targetDataset: 'AcctDS',
-          sobject: 'Account',
+          sObject: 'Account',
           fields: ['Id', 'Name'],
         }),
         sobjectEntry({
           sourceOrg: 'src2-org',
           targetOrg: 'ana-org',
           targetDataset: 'CaseDS',
-          sobject: 'Case',
+          sObject: 'Case',
           fields: ['Id', 'Subject'],
           dateField: 'LastModifiedDate',
         }),
@@ -1202,7 +1198,7 @@ describe('DatasetLoad NUT', () => {
           sourceOrg: 'src2-org',
           targetOrg: 'ana2-org',
           targetDataset: 'ElfDS3',
-          eventType: 'Report',
+          eventLog: 'Report',
         }),
       ]
       tmp = createTempFiles(makeConfigJson(entries))
@@ -1630,7 +1626,7 @@ describe('DatasetLoad NUT', () => {
       tmp = createTempFiles(
         makeConfigJson([
           elfEntry(), // org target
-          fileElfEntry(outputPath), // file target — same sourceOrg+eventType+interval
+          fileElfEntry(outputPath), // file target — same sourceOrg+eventLog+interval
         ])
       )
       applyConnection(
@@ -1698,8 +1694,8 @@ describe('DatasetLoad NUT', () => {
       const out2 = join(os.tmpdir(), `nut-csv-fanout-2-${Date.now()}.csv`)
       tmp = createTempFiles(
         makeConfigJson([
-          { type: 'csv', sourceFile: inputPath, targetFile: out1 },
-          { type: 'csv', sourceFile: inputPath, targetFile: out2 }, // same path → same reader
+          { csvFile: inputPath, targetFile: out1 },
+          { csvFile: inputPath, targetFile: out2 }, // same path → same reader
         ])
       )
       // No applyConnection needed — CSV entries require no Salesforce connection

@@ -1,9 +1,8 @@
 {
   "entries": [
     {
-      "type": "elf",
       "name": "pageviews-xrmru",
-      "eventType": "LightningPageView",
+      "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
       "sourceOrg": "xrmru",
@@ -11,9 +10,8 @@
       "targetDataset": "Test_LightningPageView"
     },
     {
-      "type": "elf",
       "name": "pageviews-prod",
-      "eventType": "LightningPageView",
+      "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
       "sourceOrg": "alm-prod",
@@ -21,68 +19,62 @@
       "targetDataset": "Test_LightningPageView"
     },
     {
-      "type": "elf",
       "name": "pageviews-prod-all-file",
-      "eventType": "LightningPageView",
+      "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
       "sourceOrg": "alm-prod",
       "targetFile": "AllLightningPageView.csv"
     },
     {
-      "type": "elf",
       "name": "pageviews-xrmru-all-file",
-      "eventType": "LightningPageView",
+      "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
       "sourceOrg": "xrmru",
       "targetFile": "AllLightningPageView.csv"
     },
     {
-      "type": "elf",
       "name": "pageviews-prod-file",
-      "eventType": "LightningPageView",
+      "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
       "sourceOrg": "alm-prod",
       "targetFile": "ProdLightningPageView.csv"
     },
     {
-      "type": "sobject",
       "name": "users-xrmru",
-      "sobject": "User",
+      "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
       "sourceOrg": "xrmru",
       "targetOrg": "alm-devops",
       "targetDataset": "Test_User",
       "augmentColumns": {
-        "ORGANIZATION_ID": "$sourceOrg.Id"
+        "ORGANIZATION_ID": "{{sourceOrg.Id}}"
       }
     },
     {
-      "type": "sobject",
       "name": "users-dev",
-      "sobject": "User",
+      "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
       "sourceOrg": "alm-dev",
       "targetOrg": "alm-devops",
       "targetDataset": "Test_User",
       "augmentColumns": {
-        "ORGANIZATION_ID": "$sourceOrg.Id"
+        "ORGANIZATION_ID": "{{sourceOrg.Id}}"
       }
     },
     {
-      "type": "sobject",
       "name": "users-xrmru-file",
-      "sobject": "User",
+      "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
       "sourceOrg": "xrmru",
       "targetFile": "XrmruUser.csv",
       "augmentColumns": {
-        "ORGANIZATION_ID": "$sourceOrg.Id"
+        "ORGANIZATION_ID": "{{sourceOrg.Id}}"
       }
     }
   ]

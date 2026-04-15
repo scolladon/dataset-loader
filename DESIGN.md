@@ -21,7 +21,7 @@ Organizations need to load Salesforce Event Log Files (ELF) and SObject data int
 | **Org model** | Strictly 2-org (source → target). This project requires N orgs (multiple sources + multiple analytics per entry) |
 | **Add-On API surface** | No authenticated Salesforce connection exposed to add-on code — arbitrary REST/SOQL calls require managing your own auth ([GitHub issue #787](https://github.com/forcedotcom/SFDX-Data-Move-Utility/issues/787)) |
 | **Concurrency control** | SFDMU controls its own parallelism internally; per-org `p-limit(25)` semaphores are not possible |
-| **Grouping** | No equivalent to merging CSVs from multiple entries targeting the same `(analyticOrg, dataset)` |
+| **Grouping** | No equivalent to merging CSVs from multiple entries targeting the same `(targetOrg, targetDataset)` |
 
 SFDMU is the right tool for SObject-to-SObject migration, but the ELF download → augment → group → CRM Analytics upload pipeline is outside its design scope.
 
@@ -117,8 +117,9 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 **Shared types and utilities** in `ports/types.ts`:
 - `SF_IDENTIFIER_PATTERN` — Regex for valid Salesforce identifiers, shared by config validation and dataset-writer
 - `formatErrorMessage(error)` — Safe error-to-string conversion used across all error handlers
-- `EntryShape`, `ElfShape`, `SObjectShape` — Entry type discriminated unions used by watermark-key and config-loader
-- `EntryType`, `Operation`, `WatermarkEntry` — Shared type aliases
+- `EntryShape`, `ElfShape`, `SObjectShape`, `CsvShape` — Entry shape types; entry type is inferred from field presence (`eventLog` for ELF, `sObject` for SObject, `csvFile` for CSV) rather than an explicit `type` discriminator
+- `isElfShape()`, `isSObjectShape()`, `isCsvShape()` — Type guard functions for shape-based discrimination
+- `Operation`, `WatermarkEntry` — Shared type aliases
 - `SkipDatasetError` — Thrown by `Writer.init()` to signal that a dataset should be silently skipped
 
 ## Domain Value Objects
@@ -126,7 +127,7 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 All value objects are **immutable** and **self-validating** (Object Calisthenics):
 
 - **Watermark** — Wraps ISO 8601 timestamp string. Validates format on construction. Converts to SOQL literal via `toSoqlLiteral()`.
-- **WatermarkKey** — Composite key: `{sourceOrg}:elf:{eventType}:{interval}` or `{sourceOrg}:sobject:{sobject}`. Static factory `fromEntry()`.
+- **WatermarkKey** — Composite key: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{sObject}`, or `csv:{csvFile}`. When `name` is set on an entry, it is used as the watermark key instead of the auto-generated one. Static factory `fromEntry()`.
 - **DatasetKey** — Composite key: `org:{targetOrg}:{targetDataset}` (CRM Analytics target) or `file:{targetFile}` (file target). Used for grouping entries into write jobs.
 - **WatermarkStore** — Immutable map from WatermarkKey → Watermark. `set()` returns a new store instance.
 
@@ -176,7 +177,7 @@ Data never fully materializes in memory. The pipeline streams through three laye
    - ELF: concurrent blob stream downloads via `getBlobStream()`; all blobs in a page are fetched in parallel; batches are pushed to a bounded `AsyncChannel<string[]>` which applies backpressure when the queue is full; strips header row from each blob
    - SObject: SOQL query with prefetched next page, yields CSV lines via csv-stringify
 2. **AugmentTransform + RowCounter** — Transform stream that appends augment columns to each batch; PassThrough that counts rows for progress tracking
-3. **FanOutTransform** — When multiple entries share the same reader (same org + eventType/sobject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
+3. **FanOutTransform** — When multiple entries share the same reader (same org + eventLog/sObject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
 4. **Writer chunker** — Writable stream returned by `Writer.init()`:
    - CRM Analytics (`GzipChunkingWritable`): batch gzip-compresses (512KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently up to `UPLOAD_HIGH_WATER` (= 25) in-flight
    - File (`FileWriter` internal): streams CSV rows directly to a `fs.WriteStream`; writes header on first row via `HeaderProvider`
@@ -240,7 +241,7 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 | Component | Path | Responsibility |
 |-----------|------|----------------|
 | `SalesforceClient` | `adapters/sf-client.ts` | Per-org REST client with `p-limit(25)` concurrency, gzip headers, HTTP 429 retry with exponential backoff (3 attempts max). Error formatting extracts Salesforce error details from `error.data` array. |
-| `ElfReader` | `adapters/readers/elf-reader.ts` | Queries EventLogFile, concurrently downloads blob streams via `getBlobStream()`. Each blob processor accumulates lines into batches of 2000 and pushes them to a shared `AsyncChannel<string[]>`, which provides backpressure and serializes delivery to the consumer. Strips CSV header from each blob. Validates `eventType` and `interval` format on construction. Bootstrap mode (no watermark): fetches only the latest record (`LIMIT 1 DESC`) to establish a watermark without bulk-loading history. |
+| `ElfReader` | `adapters/readers/elf-reader.ts` | Queries EventLogFile, concurrently downloads blob streams via `getBlobStream()`. Each blob processor accumulates lines into batches of 2000 and pushes them to a shared `AsyncChannel<string[]>`, which provides backpressure and serializes delivery to the consumer. Strips CSV header from each blob. Validates `eventLog` and `interval` format on construction. Bootstrap mode (no watermark): fetches only the latest record (`LIMIT 1 DESC`) to establish a watermark without bulk-loading history. |
 | `SObjectReader` | `adapters/readers/sobject-reader.ts` | Builds SOQL with watermark/where/limit, prefetches next page while yielding current results as CSV lines (serialized via csv-stringify). Auto-appends `dateField` to SELECT if not in `fields`. |
 | `CsvReader` | `adapters/readers/csv-reader.ts` | Local CSV file reader. Reads a file line by line and yields batches of CSV lines. |
 | `AugmentTransform` | `adapters/pipeline/augment-transform.ts` | Transform stream that appends augment column values (CSV-quoted) to each line. |
@@ -260,7 +261,7 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 
 Config is validated at load time using Zod schemas:
 
-- Entry type discrimination (`elf` vs `sobject`)
+- Entry type inference from field presence (`eventLog` for ELF, `sObject` for SObject, `csvFile` for CSV)
 - Org alias format (`[a-zA-Z0-9_.-]+`)
 - Salesforce identifier format (`[a-zA-Z_][a-zA-Z0-9_]*`)
 - At least one entry required

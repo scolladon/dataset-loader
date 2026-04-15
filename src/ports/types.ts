@@ -19,26 +19,37 @@ export interface WatermarkEntry {
 
 export interface ElfShape {
   readonly name?: string
-  readonly type: 'elf'
   readonly sourceOrg: string
-  readonly eventType: string
+  readonly eventLog: string
   readonly interval: string
 }
 
 export interface SObjectShape {
   readonly name?: string
-  readonly type: 'sobject'
   readonly sourceOrg: string
-  readonly sobject: string
+  readonly sObject: string
 }
 
 export interface CsvShape {
   readonly name?: string
-  readonly type: 'csv'
-  readonly sourceFile: string
+  readonly csvFile: string
 }
 
 export type EntryShape = ElfShape | SObjectShape | CsvShape
+
+export function isElf<T extends EntryShape>(entry: T): entry is T & ElfShape {
+  return 'eventLog' in entry
+}
+
+export function isSObject<T extends EntryShape>(
+  entry: T
+): entry is T & SObjectShape {
+  return 'sObject' in entry
+}
+
+export function isCsv<T extends EntryShape>(entry: T): entry is T & CsvShape {
+  return 'csvFile' in entry
+}
 
 export interface QueryResult<T> {
   totalSize: number
@@ -47,7 +58,6 @@ export interface QueryResult<T> {
   records: T[]
 }
 
-export type EntryType = 'elf' | 'sobject' | 'csv'
 export type Operation = 'Append' | 'Overwrite'
 export type BatchMiddleware = (batch: string[]) => string[]
 

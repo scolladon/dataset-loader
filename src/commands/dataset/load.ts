@@ -2,12 +2,13 @@ import { Org } from '@salesforce/core'
 import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
 import {
   type ConfigEntry,
-  type ElfEntry,
   entryLabel,
+  isCsvEntry,
+  isElfEntry,
+  isSObjectEntry,
   parseConfig,
   type ResolvedEntry,
   resolveConfig,
-  type SObjectEntry,
 } from '../../adapters/config-loader.js'
 import { buildAugmentHeaderSuffix } from '../../adapters/pipeline/augment-transform.js'
 import { ProgressReporter } from '../../adapters/progress-reporter.js'
@@ -119,7 +120,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       const config = await parseConfig(configPath)
       const allOrgs = new Set<string>()
       for (const e of config.entries) {
-        if (e.type !== 'csv') allOrgs.add(e.sourceOrg)
+        if (!isCsvEntry(e)) allOrgs.add(e.sourceOrg)
         if (e.targetOrg) allOrgs.add(e.targetOrg)
       }
       const ensurePromises: Promise<void>[] = []
@@ -158,13 +159,19 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     sfPorts: Map<string, SalesforcePort>,
     logger: LoggerPort
   ): Promise<DatasetLoadResult> {
-    const orgEntries = entries
-      .filter(({ entry }) => entry.type !== 'csv' && entry.targetOrg)
-      .map(({ entry }) => ({
-        type: entry.type,
-        sourceOrg: (entry as ElfEntry | SObjectEntry).sourceOrg,
-        targetOrg: entry.targetOrg!,
-      }))
+    const orgEntries: {
+      isElf: boolean
+      sourceOrg: string
+      targetOrg?: string
+    }[] = []
+    for (const { entry } of entries) {
+      if (isCsvEntry(entry)) continue
+      orgEntries.push({
+        isElf: isElfEntry(entry),
+        sourceOrg: entry.sourceOrg,
+        targetOrg: entry.targetOrg,
+      })
+    }
     logger.info('Audit — pre-flight checks:')
     const checks = buildAuditChecks(orgEntries, sfPorts)
     const auditResult = await runAudit(checks, logger)
@@ -240,11 +247,11 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   ): PipelineEntry {
     const { entry, index, augmentColumns } = resolvedEntry
 
-    if (entry.type === 'csv') {
-      const readerKey = ReaderKey.forCsv(entry.sourceFile)
+    if (isCsvEntry(entry)) {
+      const readerKey = ReaderKey.forCsv(entry.csvFile)
       const cacheKey = readerKey.toString()
       const existing = sharedReaders.get(cacheKey)
-      const fetcher: ReaderPort = existing ?? new CsvReader(entry.sourceFile)
+      const fetcher: ReaderPort = existing ?? new CsvReader(entry.csvFile)
       if (!existing) sharedReaders.set(cacheKey, fetcher)
       return {
         index,
@@ -304,15 +311,15 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   }
 
   private createReaderKey(entry: ConfigEntry): ReaderKey {
-    if (entry.type === 'elf') {
-      return ReaderKey.forElf(entry.sourceOrg, entry.eventType, entry.interval)
+    if (isElfEntry(entry)) {
+      return ReaderKey.forElf(entry.sourceOrg, entry.eventLog, entry.interval)
     }
-    if (entry.type === 'csv') {
-      return ReaderKey.forCsv(entry.sourceFile)
+    if (isCsvEntry(entry)) {
+      return ReaderKey.forCsv(entry.csvFile)
     }
     return ReaderKey.forSObject(
       entry.sourceOrg,
-      entry.sobject,
+      entry.sObject,
       entry.fields,
       entry.dateField,
       entry.where,
@@ -324,14 +331,14 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     entry: ConfigEntry,
     sfPort: SalesforcePort
   ): ReaderPort {
-    if (entry.type === 'csv') {
-      return new CsvReader(entry.sourceFile)
+    if (isCsvEntry(entry)) {
+      return new CsvReader(entry.csvFile)
     }
-    if (entry.type === 'elf') {
-      return new ElfReader(sfPort, entry.eventType, entry.interval)
+    if (isElfEntry(entry)) {
+      return new ElfReader(sfPort, entry.eventLog, entry.interval)
     }
     return new SObjectReader(sfPort, {
-      sobject: entry.sobject,
+      sobject: entry.sObject,
       fields: entry.fields,
       dateField: entry.dateField,
       where: entry.where,

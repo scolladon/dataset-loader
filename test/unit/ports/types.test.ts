@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  type EntryShape,
   formatErrorMessage,
+  isCsv,
+  isElf,
+  isSObject,
   SF_IDENTIFIER_PATTERN,
   SkipDatasetError,
   SOQL_RELATIONSHIP_PATH_PATTERN,
@@ -143,6 +147,86 @@ describe('SkipDatasetError', () => {
   it('given SkipDatasetError, when instanceof checked, then is an Error', () => {
     const sut = new SkipDatasetError('test')
     expect(sut instanceof Error).toBe(true)
+  })
+})
+
+describe('isElf', () => {
+  it('given ELF entry, when checking, then returns true', () => {
+    // Arrange
+    const entry: EntryShape = {
+      sourceOrg: 'org',
+      eventLog: 'Login',
+      interval: 'Daily',
+    }
+
+    // Act
+    const sut = isElf(entry)
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given SObject entry, when checking, then returns false', () => {
+    // Arrange
+    const entry: EntryShape = { sourceOrg: 'org', sObject: 'Account' }
+
+    // Act
+    const sut = isElf(entry)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+})
+
+describe('isSObject', () => {
+  it('given SObject entry, when checking, then returns true', () => {
+    // Arrange
+    const entry: EntryShape = { sourceOrg: 'org', sObject: 'Account' }
+
+    // Act
+    const sut = isSObject(entry)
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given CSV entry, when checking, then returns false', () => {
+    // Arrange
+    const entry: EntryShape = { csvFile: './data.csv' }
+
+    // Act
+    const sut = isSObject(entry)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+})
+
+describe('isCsv', () => {
+  it('given CSV entry, when checking, then returns true', () => {
+    // Arrange
+    const entry: EntryShape = { csvFile: './data.csv' }
+
+    // Act
+    const sut = isCsv(entry)
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given ELF entry, when checking, then returns false', () => {
+    // Arrange
+    const entry: EntryShape = {
+      sourceOrg: 'org',
+      eventLog: 'Login',
+      interval: 'Daily',
+    }
+
+    // Act
+    const sut = isCsv(entry)
+
+    // Assert
+    expect(sut).toBe(false)
   })
 })
 

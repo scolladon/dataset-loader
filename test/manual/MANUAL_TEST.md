@@ -26,12 +26,11 @@ cat > dataset-load.config.json << 'EOF'
 {
   "entries": [
     {
-      "type": "elf",
-      "eventType": "Login",
+      "eventLog": "Login",
       "interval": "Daily",
       "sourceOrg": "my-source",
-      "analyticOrg": "my-analytic",
-      "dataset": "Test_Login"
+      "targetOrg": "my-analytic",
+      "targetDataset": "Test_Login"
     }
   ]
 }
@@ -107,13 +106,12 @@ cat > dataset-load.config.json << 'EOF'
 {
   "entries": [
     {
-      "type": "sobject",
-      "sobject": "Account",
+      "sObject": "Account",
       "fields": ["Id", "Name", "Industry"],
       "dateField": "LastModifiedDate",
       "sourceOrg": "my-source",
-      "analyticOrg": "my-analytic",
-      "dataset": "Test_Accounts",
+      "targetOrg": "my-analytic",
+      "targetDataset": "Test_Accounts",
       "operation": "Overwrite"
     }
   ]
@@ -148,12 +146,11 @@ cat > dataset-load.config.json << 'EOF'
 {
   "entries": [
     {
-      "type": "sobject",
-      "sobject": "Account",
+      "sObject": "Account",
       "fields": ["Id", "Name"],
       "sourceOrg": "my-source",
-      "analyticOrg": "my-analytic",
-      "dataset": "Test_Augmented",
+      "targetOrg": "my-analytic",
+      "targetDataset": "Test_Augmented",
       "operation": "Overwrite",
       "augmentColumns": {
         "SourceOrgId": "{{sourceOrg.Id}}",
@@ -182,22 +179,20 @@ cat > dataset-load.config.json << 'EOF'
 {
   "entries": [
     {
-      "type": "sobject",
-      "sobject": "Account",
+      "sObject": "Account",
       "fields": ["Id", "Name"],
       "sourceOrg": "my-source",
-      "analyticOrg": "my-analytic",
-      "dataset": "Test_Grouped",
+      "targetOrg": "my-analytic",
+      "targetDataset": "Test_Grouped",
       "operation": "Overwrite",
       "augmentColumns": { "Source": "org-a" }
     },
     {
-      "type": "sobject",
-      "sobject": "Account",
+      "sObject": "Account",
       "fields": ["Id", "Name"],
       "sourceOrg": "my-analytic",
-      "analyticOrg": "my-analytic",
-      "dataset": "Test_Grouped",
+      "targetOrg": "my-analytic",
+      "targetDataset": "Test_Grouped",
       "operation": "Overwrite",
       "augmentColumns": { "Source": "org-b" }
     }
@@ -244,14 +239,14 @@ cat > dataset-load.config.json << 'EOF'
 {
   "entries": [
     {
-      "type": "sobject", "sobject": "Account", "fields": ["Id"],
-      "sourceOrg": "my-source", "analyticOrg": "my-analytic",
-      "dataset": "Test_Conflict", "operation": "Append"
+      "sObject": "Account", "fields": ["Id"],
+      "sourceOrg": "my-source", "targetOrg": "my-analytic",
+      "targetDataset": "Test_Conflict", "operation": "Append"
     },
     {
-      "type": "sobject", "sobject": "Contact", "fields": ["Id"],
-      "sourceOrg": "my-source", "analyticOrg": "my-analytic",
-      "dataset": "Test_Conflict", "operation": "Overwrite"
+      "sObject": "Contact", "fields": ["Id"],
+      "sourceOrg": "my-source", "targetOrg": "my-analytic",
+      "targetDataset": "Test_Conflict", "operation": "Overwrite"
     }
   ]
 }
@@ -268,9 +263,9 @@ cat > dataset-load.config.json << 'EOF'
 {
   "entries": [
     {
-      "type": "sobject", "sobject": "Account", "fields": ["Id"],
-      "sourceOrg": "nonexistent-org", "analyticOrg": "my-analytic",
-      "dataset": "Test_BadOrg"
+      "sObject": "Account", "fields": ["Id"],
+      "sourceOrg": "nonexistent-org", "targetOrg": "my-analytic",
+      "targetDataset": "Test_BadOrg"
     }
   ]
 }

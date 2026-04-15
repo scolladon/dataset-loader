@@ -1,4 +1,4 @@
-import { type EntryShape } from '../ports/types.js'
+import { type EntryShape, isElf, isSObject } from '../ports/types.js'
 
 export class WatermarkKey {
   private constructor(private readonly value: string) {}
@@ -7,16 +7,15 @@ export class WatermarkKey {
     if (entry.name) {
       return new WatermarkKey(entry.name)
     }
-    if (entry.type === 'elf') {
+    if (isElf(entry)) {
       return new WatermarkKey(
-        `${entry.sourceOrg}:elf:${entry.eventType}:${entry.interval}`
+        `${entry.sourceOrg}:elf:${entry.eventLog}:${entry.interval}`
       )
     }
-    if (entry.type === 'sobject') {
-      return new WatermarkKey(`${entry.sourceOrg}:sobject:${entry.sobject}`)
+    if (isSObject(entry)) {
+      return new WatermarkKey(`${entry.sourceOrg}:sobject:${entry.sObject}`)
     }
-    // entry.type === 'csv'
-    return new WatermarkKey(`csv:${entry.sourceFile}`)
+    return new WatermarkKey(`csv:${entry.csvFile}`)
   }
 
   toString(): string {

@@ -7,13 +7,10 @@ import type { EntryShape } from '../../src/ports/types.js'
 const sizes = [5, 20, 50] as const
 
 const elfEntry: EntryShape = {
-  type: 'elf',
   sourceOrg: 'org-0',
-  eventType: 'Login',
+  eventLog: 'Login',
   interval: 'daily',
-  targetOrg: 'target-0',
-  dataset: 'Dataset_000000',
-} as EntryShape
+}
 
 describe('setup-watermark-operations', () => {
   bench('watermark-parse-valid', () => {

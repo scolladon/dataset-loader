@@ -21,7 +21,7 @@ src/
 │   ├── watermark.ts         # Value object: ISO 8601 timestamp
 │   ├── watermark-key.ts     # Value object: entry identifier
 │   ├── watermark-store.ts   # Immutable watermark map
-│   └── dataset-key.ts       # Value object: (analyticOrg, dataset)
+│   └── dataset-key.ts       # Value object: (targetOrg, targetDataset/targetFile)
 ├── ports/
 │   └── types.ts             # All port interfaces
 └── adapters/                 # Infrastructure implementations

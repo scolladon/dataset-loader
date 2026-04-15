@@ -62,8 +62,7 @@ Create `dataset-load.config.json` at the project root. See the [README](README.m
 {
   "entries": [
     {
-      "type": "elf",
-      "eventType": "Login",
+      "eventLog": "Login",
       "interval": "Daily",
       "sourceOrg": "my-source-org",
       "targetOrg": "my-analytic-org",
@@ -186,7 +185,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 
 - **Symptom**: Log shows `No new records, skipping` and the watermark does not change.
 - **Cause**: No records exist newer than the current watermark. Normal if no new data since the last run.
-- **Resolution**: No action required. For ELF entries, verify the `interval` matches your license — `Hourly` requires Shield/Event Monitoring Analytics. Check `eventType` matches a valid [EventLogFile EventType](https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_eventlogfile.htm).
+- **Resolution**: No action required. For ELF entries, verify the `interval` matches your license — `Hourly` requires Shield/Event Monitoring Analytics. Check `eventLog` matches a valid [EventLogFile EventType](https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_eventlogfile.htm).
 
 ### "Config loading failed"
 
