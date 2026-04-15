@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776006643553,
+  "lastUpdate": 1776264547507,
   "repoUrl": "https://github.com/scolladon/dataset-loader",
   "entries": {
     "Runtime Benchmark": [
@@ -467,6 +467,162 @@ window.BENCHMARK_DATA = {
             "name": "throughput-channel-push-consume-10k",
             "value": 696,
             "range": "±0.41%",
+            "unit": "ops/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "colladonsebastien@gmail.com",
+            "name": "Sebastien",
+            "username": "scolladon"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c045462effa1ae6bea96e0eb80144ae9015ff322",
+          "message": "feat: simplify config format (#20)",
+          "timestamp": "2026-04-15T16:46:14+02:00",
+          "tree_id": "d4850d08d0c57821433a5403d19df80065f830b8",
+          "url": "https://github.com/scolladon/dataset-loader/commit/c045462effa1ae6bea96e0eb80144ae9015ff322"
+        },
+        "date": 1776264546967,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "watermark-parse-valid",
+            "value": 7838673,
+            "range": "±0.12%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-to-soql",
+            "value": 7776149,
+            "range": "±0.12%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-create-5",
+            "value": 1062351,
+            "range": "±0.33%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-get-5",
+            "value": 17070796,
+            "range": "±0.25%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-set-5",
+            "value": 2579341,
+            "range": "±0.94%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-create-20",
+            "value": 187376,
+            "range": "±1.16%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-get-20",
+            "value": 17586797,
+            "range": "±0.12%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-set-20",
+            "value": 830620,
+            "range": "±1.61%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-create-50",
+            "value": 76542,
+            "range": "±1.84%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-get-50",
+            "value": 17438091,
+            "range": "±0.45%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "watermark-store-set-50",
+            "value": 403204,
+            "range": "±1.29%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-gzip-chunking-small",
+            "value": 33,
+            "range": "±3.50%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-gzip-chunking-medium",
+            "value": 3,
+            "range": "±3.86%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-gzip-chunking-large",
+            "value": 0,
+            "range": "±3.08%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-fanout-1-channels",
+            "value": 10271,
+            "range": "±6.02%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-fanout-3-channels",
+            "value": 11423,
+            "range": "±5.38%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-fanout-5-channels",
+            "value": 9681,
+            "range": "±5.12%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-augment-small",
+            "value": 377901,
+            "range": "±0.11%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-augment-medium",
+            "value": 38290,
+            "range": "±1.09%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-augment-large",
+            "value": 3675,
+            "range": "±0.14%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-channel-push-consume-1k",
+            "value": 6898,
+            "range": "±0.70%",
+            "unit": "ops/sec"
+          },
+          {
+            "name": "throughput-channel-push-consume-10k",
+            "value": 699,
+            "range": "±0.82%",
             "unit": "ops/sec"
           }
         ]
