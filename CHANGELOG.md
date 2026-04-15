@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/scolladon/dataset-loader/compare/v1.0.0...v1.1.0) (2026-04-15)
+
+
+### Features
+
+* simplify config format ([#20](https://github.com/scolladon/dataset-loader/issues/20)) ([c045462](https://github.com/scolladon/dataset-loader/commit/c045462effa1ae6bea96e0eb80144ae9015ff322))
+
 ## 1.0.0 (2026-04-01)
 
 
