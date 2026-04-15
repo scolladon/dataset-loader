@@ -1,8 +1,4 @@
-import {
-  type EntryType,
-  type LoggerPort,
-  type SalesforcePort,
-} from '../ports/types.js'
+import { type LoggerPort, type SalesforcePort } from '../ports/types.js'
 
 interface AuditCheck {
   readonly org: string
@@ -11,9 +7,9 @@ interface AuditCheck {
 }
 
 interface AuditEntry {
-  readonly type: EntryType
+  readonly isElf: boolean
   readonly sourceOrg: string
-  readonly targetOrg: string
+  readonly targetOrg?: string
 }
 
 export function buildAuditChecks(
@@ -22,19 +18,21 @@ export function buildAuditChecks(
 ): readonly AuditCheck[] {
   return [
     ...buildOrgChecks(
-      collectOrgs(entries, e => [e.sourceOrg, e.targetOrg]),
+      collectOrgs(entries, e =>
+        e.targetOrg ? [e.sourceOrg, e.targetOrg] : [e.sourceOrg]
+      ),
       org => `${org}: auth and connectivity`,
       'SELECT Id FROM Organization LIMIT 1',
       sfPorts
     ),
     ...buildOrgChecks(
-      collectOrgs(entries, e => (e.type === 'elf' ? [e.sourceOrg] : [])),
+      collectOrgs(entries, e => (e.isElf ? [e.sourceOrg] : [])),
       org => `${org}: EventLogFile access (ViewEventLogFiles)`,
       'SELECT Id FROM EventLogFile LIMIT 1',
       sfPorts
     ),
     ...buildOrgChecks(
-      collectOrgs(entries, e => [e.targetOrg]),
+      collectOrgs(entries, e => (e.targetOrg ? [e.targetOrg] : [])),
       org => `${org}: InsightsExternalData access`,
       'SELECT Id FROM InsightsExternalData LIMIT 1',
       sfPorts

@@ -122,9 +122,8 @@ function createEntry(
     label: 'elf:Login',
     readerKey: ReaderKey.forElf('src', 'Login', 'Daily'),
     watermarkKey: WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     }),
     datasetKey: DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
@@ -284,9 +283,8 @@ describe('executePipeline (streaming)', () => {
       state.write as ReturnType<typeof vi.fn>
     ).mock.calls[0][0]
     const wk = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     expect(writtenStore.get(wk)?.toString()).toBe('2026-03-01T00:00:00.000Z')
@@ -429,9 +427,8 @@ describe('executePipeline (streaming)', () => {
       index: 1,
       label: 'elf:Logout',
       watermarkKey: WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'src',
-        eventType: 'Logout',
+        eventLog: 'Logout',
         interval: 'Daily',
       }),
     })
@@ -515,9 +512,8 @@ describe('executePipeline (streaming)', () => {
         targetDataset: 'DS2',
       }),
       watermarkKey: WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'src',
-        eventType: 'Logout',
+        eventLog: 'Logout',
         interval: 'Daily',
       }),
     })
@@ -628,9 +624,8 @@ describe('executePipeline (streaming)', () => {
       state.write as ReturnType<typeof vi.fn>
     ).mock.calls[0][0]
     const wk = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     expect(writtenStore.get(wk)).toBeUndefined()
@@ -855,9 +850,8 @@ describe('executePipeline (streaming)', () => {
       label: 'elf:Logout',
       readerKey: ReaderKey.forElf('src', 'Logout', 'Daily'),
       watermarkKey: WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'src',
-        eventType: 'Logout',
+        eventLog: 'Logout',
         interval: 'Daily',
       }),
     })
@@ -905,9 +899,8 @@ describe('executePipeline (streaming)', () => {
       label: 'elf:Logout',
       readerKey: ReaderKey.forElf('src', 'Logout', 'Daily'),
       watermarkKey: WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'src',
-        eventType: 'Logout',
+        eventLog: 'Logout',
         interval: 'Daily',
       }),
     })
@@ -933,9 +926,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const fetcher = mockFetcher(async () =>
@@ -989,9 +981,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const errorFetcher = mockFetcher(async () => ({
@@ -1044,9 +1035,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const errorFetcher = mockFetcher(async () => {
@@ -1098,9 +1088,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const fetcher = mockFetcher(async () =>
@@ -1165,15 +1154,13 @@ describe('executePipeline (streaming)', () => {
     // Arrange
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey1 = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const wmKey2 = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
       name: 'other',
     })
@@ -1341,9 +1328,8 @@ describe('executePipeline (streaming)', () => {
         label: 'elf:Login',
         fetcher: mockFetcher(async () => createFetchResult(['"v"'], wm)),
         watermarkKey: WatermarkKey.fromEntry({
-          type: 'elf',
           sourceOrg: 'src',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         }),
         datasetKey,
@@ -1357,9 +1343,8 @@ describe('executePipeline (streaming)', () => {
         label: 'elf:Logout',
         fetcher: mockFetcher(async () => createFetchResult([])),
         watermarkKey: WatermarkKey.fromEntry({
-          type: 'elf',
           sourceOrg: 'src',
-          eventType: 'Logout',
+          eventLog: 'Logout',
           interval: 'Daily',
         }),
         datasetKey,
@@ -1399,9 +1384,8 @@ describe('executePipeline (streaming)', () => {
           throw new Error('fetch failed')
         }),
         watermarkKey: WatermarkKey.fromEntry({
-          type: 'elf',
           sourceOrg: 'src',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         }),
         datasetKey,
@@ -1415,9 +1399,8 @@ describe('executePipeline (streaming)', () => {
         label: 'elf:Logout',
         fetcher: mockFetcher(async () => createFetchResult([])),
         watermarkKey: WatermarkKey.fromEntry({
-          type: 'elf',
           sourceOrg: 'src',
-          eventType: 'Logout',
+          eventLog: 'Logout',
           interval: 'Daily',
         }),
         datasetKey,
@@ -1446,9 +1429,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange — kills L308: idx >= 0 → idx > 0 (index 0 never logged with mutation)
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const fetcher = mockFetcher(async () =>
@@ -1670,9 +1652,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange — kills L316 StringLiteral: 'Fan-out source failed: ...' → ''
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const errorFetcher = mockFetcher(async () => ({
@@ -1729,9 +1710,8 @@ describe('executePipeline (streaming)', () => {
     // Arrange — kills L334 StringLiteral: "Entry '...' failed: ..." → ''
     const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const fetcher = mockFetcher(async () =>
@@ -1796,9 +1776,8 @@ describe('groupByReader', () => {
     // Arrange
     const key = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const wm = Watermark.fromString('2024-01-01T00:00:00.000Z')
@@ -1826,15 +1805,13 @@ describe('groupByReader', () => {
     // Arrange
     const key = ReaderKey.forElf('prod', 'Login', 'Daily')
     const wmKey1 = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const wmKey2 = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'prod',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
       name: 'other',
     })

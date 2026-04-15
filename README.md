@@ -50,12 +50,16 @@ touch dataset-load.config.json
 {
   "entries": [
     {
-      "type": "elf",
-      "eventType": "LightningPageView",
+      "eventLog": "LightningPageView",
       "interval": "Daily",
       "sourceOrg": "my-source-org",
       "targetOrg": "my-analytic-org",
       "targetDataset": "LightningPageView_dataset_APIName"
+    },
+    {
+      "csvFile": "./data/accounts-export.csv",
+      "targetOrg": "my-analytic-org",
+      "targetDataset": "ImportedAccounts"
     }
   ]
 }
@@ -84,21 +88,23 @@ All entry types share these output fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
+| `name` | no | Optional entry identifier. Used as watermark key override and for --entry filtering |
 | `targetOrg` | no | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead |
 | `targetDataset` | no | CRM Analytics dataset API name. Required when `targetOrg` is set |
 | `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
 | `operation` | no | `"Append"` (default) or `"Overwrite"` |
 | `augmentColumns` | no | Extra columns to append to every row (see [Augment Columns](#augment-columns)) |
 
+> **Type inference:** Entry type is inferred from shape — entries with `eventLog` are ELF, entries with `sObject` are SObject, entries with `csvFile` are CSV.
+
 ### ELF Entry
 
 ```json
 {
-  "type": "elf",
   "sourceOrg": "source-org-alias",
   "targetOrg": "analytic-org-alias",
   "targetDataset": "ALM_LightningPageView",
-  "eventType": "LightningPageView",
+  "eventLog": "LightningPageView",
   "interval": "Daily",
   "augmentColumns": { "OrgId": "{{sourceOrg.Id}}" }
 }
@@ -106,20 +112,18 @@ All entry types share these output fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `type` | yes | `"elf"` |
 | `sourceOrg` | yes | SF CLI alias of the org containing EventLogFiles |
-| `eventType` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
+| `eventLog` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
 | `interval` | yes | `"Daily"` or `"Hourly"` (Hourly requires Shield license) |
 
 ### SObject Entry
 
 ```json
 {
-  "type": "sobject",
   "sourceOrg": "source-org-alias",
   "targetOrg": "analytic-org-alias",
   "targetDataset": "ALM_Accounts",
-  "sobject": "Account",
+  "sObject": "Account",
   "fields": ["Id", "Name", "Industry", "CreatedDate"],
   "where": "Industry != null",
   "augmentColumns": { "OrgId": "{{sourceOrg.Id}}" }
@@ -128,9 +132,8 @@ All entry types share these output fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `type` | yes | `"sobject"` |
 | `sourceOrg` | yes | SF CLI alias of the source org |
-| `sobject` | yes | SObject API name (e.g. `Account`, `Opportunity`) |
+| `sObject` | yes | SObject API name (e.g. `Account`, `Opportunity`) |
 | `fields` | yes | Array of field API names to query |
 | `dateField` | no | Field used for watermarking (default: `LastModifiedDate`) |
 | `where` | no | Additional SOQL WHERE clause |
@@ -140,8 +143,7 @@ All entry types share these output fields:
 
 ```json
 {
-  "type": "csv",
-  "sourceFile": "./data/accounts-export.csv",
+  "csvFile": "./data/accounts-export.csv",
   "targetOrg": "analytic-org-alias",
   "targetDataset": "ALM_ImportedAccounts",
   "augmentColumns": { "Source": "ManualExport" }
@@ -150,8 +152,7 @@ All entry types share these output fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `type` | yes | `"csv"` |
-| `sourceFile` | yes | Path to the local CSV file to load |
+| `csvFile` | yes | Path to the local CSV file to load |
 
 > **Note:** CSV entries only support static `augmentColumns` values. Dynamic `{{sourceOrg.*}}` / `{{targetOrg.*}}` expressions are not supported.
 
@@ -197,7 +198,9 @@ Watermarks are stored in a separate state file (`.dataset-load.state.json`) to k
 }
 ```
 
-Watermark keys: `{sourceOrg}:elf:{eventType}:{interval}` or `{sourceOrg}:sobject:{sobject}`.
+Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{sObject}`, or `csv:{csvFile}`.
+
+> Set `name` on an entry to use it as the watermark key instead of the auto-generated one. This lets you rename source orgs or change event types without losing watermark history.
 
 - **First ELF run** (no watermark): fetches only the latest record (bootstrap mode)
 - **First SObject run** (no watermark): fetches all matching records (use `limit` to cap)

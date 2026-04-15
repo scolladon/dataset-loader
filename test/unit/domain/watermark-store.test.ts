@@ -5,9 +5,8 @@ import { WatermarkStore } from '../../../src/domain/watermark-store.js'
 
 describe('WatermarkStore', () => {
   const elfEntry = {
-    type: 'elf' as const,
     sourceOrg: 'src',
-    eventType: 'Login',
+    eventLog: 'Login',
     interval: 'Daily',
   }
 

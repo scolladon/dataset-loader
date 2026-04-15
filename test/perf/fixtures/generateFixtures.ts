@@ -52,18 +52,3 @@ export const generateAugmentColumns = (
   }
   return columns
 }
-
-interface ConfigEntry {
-  readonly sourceOrg: string
-  readonly type: string
-  readonly targetOrg: string
-  readonly dataset: string
-}
-
-export const generateConfigEntries = (count: number): ConfigEntry[] =>
-  Array.from({ length: count }, (_, i) => ({
-    sourceOrg: `org-${i % 3}`,
-    type: i % 2 === 0 ? 'elf' : 'sobject',
-    targetOrg: `target-${i % 2}`,
-    dataset: `Dataset_${pad(i)}`,
-  }))

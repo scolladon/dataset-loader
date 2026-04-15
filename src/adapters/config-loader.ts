@@ -3,7 +3,6 @@ import path from 'node:path'
 import { z } from 'zod'
 import { DatasetKey } from '../domain/dataset-key.js'
 import {
-  type EntryType,
   type Operation,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
@@ -21,14 +20,12 @@ interface BaseEntry {
 }
 
 export interface ElfEntry extends BaseEntry {
-  type: Extract<EntryType, 'elf'>
-  eventType: string
+  eventLog: string
   interval: 'Daily' | 'Hourly'
 }
 
 export interface SObjectEntry extends BaseEntry {
-  type: Extract<EntryType, 'sobject'>
-  sobject: string
+  sObject: string
   fields: string[]
   dateField: string
   where?: string
@@ -37,8 +34,7 @@ export interface SObjectEntry extends BaseEntry {
 
 export interface CsvEntry {
   name?: string
-  type: Extract<EntryType, 'csv'>
-  sourceFile: string
+  csvFile: string
   targetOrg?: string
   targetDataset?: string
   targetFile?: string
@@ -47,6 +43,18 @@ export interface CsvEntry {
 }
 
 export type ConfigEntry = ElfEntry | SObjectEntry | CsvEntry
+
+export function isElfEntry(entry: ConfigEntry): entry is ElfEntry {
+  return 'eventLog' in entry
+}
+
+export function isSObjectEntry(entry: ConfigEntry): entry is SObjectEntry {
+  return 'sObject' in entry
+}
+
+export function isCsvEntry(entry: ConfigEntry): entry is CsvEntry {
+  return 'csvFile' in entry
+}
 
 interface Config {
   entries: ConfigEntry[]
@@ -140,7 +148,13 @@ function rejectAugmentColumns(
 const targetFields = {
   targetOrg: orgAlias.optional(),
   targetDataset: sfIdentifier.optional(),
-  targetFile: z.string().min(1).optional(),
+  targetFile: z
+    .string()
+    .min(1)
+    .refine(p => path.isAbsolute(p) || !path.normalize(p).startsWith('..'), {
+      message: 'targetFile must not traverse parent directories',
+    })
+    .optional(),
   operation: z.enum(['Append', 'Overwrite']).default('Append'),
   augmentColumns: z.record(datasetColumnName, z.string()).optional(),
 } as const
@@ -164,32 +178,33 @@ const baseEntrySchema = z
     }
   })
 
-const elfEntrySchema = baseEntrySchema.extend({
-  type: z.literal('elf'),
-  eventType: sfIdentifier,
-  interval: z.enum(['Daily', 'Hourly']),
-})
+const elfEntrySchema = baseEntrySchema
+  .extend({
+    eventLog: sfIdentifier,
+    interval: z.enum(['Daily', 'Hourly']),
+  })
+  .strict()
 
-const sobjectEntrySchema = baseEntrySchema.extend({
-  type: z.literal('sobject'),
-  sobject: sfIdentifier,
-  fields: z.array(soqlRelationshipPath).min(1),
-  dateField: sfIdentifier.default('LastModifiedDate'),
-  // Trust boundary: where clause is user-supplied SOQL interpolated directly into queries.
-  // The config file is a trusted input — do not construct it from untrusted sources.
-  where: z.string().optional(),
-  limit: z.number().int().positive().optional(),
-})
+const sobjectEntrySchema = baseEntrySchema
+  .extend({
+    sObject: sfIdentifier,
+    fields: z.array(soqlRelationshipPath).min(1),
+    dateField: sfIdentifier.default('LastModifiedDate'),
+    // Trust boundary: where clause is user-supplied SOQL interpolated directly into queries.
+    // The config file is a trusted input — do not construct it from untrusted sources.
+    where: z.string().optional(),
+    limit: z.number().int().positive().optional(),
+  })
+  .strict()
 
 const csvEntrySchema = z
   .object({
     name: entryName.optional(),
-    type: z.literal('csv'),
-    sourceFile: z
+    csvFile: z
       .string()
       .min(1)
       .refine(p => path.isAbsolute(p) || !path.normalize(p).startsWith('..'), {
-        message: 'sourceFile must not traverse parent directories',
+        message: 'csvFile must not traverse parent directories',
       }),
     ...targetFields,
   })
@@ -208,16 +223,35 @@ const csvEntrySchema = z
     }
   })
 
+const DISCRIMINATOR_FIELDS = ['eventLog', 'sObject', 'csvFile'] as const
+
+const entrySchema = z.any().superRefine((val, ctx) => {
+  if (typeof val !== 'object' || val === null || Array.isArray(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Entry must be an object',
+    })
+    return
+  }
+  const obj = val as Record<string, unknown>
+  const present = DISCRIMINATOR_FIELDS.filter(k => k in obj)
+  if (present.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'Entry must have one of: eventLog (ELF), sObject (SObject), or csvFile (CSV)',
+    })
+  }
+  if (present.length > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Entry must have exactly one of eventLog, sObject, or csvFile — found: ${present.join(', ')}`,
+    })
+  }
+}).pipe(z.union([elfEntrySchema, sobjectEntrySchema, csvEntrySchema]))
+
 const configSchema = z.object({
-  entries: z
-    .array(
-      z.discriminatedUnion('type', [
-        elfEntrySchema,
-        sobjectEntrySchema,
-        csvEntrySchema,
-      ])
-    )
-    .min(1),
+  entries: z.array(entrySchema).min(1),
 })
 
 interface OrgInfo {
@@ -228,7 +262,7 @@ interface OrgInfo {
 function collectUniqueOrgs(entries: ConfigEntry[]): Set<string> {
   const orgs = new Set<string>()
   for (const entry of entries) {
-    if (entry.type === 'csv') continue
+    if (isCsvEntry(entry)) continue
     const columns = entry.augmentColumns ?? {}
     for (const value of Object.values(columns)) {
       if (MUSTACHE_SOURCEORG.test(value)) orgs.add(entry.sourceOrg)
@@ -331,7 +365,7 @@ function validateSObjectFieldConsistency(entries: ConfigEntry[]): void {
     const sobjectEntries = ops
       .flatMap(o => o.indices)
       .map(i => entries[i])
-      .filter((e): e is SObjectEntry => e.type === 'sobject')
+      .filter((e): e is SObjectEntry => isSObjectEntry(e))
     if (sobjectEntries.length < 2) continue
 
     const firstFields = [...sobjectEntries[0].fields].sort()
@@ -407,16 +441,16 @@ export async function resolveConfig(
   return config.entries.map((entry, index) => ({
     entry,
     index,
-    augmentColumns:
-      entry.type === 'csv'
-        ? (entry.augmentColumns ?? {})
-        : resolveAugmentColumnsForEntry(entry.augmentColumns, entry, orgInfos),
+    augmentColumns: isCsvEntry(entry)
+      ? (entry.augmentColumns ?? {})
+      : resolveAugmentColumnsForEntry(entry.augmentColumns, entry, orgInfos),
   }))
 }
 
 export function entryLabel(entry: ConfigEntry): string {
   if (entry.name) return entry.name
-  if (entry.type === 'elf') return `elf:${entry.eventType}`
-  if (entry.type === 'sobject') return `sobject:${entry.sobject}`
-  return `csv:${entry.sourceFile}`
+  if (isElfEntry(entry)) return `elf:${entry.eventLog}`
+  if (isSObjectEntry(entry)) return `sobject:${entry.sObject}`
+  if (isCsvEntry(entry)) return `csv:${entry.csvFile}`
+  throw new Error(`Unknown entry shape`)
 }

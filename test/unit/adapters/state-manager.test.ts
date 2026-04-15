@@ -37,9 +37,8 @@ describe('FileStateManager', () => {
 
       // Assert
       const key = WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'org',
-        eventType: 'Login',
+        eventLog: 'Login',
         interval: 'Daily',
       })
       expect(store.get(key)!.toString()).toBe('2026-01-01T00:00:00.000Z')
@@ -85,9 +84,8 @@ describe('FileStateManager', () => {
       // Arrange
       const path = join(testDir, 'state.json')
       const key = WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'org',
-        eventType: 'Login',
+        eventLog: 'Login',
         interval: 'Daily',
       })
       const store = WatermarkStore.empty().set(
@@ -124,9 +122,8 @@ describe('FileStateManager', () => {
       // Arrange — write to a non-existent directory so rename will fail
       const path = join(testDir, 'readonly', 'state.json')
       const key = WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'org',
-        eventType: 'Login',
+        eventLog: 'Login',
         interval: 'Daily',
       })
       const store = WatermarkStore.empty().set(
@@ -144,9 +141,8 @@ describe('FileStateManager', () => {
       const path = join(testDir, 'state.json')
       const sut = new FileStateManager(path)
       const key = WatermarkKey.fromEntry({
-        type: 'elf',
         sourceOrg: 'org',
-        eventType: 'Login',
+        eventLog: 'Login',
         interval: 'Daily',
       })
       await sut.write(

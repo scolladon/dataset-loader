@@ -35,9 +35,9 @@ describe('buildAuditChecks', () => {
   it('given entries, when building checks, then includes auth check for all unique orgs', () => {
     // Arrange
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
+      { isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' },
       {
-        type: 'sobject' as const,
+        isElf: false,
         sourceOrg: 'srcB',
         targetOrg: 'anaA',
       },
@@ -59,7 +59,7 @@ describe('buildAuditChecks', () => {
   it('given ELF entries, when building checks, then includes EventLogFile check for ELF source orgs', () => {
     // Arrange
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
+      { isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' },
     ]
     const sfPorts = new Map([
       ['srcA', createMockSfPort()],
@@ -79,7 +79,7 @@ describe('buildAuditChecks', () => {
     // Arrange
     const entries = [
       {
-        type: 'sobject' as const,
+        isElf: false,
         sourceOrg: 'srcA',
         targetOrg: 'anaA',
       },
@@ -97,10 +97,31 @@ describe('buildAuditChecks', () => {
     expect(elfChecks.length).toBe(0)
   })
 
+  it('given ELF file-target entry without targetOrg, when building checks, then includes auth and EventLogFile checks for sourceOrg', () => {
+    // Arrange
+    const entries = [
+      { isElf: true, sourceOrg: 'srcA' },
+    ]
+    const sfPorts = new Map([['srcA', createMockSfPort()]])
+
+    // Act
+    const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
+    const authChecks = sut.filter(c => c.label.includes('auth'))
+    expect(authChecks.length).toBe(1)
+    expect(authChecks[0].org).toBe('srcA')
+    const elfChecks = sut.filter(c => c.label.includes('EventLogFile'))
+    expect(elfChecks.length).toBe(1)
+    expect(elfChecks[0].org).toBe('srcA')
+    const insightsChecks = sut.filter(c => c.label.includes('InsightsExternalData'))
+    expect(insightsChecks.length).toBe(0)
+  })
+
   it('given sfPorts map missing an org entry, when executing check, then check returns false', async () => {
     // Arrange
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
+      { isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' },
     ]
     const sfPorts = new Map<string, SalesforcePort>()
     const checks = buildAuditChecks(entries, sfPorts)
@@ -118,7 +139,7 @@ describe('buildAuditChecks', () => {
   it('given InsightsExternalData query fails, when executing check, then returns false', async () => {
     // Arrange
     const entries = [
-      { type: 'sobject' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
+      { isElf: false, sourceOrg: 'srcA', targetOrg: 'anaA' },
     ]
     const sfPorts = new Map([
       ['srcA', createMockSfPort('ok')],
@@ -140,7 +161,7 @@ describe('buildAuditChecks', () => {
   it('given EventLogFile check with missing sfPort, when executing, then returns false', async () => {
     // Arrange
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
+      { isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' },
     ]
     const sfPorts = new Map<string, SalesforcePort>()
 
@@ -157,7 +178,7 @@ describe('buildAuditChecks', () => {
   it('given InsightsExternalData check with missing sfPort, when executing, then returns false', async () => {
     // Arrange
     const entries = [
-      { type: 'sobject' as const, sourceOrg: 'srcA', targetOrg: 'anaA' },
+      { isElf: false, sourceOrg: 'srcA', targetOrg: 'anaA' },
     ]
     const sfPorts = new Map<string, SalesforcePort>()
 
@@ -177,7 +198,7 @@ describe('buildAuditChecks', () => {
     // Arrange
     const sfMock = createMockSfPort()
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
+      { isElf: true, sourceOrg: 'src', targetOrg: 'ana' },
     ]
     const sfPorts = new Map([
       ['src', sfMock],
@@ -201,7 +222,7 @@ describe('buildAuditChecks', () => {
     // Arrange
     const sfMock = createMockSfPort()
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
+      { isElf: true, sourceOrg: 'src', targetOrg: 'ana' },
     ]
     const sfPorts = new Map([
       ['src', sfMock],
@@ -223,7 +244,7 @@ describe('buildAuditChecks', () => {
     // Arrange
     const anaMock = createMockSfPort()
     const entries = [
-      { type: 'sobject' as const, sourceOrg: 'src', targetOrg: 'ana' },
+      { isElf: false, sourceOrg: 'src', targetOrg: 'ana' },
     ]
     const sfPorts = new Map([
       ['src', createMockSfPort()],
@@ -247,7 +268,7 @@ describe('buildAuditChecks', () => {
     // Arrange
     const entries = [
       {
-        type: 'sobject' as const,
+        isElf: false,
         sourceOrg: 'srcA',
         targetOrg: 'anaA',
       },
@@ -322,7 +343,7 @@ describe('runAudit', () => {
   it('given all checks pass, when running audit, then returns passed true', async () => {
     // Arrange
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
+      { isElf: true, sourceOrg: 'src', targetOrg: 'ana' },
     ]
     const sfPorts = new Map([
       ['src', createMockSfPort('ok')],
@@ -385,7 +406,7 @@ describe('runAudit', () => {
   it('given auth check fails, when running audit, then returns passed false', async () => {
     // Arrange
     const entries = [
-      { type: 'elf' as const, sourceOrg: 'src', targetOrg: 'ana' },
+      { isElf: true, sourceOrg: 'src', targetOrg: 'ana' },
     ]
     const sfPorts = new Map([
       ['src', createMockSfPort('fail')],

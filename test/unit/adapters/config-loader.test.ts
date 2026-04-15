@@ -38,11 +38,10 @@ function makeSfPort(
 const validElfConfig = {
   entries: [
     {
-      type: 'elf',
       sourceOrg: 'source',
       targetOrg: 'analytic',
       targetDataset: 'DS_ELF',
-      eventType: 'LightningPageView',
+      eventLog: 'LightningPageView',
       interval: 'Daily',
     },
   ],
@@ -51,11 +50,10 @@ const validElfConfig = {
 const validSObjectConfig = {
   entries: [
     {
-      type: 'sobject',
       sourceOrg: 'source',
       targetOrg: 'analytic',
       targetDataset: 'DS_Account',
-      sobject: 'Account',
+      sObject: 'Account',
       fields: ['Id', 'Name'],
     },
   ],
@@ -77,7 +75,7 @@ describe('ConfigLoader', () => {
 
       // Assert
       expect(sut).toHaveLength(1)
-      expect(sut[0].entry.type).toBe('elf')
+      expect('eventLog' in sut[0].entry).toBe(true)
       expect(sut[0].index).toBe(0)
     })
 
@@ -94,8 +92,8 @@ describe('ConfigLoader', () => {
       // Assert
       expect(sut).toHaveLength(1)
       const entry = sut[0].entry
-      expect(entry.type).toBe('sobject')
-      if (entry.type === 'sobject') {
+      expect('sObject' in entry).toBe(true)
+      if ('sObject' in entry) {
         expect(entry.dateField).toBe('LastModifiedDate')
       }
     })
@@ -113,7 +111,7 @@ describe('ConfigLoader', () => {
     it('given missing required fields, when loading, then throws validation error', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
-        JSON.stringify({ entries: [{ type: 'elf' }] })
+        JSON.stringify({ entries: [{ eventLog: 'Login' }] })
       )
 
       // Act & Assert
@@ -127,11 +125,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'sobject',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS_Account',
-            sobject: 'Contact',
+            sObject: 'Contact',
             fields: ['Id', 'Owner.Name', 'Account.Type'],
           },
         ],
@@ -140,7 +137,7 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).resolves.toMatchObject({
-        entries: [{ type: 'sobject' }],
+        entries: [{ sObject: 'Contact' }],
       })
     })
 
@@ -150,11 +147,10 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'sobject',
               sourceOrg: 'source',
               targetOrg: 'analytic',
               targetDataset: 'DS_Account',
-              sobject: 'Account',
+              sObject: 'Account',
               fields: ['@invalid!field'],
             },
           ],
@@ -172,11 +168,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src:org',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -194,11 +189,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: '1Field',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -217,11 +211,10 @@ describe('ConfigLoader', () => {
         entries: [
           {
             name: 'login-events',
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -241,11 +234,10 @@ describe('ConfigLoader', () => {
         entries: [
           {
             name: 'has spaces!',
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'E',
+            eventLog: 'E',
             interval: 'Daily',
           },
         ],
@@ -263,11 +255,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Weekly',
           },
         ],
@@ -283,11 +274,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'sobject',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            sobject: 'Account',
+            sObject: 'Account',
             fields: ['Id', 'Name'],
             where: "Industry = 'Tech'",
             limit: 100,
@@ -302,11 +292,62 @@ describe('ConfigLoader', () => {
       // Assert
       expect(sut.entries).toHaveLength(1)
       const entry = sut.entries[0]
-      expect(entry.type).toBe('sobject')
-      if (entry.type === 'sobject') {
+      expect('sObject' in entry).toBe(true)
+      if ('sObject' in entry) {
         expect(entry.where).toBe("Industry = 'Tech'")
         expect(entry.limit).toBe(100)
       }
+    })
+
+    it('given entry with multiple discriminator fields, when loading, then throws ambiguity error', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+            eventLog: 'Login',
+            interval: 'Daily',
+            sObject: 'Account',
+            fields: ['Id'],
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act / Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Entry must have exactly one of eventLog, sObject, or csvFile'
+      )
+    })
+
+    it('given entry with no discriminating field, when loading, then throws descriptive error', async () => {
+      // Arrange
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'source',
+            targetOrg: 'analytic',
+            targetDataset: 'DS',
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act / Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'Entry must have one of: eventLog (ELF), sObject (SObject), or csvFile (CSV)'
+      )
+    })
+
+    it('given non-object entry, when loading, then throws validation error', async () => {
+      // Arrange
+      const config = { entries: ['not-an-object'] }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act / Assert
+      await expect(parseConfig('config.json')).rejects.toThrow()
     })
   })
 
@@ -316,20 +357,18 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             operation: 'Append',
           },
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'E2',
+            eventLog: 'E2',
             interval: 'Daily',
             operation: 'Overwrite',
           },
@@ -348,19 +387,17 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
           },
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'E2',
+            eventLog: 'E2',
             interval: 'Daily',
           },
         ],
@@ -382,29 +419,26 @@ describe('ConfigLoader', () => {
         entries: [
           {
             name: 'my-entry',
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS1',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
           },
           {
             name: 'other',
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS2',
-            eventType: 'E2',
+            eventLog: 'E2',
             interval: 'Daily',
           },
           {
             name: 'my-entry',
-            type: 'sobject',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS3',
-            sobject: 'Account',
+            sObject: 'Account',
             fields: ['Id'],
           },
         ],
@@ -423,20 +457,18 @@ describe('ConfigLoader', () => {
         entries: [
           {
             name: 'entry-a',
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS1',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
           },
           {
             name: 'entry-b',
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS2',
-            eventType: 'E2',
+            eventLog: 'E2',
             interval: 'Daily',
           },
         ],
@@ -455,19 +487,17 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS1',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
           },
           {
-            type: 'elf',
             sourceOrg: 'src',
             targetOrg: 'ana',
             targetDataset: 'DS2',
-            eventType: 'E2',
+            eventLog: 'E2',
             interval: 'Daily',
           },
         ],
@@ -487,9 +517,8 @@ describe('ConfigLoader', () => {
     const config = {
       entries: [
         {
-          type: 'elf',
           sourceOrg: 'src-org',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
           targetFile: './output/login.csv',
         },
@@ -499,7 +528,7 @@ describe('ConfigLoader', () => {
 
     // Act & Assert
     await expect(parseConfig('config.json')).resolves.toMatchObject({
-      entries: [{ type: 'elf', targetFile: './output/login.csv' }],
+      entries: [{ eventLog: 'Login', targetFile: './output/login.csv' }],
     })
   })
 
@@ -509,11 +538,10 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
             targetOrg: 'my-org',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -533,11 +561,10 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
             targetOrg: 'my-org',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Hourly',
           },
         ],
@@ -557,9 +584,8 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             targetFile: './output/login.csv',
             augmentColumns: { OrgName: 'StaticValue' },
@@ -581,9 +607,8 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             targetFile: './output/login.csv',
             augmentColumns: { OrgId: '{{targetOrg.Id}}' },
@@ -609,11 +634,10 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
             targetOrg: 'target-org',
             targetDataset: 'MyDataset',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             augmentColumns: { 'Org.Name': 'MyOrg' },
           },
@@ -625,7 +649,7 @@ describe('ConfigLoader', () => {
     const sut = await parseConfig('config.json')
 
     // Assert
-    expect(sut.entries[0].type).toBe('elf')
+    expect('eventLog' in sut.entries[0]).toBe(true)
   })
 
   it('given {{targetOrg.Id}} in augmentColumns when no targetOrg, when parsing, then rejects', async () => {
@@ -634,9 +658,8 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             targetFile: './output/login.csv',
             augmentColumns: { Org: '{{targetOrg.Id}}' },
@@ -654,11 +677,10 @@ describe('ConfigLoader', () => {
     const config = {
       entries: [
         {
-          type: 'elf',
           sourceOrg: 'src-org',
           targetOrg: 'my-org',
           targetDataset: 'LoginEvents',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         },
       ],
@@ -667,7 +689,7 @@ describe('ConfigLoader', () => {
 
     // Act & Assert
     await expect(parseConfig('config.json')).resolves.toMatchObject({
-      entries: [{ type: 'elf', targetDataset: 'LoginEvents' }],
+      entries: [{ eventLog: 'Login', targetDataset: 'LoginEvents' }],
     })
   })
 
@@ -676,10 +698,9 @@ describe('ConfigLoader', () => {
     const config = {
       entries: [
         {
-          type: 'elf',
           sourceOrg: 'src-org',
           targetOrg: 'my-org',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         },
       ],
@@ -697,12 +718,11 @@ describe('ConfigLoader', () => {
     const config = {
       entries: [
         {
-          type: 'elf',
           sourceOrg: 'src-org',
           targetOrg: 'my-org',
           targetFile: './output.csv',
           targetDataset: 'DS',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         },
       ],
@@ -720,11 +740,10 @@ describe('ConfigLoader', () => {
     const config = {
       entries: [
         {
-          type: 'elf',
           sourceOrg: 'src-org',
           targetFile: './output.csv',
           targetDataset: 'DS',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         },
       ],
@@ -744,10 +763,9 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
             targetOrg: 'my-org',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -771,11 +789,10 @@ describe('ConfigLoader', () => {
       JSON.stringify({
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src-org',
             targetFile: './output.csv',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -798,9 +815,8 @@ describe('ConfigLoader', () => {
     const config = {
       entries: [
         {
-          type: 'elf',
           sourceOrg: 'src-org',
-          eventType: 'Login',
+          eventLog: 'Login',
           interval: 'Daily',
         },
       ],
@@ -818,8 +834,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
             },
           ],
@@ -831,9 +846,9 @@ describe('ConfigLoader', () => {
 
       // Assert
       expect(sut.entries).toHaveLength(1)
-      expect(sut.entries[0].type).toBe('csv')
-      if (sut.entries[0].type === 'csv') {
-        expect(sut.entries[0].sourceFile).toBe('./data/login-events.csv')
+      expect('csvFile' in sut.entries[0]).toBe(true)
+      if ('csvFile' in sut.entries[0]) {
+        expect(sut.entries[0].csvFile).toBe('./data/login-events.csv')
         expect(sut.entries[0].operation).toBe('Append')
       }
     })
@@ -844,8 +859,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetDataset: 'LoginEvents',
               targetOrg: 'my-org',
               operation: 'Overwrite',
@@ -858,19 +872,19 @@ describe('ConfigLoader', () => {
       const sut = await parseConfig('config.json')
 
       // Assert
-      expect(sut.entries[0].type).toBe('csv')
-      if (sut.entries[0].type === 'csv') {
+      expect('csvFile' in sut.entries[0]).toBe(true)
+      if ('csvFile' in sut.entries[0]) {
         expect(sut.entries[0].targetOrg).toBe('my-org')
         expect(sut.entries[0].operation).toBe('Overwrite')
       }
     })
 
-    it('given CSV config with empty sourceFile, when parsing, then rejects', async () => {
+    it('given CSV config with empty csvFile, when parsing, then rejects', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
           entries: [
-            { type: 'csv', sourceFile: '', targetFile: './out/data.csv' },
+            { csvFile: '', targetFile: './out/data.csv' },
           ],
         })
       )
@@ -885,8 +899,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
             },
@@ -906,8 +919,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { OrgName: '{{targetOrg.Name}}' },
             },
@@ -927,8 +939,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { OrgId: 'static-value' },
             },
@@ -938,7 +949,7 @@ describe('ConfigLoader', () => {
 
       // Act & Assert — any plain string is accepted as-is
       await expect(parseConfig('config.json')).resolves.toMatchObject({
-        entries: [{ type: 'csv' }],
+        entries: [{ csvFile: './data/login-events.csv' }],
       })
     })
 
@@ -948,8 +959,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { 'Org.Name': 'MyOrg' },
             },
@@ -961,7 +971,7 @@ describe('ConfigLoader', () => {
       const sut = await parseConfig('config.json')
 
       // Assert
-      expect(sut.entries[0].type).toBe('csv')
+      expect('csvFile' in sut.entries[0]).toBe(true)
     })
 
     it('given CSV config with literal augmentColumn value, when parsing, then accepts it', async () => {
@@ -970,8 +980,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { Source: 'manual-export' },
             },
@@ -983,7 +992,7 @@ describe('ConfigLoader', () => {
       const sut = await parseConfig('config.json')
 
       // Assert
-      expect(sut.entries[0].type).toBe('csv')
+      expect('csvFile' in sut.entries[0]).toBe(true)
     })
 
     it('given CSV config with targetOrg but invalid targetDataset, when parsing, then rejects', async () => {
@@ -992,8 +1001,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetOrg: 'my-org',
               targetDataset: './out/login-events.csv',
             },
@@ -1007,14 +1015,13 @@ describe('ConfigLoader', () => {
       )
     })
 
-    it('given CSV config with absolute sourceFile, when parsing, then accepts', async () => {
+    it('given CSV config with absolute csvFile, when parsing, then accepts', async () => {
       // Arrange — absolute paths are valid for CLI tools
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: '/tmp/data.csv',
+              csvFile: '/tmp/data.csv',
               targetFile: './out/data.csv',
             },
           ],
@@ -1023,18 +1030,17 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).resolves.toMatchObject({
-        entries: [{ type: 'csv' }],
+        entries: [{ csvFile: '/tmp/data.csv' }],
       })
     })
 
-    it('given CSV config with path traversal in sourceFile, when parsing, then rejects', async () => {
+    it('given CSV config with path traversal in csvFile, when parsing, then rejects', async () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: '../../etc/passwd',
+              csvFile: '../../etc/passwd',
               targetFile: './out/data.csv',
             },
           ],
@@ -1043,8 +1049,71 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).rejects.toThrow(
-        'sourceFile must not traverse parent directories'
+        'csvFile must not traverse parent directories'
       )
+    })
+
+    it('given config with path traversal in targetFile, when parsing, then rejects', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              eventLog: 'Login',
+              interval: 'Daily',
+              sourceOrg: 'src',
+              targetFile: '../../etc/crontab',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        'targetFile must not traverse parent directories'
+      )
+    })
+
+    it('given ELF entry with unknown property, when parsing, then rejects with unrecognized key', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              eventLog: 'Login',
+              interval: 'Daily',
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              unknownProp: 'value',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow('Unrecognized')
+    })
+
+    it('given SObject entry with unknown property, when parsing, then rejects with unrecognized key', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sObject: 'Account',
+              fields: ['Id'],
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              unknownProp: 'value',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow('Unrecognized')
     })
 
     it('given CSV config with explicit operation Append, when parsing, then accepts it', async () => {
@@ -1053,8 +1122,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               operation: 'Append',
             },
@@ -1066,8 +1134,8 @@ describe('ConfigLoader', () => {
       const sut = await parseConfig('config.json')
 
       // Assert
-      expect(sut.entries[0].type).toBe('csv')
-      if (sut.entries[0].type === 'csv') {
+      expect('csvFile' in sut.entries[0]).toBe(true)
+      if ('csvFile' in sut.entries[0]) {
         expect(sut.entries[0].operation).toBe('Append')
       }
     })
@@ -1078,8 +1146,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
             },
@@ -1105,11 +1172,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
           },
@@ -1137,11 +1203,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: { Label: 'PROD-{{sourceOrg.Name}}' },
           },
@@ -1165,11 +1230,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: { Label: '{{sourceOrg.Name}}-{{targetOrg.Id}}' },
           },
@@ -1193,11 +1257,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: { Label: '{{unknownVar}}' },
           },
@@ -1220,11 +1283,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: {
               OrgId: '{{sourceOrg.Id}}',
@@ -1269,11 +1331,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: {
               TargetName: '{{targetOrg.Name}}',
@@ -1298,11 +1359,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
           },
@@ -1328,11 +1388,10 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'source',
             targetOrg: 'analytic',
             targetDataset: 'DS',
-            eventType: 'E1',
+            eventLog: 'E1',
             interval: 'Daily',
             augmentColumns: { OrgId: '{{sourceOrg.Id}}' },
           },
@@ -1355,8 +1414,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { Source: 'manual' },
             },
@@ -1379,8 +1437,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
             },
           ],
@@ -1400,8 +1457,7 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'csv',
-              sourceFile: './data/login-events.csv',
+              csvFile: './data/login-events.csv',
               targetFile: './out/login-events.csv',
               augmentColumns: { Tag: 'batch-2026' },
             },
@@ -1418,11 +1474,10 @@ describe('ConfigLoader', () => {
   })
 
   describe('entryLabel', () => {
-    it('given CSV entry without name, when getting label, then returns csv-prefixed sourceFile', () => {
+    it('given CSV entry without name, when getting label, then returns csv-prefixed csvFile', () => {
       // Arrange / Act
       const sut = entryLabel({
-        type: 'csv',
-        sourceFile: './data/login.csv',
+        csvFile: './data/login.csv',
         targetFile: './out/login.csv',
         operation: 'Append',
       })
@@ -1434,8 +1489,7 @@ describe('ConfigLoader', () => {
     it('given CSV entry with name, when getting label, then returns name', () => {
       // Arrange / Act
       const sut = entryLabel({
-        type: 'csv',
-        sourceFile: './data/login.csv',
+        csvFile: './data/login.csv',
         targetFile: './out/login.csv',
         operation: 'Append',
         name: 'login-data',
@@ -1445,12 +1499,11 @@ describe('ConfigLoader', () => {
       expect(sut).toBe('login-data')
     })
 
-    it('given ELF entry without name, when getting label, then returns elf-prefixed eventType', () => {
+    it('given ELF entry without name, when getting label, then returns elf-prefixed eventLog', () => {
       // Arrange / Act
       const sut = entryLabel({
-        type: 'elf',
         sourceOrg: 'prod',
-        eventType: 'Login',
+        eventLog: 'Login',
         interval: 'Daily',
         targetOrg: 'my-org',
         targetDataset: 'LoginEvents',
@@ -1461,12 +1514,11 @@ describe('ConfigLoader', () => {
       expect(sut).toBe('elf:Login')
     })
 
-    it('given SObject entry without name, when getting label, then returns sobject-prefixed sobject', () => {
+    it('given SObject entry without name, when getting label, then returns sobject-prefixed sObject', () => {
       // Arrange / Act
       const sut = entryLabel({
-        type: 'sobject',
         sourceOrg: 'prod',
-        sobject: 'Account',
+        sObject: 'Account',
         fields: ['Id'],
         dateField: 'LastModifiedDate',
         targetOrg: 'my-org',
@@ -1485,20 +1537,18 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src1',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             augmentColumns: { OrgName: 'OrgA' },
           },
           {
-            type: 'elf',
             sourceOrg: 'src2',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             augmentColumns: { Source: 'OrgB' },
           },
@@ -1517,20 +1567,18 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src1',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             augmentColumns: { OrgName: 'OrgA' },
           },
           {
-            type: 'elf',
             sourceOrg: 'src2',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             augmentColumns: { OrgName: 'OrgB' },
           },
@@ -1550,19 +1598,17 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'sobject',
             sourceOrg: 'src1',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            sobject: 'Account',
+            sObject: 'Account',
             fields: ['Id', 'Name'],
           },
           {
-            type: 'sobject',
             sourceOrg: 'src2',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            sobject: 'Account',
+            sObject: 'Account',
             fields: ['Id', 'Industry'],
           },
         ],
@@ -1580,19 +1626,17 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'sobject',
             sourceOrg: 'src1',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            sobject: 'Account',
+            sObject: 'Account',
             fields: ['Id', 'Name'],
           },
           {
-            type: 'sobject',
             sourceOrg: 'src2',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            sobject: 'Account',
+            sObject: 'Account',
             fields: ['Id', 'Name'],
           },
         ],
@@ -1611,20 +1655,18 @@ describe('ConfigLoader', () => {
       const config = {
         entries: [
           {
-            type: 'elf',
             sourceOrg: 'src1',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
             augmentColumns: { OrgName: 'OrgA' },
           },
           {
-            type: 'elf',
             sourceOrg: 'src2',
             targetOrg: 'ana',
             targetDataset: 'DS',
-            eventType: 'Login',
+            eventLog: 'Login',
             interval: 'Daily',
           },
         ],
@@ -1645,11 +1687,10 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'Login',
+              eventLog: 'Login',
               interval: 'Daily',
               augmentColumns: { '1InvalidKey': 'value' },
             },
@@ -1669,11 +1710,10 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'Login',
+              eventLog: 'Login',
               interval: 'Daily',
               augmentColumns: { 'col!': 'value' },
             },
@@ -1694,11 +1734,10 @@ describe('ConfigLoader', () => {
           entries: [
             {
               name: '!valid-name',
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'Login',
+              eventLog: 'Login',
               interval: 'Daily',
             },
           ],
@@ -1719,20 +1758,18 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E1',
+              eventLog: 'E1',
               interval: 'Daily',
               operation: 'Append',
             },
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E2',
+              eventLog: 'E2',
               interval: 'Daily',
               operation: 'Overwrite',
             },
@@ -1750,20 +1787,18 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E1',
+              eventLog: 'E1',
               interval: 'Daily',
               operation: 'Append',
             },
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E2',
+              eventLog: 'E2',
               interval: 'Daily',
               operation: 'Overwrite',
             },
@@ -1782,29 +1817,26 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E1',
+              eventLog: 'E1',
               interval: 'Daily',
               operation: 'Append',
             },
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E2',
+              eventLog: 'E2',
               interval: 'Daily',
               operation: 'Overwrite',
             },
             {
-              type: 'elf',
               sourceOrg: 'src',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'E3',
+              eventLog: 'E3',
               interval: 'Daily',
               operation: 'Append',
             },
@@ -1825,20 +1857,18 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'elf',
               sourceOrg: 'src1',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'Login',
+              eventLog: 'Login',
               interval: 'Daily',
               augmentColumns: { B: 'orgA', A: 'extra' },
             },
             {
-              type: 'elf',
               sourceOrg: 'src2',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              eventType: 'Login',
+              eventLog: 'Login',
               interval: 'Daily',
               augmentColumns: { B: 'orgB', A: 'extra' },
             },
@@ -1860,19 +1890,17 @@ describe('ConfigLoader', () => {
         JSON.stringify({
           entries: [
             {
-              type: 'sobject',
               sourceOrg: 'src1',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              sobject: 'Account',
+              sObject: 'Account',
               fields: ['Name', 'Id'],
             },
             {
-              type: 'sobject',
               sourceOrg: 'src2',
               targetOrg: 'ana',
               targetDataset: 'DS',
-              sobject: 'Account',
+              sObject: 'Account',
               fields: ['Name', 'Id'],
             },
           ],

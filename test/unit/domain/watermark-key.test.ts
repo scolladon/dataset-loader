@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { WatermarkKey } from '../../../src/domain/watermark-key.js'
 
 describe('WatermarkKey', () => {
-  it('given ELF entry, when creating key, then format is sourceOrg:elf:eventType:interval', () => {
+  it('given ELF entry, when creating key, then format is sourceOrg:elf:eventLog:interval', () => {
     // Arrange / Act
     const sut = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
 
@@ -15,12 +14,11 @@ describe('WatermarkKey', () => {
     expect(sut.toString()).toBe('src:elf:Login:Daily')
   })
 
-  it('given SObject entry, when creating key, then format is sourceOrg:sobject:sobject', () => {
+  it('given SObject entry, when creating key, then format is sourceOrg:sobject:sObject', () => {
     // Arrange / Act
     const sut = WatermarkKey.fromEntry({
-      type: 'sobject',
       sourceOrg: 'src',
-      sobject: 'Account',
+      sObject: 'Account',
     })
 
     // Assert
@@ -30,9 +28,8 @@ describe('WatermarkKey', () => {
   it('given ELF entry with name, when creating key, then uses name as key', () => {
     // Arrange / Act
     const sut = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
       name: 'my-login-loader',
     })
@@ -44,9 +41,8 @@ describe('WatermarkKey', () => {
   it('given SObject entry with name, when creating key, then uses name as key', () => {
     // Arrange / Act
     const sut = WatermarkKey.fromEntry({
-      type: 'sobject',
       sourceOrg: 'src',
-      sobject: 'Account',
+      sObject: 'Account',
       name: 'account-sync',
     })
 
@@ -54,18 +50,16 @@ describe('WatermarkKey', () => {
     expect(sut.toString()).toBe('account-sync')
   })
 
-  it('given two ELF keys with same sourceOrg/eventType/interval, when comparing toString, then they are equal', () => {
+  it('given two ELF keys with same sourceOrg/eventLog/interval, when comparing toString, then they are equal', () => {
     // Arrange
     const a = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
     const b = WatermarkKey.fromEntry({
-      type: 'elf',
       sourceOrg: 'src',
-      eventType: 'Login',
+      eventLog: 'Login',
       interval: 'Daily',
     })
 
@@ -73,11 +67,10 @@ describe('WatermarkKey', () => {
     expect(a.toString()).toBe(b.toString())
   })
 
-  it('given CSV entry without name, when creating key, then format is csv-colon-sourceFile', () => {
+  it('given CSV entry without name, when creating key, then format is csv-colon-csvFile', () => {
     // Arrange / Act
     const sut = WatermarkKey.fromEntry({
-      type: 'csv',
-      sourceFile: './data/login.csv',
+      csvFile: './data/login.csv',
     })
 
     // Assert
@@ -87,8 +80,7 @@ describe('WatermarkKey', () => {
   it('given CSV entry with name, when creating key, then uses name as key', () => {
     // Arrange / Act
     const sut = WatermarkKey.fromEntry({
-      type: 'csv',
-      sourceFile: './data/login.csv',
+      csvFile: './data/login.csv',
       name: 'login-data',
     })
 
