@@ -929,9 +929,7 @@ describe('ConfigLoader', () => {
       // Arrange
       vi.mocked(fs.readFile).mockResolvedValue(
         JSON.stringify({
-          entries: [
-            { csvFile: '', targetFile: './out/data.csv' },
-          ],
+          entries: [{ csvFile: '', targetFile: './out/data.csv' }],
         })
       )
 

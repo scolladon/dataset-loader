@@ -225,30 +225,33 @@ const csvEntrySchema = z
 
 const DISCRIMINATOR_FIELDS = ['eventLog', 'sObject', 'csvFile'] as const
 
-const entrySchema = z.any().superRefine((val, ctx) => {
-  if (typeof val !== 'object' || val === null || Array.isArray(val)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Entry must be an object',
-    })
-    return
-  }
-  const obj = val as Record<string, unknown>
-  const present = DISCRIMINATOR_FIELDS.filter(k => k in obj)
-  if (present.length === 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        'Entry must have one of: eventLog (ELF), sObject (SObject), or csvFile (CSV)',
-    })
-  }
-  if (present.length > 1) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Entry must have exactly one of eventLog, sObject, or csvFile — found: ${present.join(', ')}`,
-    })
-  }
-}).pipe(z.union([elfEntrySchema, sobjectEntrySchema, csvEntrySchema]))
+const entrySchema = z
+  .any()
+  .superRefine((val, ctx) => {
+    if (typeof val !== 'object' || val === null || Array.isArray(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Entry must be an object',
+      })
+      return
+    }
+    const obj = val as Record<string, unknown>
+    const present = DISCRIMINATOR_FIELDS.filter(k => k in obj)
+    if (present.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Entry must have one of: eventLog (ELF), sObject (SObject), or csvFile (CSV)',
+      })
+    }
+    if (present.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Entry must have exactly one of eventLog, sObject, or csvFile — found: ${present.join(', ')}`,
+      })
+    }
+  })
+  .pipe(z.union([elfEntrySchema, sobjectEntrySchema, csvEntrySchema]))
 
 const configSchema = z.object({
   entries: z.array(entrySchema).min(1),

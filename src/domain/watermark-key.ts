@@ -1,8 +1,4 @@
-import {
-  type EntryShape,
-  isElfShape,
-  isSObjectShape,
-} from '../ports/types.js'
+import { type EntryShape, isElfShape, isSObjectShape } from '../ports/types.js'
 
 export class WatermarkKey {
   private constructor(private readonly value: string) {}

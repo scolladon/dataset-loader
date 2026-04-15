@@ -159,7 +159,11 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     sfPorts: Map<string, SalesforcePort>,
     logger: LoggerPort
   ): Promise<DatasetLoadResult> {
-    const orgEntries: { isElf: boolean; sourceOrg: string; targetOrg?: string }[] = []
+    const orgEntries: {
+      isElf: boolean
+      sourceOrg: string
+      targetOrg?: string
+    }[] = []
     for (const { entry } of entries) {
       if (isCsvEntry(entry)) continue
       orgEntries.push({

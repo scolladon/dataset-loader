@@ -153,7 +153,11 @@ describe('SkipDatasetError', () => {
 describe('isElfShape', () => {
   it('given ELF entry, when checking, then returns true', () => {
     // Arrange
-    const entry: EntryShape = { sourceOrg: 'org', eventLog: 'Login', interval: 'Daily' }
+    const entry: EntryShape = {
+      sourceOrg: 'org',
+      eventLog: 'Login',
+      interval: 'Daily',
+    }
 
     // Act
     const sut = isElfShape(entry)
@@ -212,7 +216,11 @@ describe('isCsvShape', () => {
 
   it('given ELF entry, when checking, then returns false', () => {
     // Arrange
-    const entry: EntryShape = { sourceOrg: 'org', eventLog: 'Login', interval: 'Daily' }
+    const entry: EntryShape = {
+      sourceOrg: 'org',
+      eventLog: 'Login',
+      interval: 'Daily',
+    }
 
     // Act
     const sut = isCsvShape(entry)
