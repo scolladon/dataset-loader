@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/scolladon/dataset-loader/compare/v1.1.0...v1.2.0) (2026-04-17)
+
+
+### Features
+
+* add SObject read access and dataset ready audit checks ([#22](https://github.com/scolladon/dataset-loader/issues/22)) ([2209308](https://github.com/scolladon/dataset-loader/commit/220930874d4a2e6257333c2b28ffdd2ffe1df755))
+
 ## [1.1.0](https://github.com/scolladon/dataset-loader/compare/v1.0.0...v1.1.0) (2026-04-15)
 
 
