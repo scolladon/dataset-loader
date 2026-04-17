@@ -163,6 +163,8 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       isElf: boolean
       sourceOrg: string
       targetOrg?: string
+      sObject?: string
+      targetDataset?: string
     }[] = []
     for (const { entry } of entries) {
       if (isCsvEntry(entry)) continue
@@ -170,6 +172,8 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
         isElf: isElfEntry(entry),
         sourceOrg: entry.sourceOrg,
         targetOrg: entry.targetOrg,
+        sObject: isSObjectEntry(entry) ? entry.sObject : undefined,
+        targetDataset: entry.targetDataset,
       })
     }
     logger.info('Audit — pre-flight checks:')
