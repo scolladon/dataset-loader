@@ -1,5 +1,7 @@
+<!-- markdownlint-disable-file MD013 -->
 <!--
-Thanks for sending a pull request! Please make sure to have a look to the contribution guidelines, then fill out the blanks below.
+Thanks for sending a pull request! Please make sure to have a look to the
+contribution guidelines, then fill out the blanks below.
 -->
 
 # Explain your changes

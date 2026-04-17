@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -- long prose and command-line examples -->
 # Contributing
 
 ## Prerequisites

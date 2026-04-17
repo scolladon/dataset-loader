@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -- operational run-book uses long single-line commands and log excerpts -->
 # Run Book: Dataset Loader
 
 ## Overview
@@ -8,10 +9,10 @@ The Dataset Loader is an SF CLI plugin that extracts Salesforce Event Log Files 
 
 ### Required Tools
 
-| Tool | Purpose | Version Check |
-| --- | --- | --- |
-| `sf` | Salesforce CLI — org authentication | `sf --version` |
-| `node` | Node.js runtime (>= 18) | `node --version` |
+| Tool   | Purpose                             | Version Check    |
+|--------|-------------------------------------|------------------|
+| `sf`   | Salesforce CLI — org authentication | `sf --version`   |
+| `node` | Node.js runtime (>= 18)             | `node --version` |
 
 ### Installation
 
@@ -46,11 +47,11 @@ sf org display --target-org my-analytic-org
 
 ### Required Permissions
 
-| Org | Required Permissions |
-| --- | --- |
-| **Source org** (ELF) | `API Enabled`, `View Event Log Files` (`ViewEventLogFiles`) |
-| **Source org** (SObject) | `API Enabled` |
-| **Analytic org** | `API Enabled`, `Upload External Data to CRM Analytics` (`InsightsAppUploadUser`) |
+| Org                      | Required Permissions                                                             |
+|--------------------------|----------------------------------------------------------------------------------|
+| **Source org** (ELF)     | `API Enabled`, `View Event Log Files` (`ViewEventLogFiles`)                      |
+| **Source org** (SObject) | `API Enabled`                                                                    |
+| **Analytic org**         | `API Enabled`, `Upload External Data to CRM Analytics` (`InsightsAppUploadUser`) |
 
 Assign via Permission Set or Profile. The `sf` CLI alias must authenticate as a user with these permissions.
 
@@ -78,13 +79,13 @@ Create `dataset-load.config.json` at the project root. See the [README](README.m
 
 Run daily at 6:00 AM (after Salesforce generates daily log files around 3:00 AM):
 
-```
+```bash
 0 6 * * * cd /path/to/dataset-loader && sf dataset load >> /var/log/dataset-loader.log 2>&1
 ```
 
 For JSON-structured logs:
 
-```
+```bash
 0 6 * * * cd /path/to/dataset-loader && sf dataset load --json >> /var/log/dataset-loader.json 2>&1
 ```
 
@@ -156,7 +157,7 @@ Returns:
 
 During execution, a main progress bar tracks overall entry progress, with per-group sub-bars showing real-time fetch and upload stats:
 
-```
+```bash
 Processing ████████████████████░░░░░░░░░░░░░░░░░░░░ 2/5 items | 3s elapsed
   ElfDS1 (06V000000000001) — 2 files, 4992 rows → 1 part
   AcctDS (06V000000000002) — 1 file, 150 rows → 0 parts
@@ -168,16 +169,16 @@ Progress bars are displayed only in TTY mode and suppressed with `--json`.
 
 On completion, the command logs:
 
-```
+```bash
 Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 ```
 
-| Metric | Meaning |
-|--------|---------|
-| processed | Entries that fetched and streamed data successfully |
-| skipped | Entries with no new records since last watermark |
-| failed | Entries that encountered errors |
-| groups uploaded | Distinct CRM Analytics upload jobs completed |
+| Metric          | Meaning                                             |
+|-----------------|-----------------------------------------------------|
+| processed       | Entries that fetched and streamed data successfully |
+| skipped         | Entries with no new records since last watermark    |
+| failed          | Entries that encountered errors                     |
+| groups uploaded | Distinct CRM Analytics upload jobs completed        |
 
 ## Troubleshooting
 
@@ -198,6 +199,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 - **Symptom**: Fetch or upload fails with HTTP 401 or 403.
 - **Cause**: Expired access token (401) or missing permissions (403).
 - **Resolution**:
+
   ```bash
   # Re-authenticate
   sf org login web --alias <alias>
@@ -205,6 +207,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
   # Verify
   sf dataset load --audit
   ```
+
   For headless environments, use `sf org login jwt`. For 403, verify permissions in the [Prerequisites](#required-permissions) section.
 
 ### HTTP 429 (Rate Limit)
@@ -237,13 +240,17 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 - **Cause**: Salesforce processing is delayed or stuck.
 - **Resolution**:
   1. Query upload status:
+
      ```bash
      sf data query --query "SELECT Id, Status, StatusMessage FROM InsightsExternalData WHERE EdgemartAlias='<dataset>' ORDER BY CreatedDate DESC LIMIT 5" --target-org <analytic_org>
      ```
+
   2. If stuck (not `Completed` or `Failed`), abort:
+
      ```bash
      sf api request rest --method PATCH --body '{"Action":"Delete"}' /services/data/v65.0/sobjects/InsightsExternalData/<record_id> --target-org <analytic_org>
      ```
+
   3. Re-run the loader.
 
 ### Watermark Not Advancing
@@ -321,19 +328,19 @@ sf dataset load -c configs/staging.json -s state/staging.state.json
 
 ### Exit Codes
 
-| Code | Meaning |
-| --- | --- |
-| `0` | All entries processed successfully |
-| `1` | Partial success (some entries failed, some succeeded) |
-| `2` | Fatal error (config invalid, all entries failed, or audit failure) |
+| Code | Meaning                                                            |
+|------|--------------------------------------------------------------------|
+| `0`  | All entries processed successfully                                 |
+| `1`  | Partial success (some entries failed, some succeeded)              |
+| `2`  | Fatal error (config invalid, all entries failed, or audit failure) |
 
 ### Resilience
 
-| Feature | Behavior |
-| --- | --- |
-| Per-org concurrency | 25 concurrent API calls per org via `p-limit` (shared across all entries for that org) |
-| Entry processing | Concurrent entries within each dataset group |
-| HTTP 429 retry | Exponential backoff, 3 attempts max (1s, 2s, 4s) |
-| Partial failure | Failed entries don't block others; watermarks only advance on success |
-| Atomic state writes | Temp file + rename prevents corruption on crash |
-| Streaming | Memory-bounded processing via async iterables; CRM Analytics targets use chunked uploads (10 MB gzip-compressed parts), file targets stream directly to disk |
+| Feature             | Behavior                                                                                                                                                     |
+|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Per-org concurrency | 25 concurrent API calls per org via `p-limit` (shared across all entries for that org)                                                                       |
+| Entry processing    | Concurrent entries within each dataset group                                                                                                                 |
+| HTTP 429 retry      | Exponential backoff, 3 attempts max (1s, 2s, 4s)                                                                                                             |
+| Partial failure     | Failed entries don't block others; watermarks only advance on success                                                                                        |
+| Atomic state writes | Temp file + rename prevents corruption on crash                                                                                                              |
+| Streaming           | Memory-bounded processing via async iterables; CRM Analytics targets use chunked uploads (10 MB gzip-compressed parts), file targets stream directly to disk |
