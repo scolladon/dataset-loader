@@ -5,18 +5,26 @@ import {
   type SalesforcePort,
 } from '../../../src/ports/types.js'
 
-function createMockSfPort(queryResult: 'ok' | 'fail' = 'ok'): SalesforcePort {
+function createMockSfPort(
+  queryResult: 'ok' | 'fail' | 'empty' = 'ok'
+): SalesforcePort {
+  const queryFns = {
+    ok: vi.fn(async () => ({
+      totalSize: 1,
+      done: true,
+      records: [{ Id: '001' }],
+    })),
+    fail: vi.fn(async () => {
+      throw new Error('access denied')
+    }),
+    empty: vi.fn(async () => ({
+      totalSize: 0,
+      done: true,
+      records: [],
+    })),
+  }
   return {
-    query:
-      queryResult === 'ok'
-        ? vi.fn(async () => ({
-            totalSize: 1,
-            done: true,
-            records: [{ Id: '001' }],
-          }))
-        : vi.fn(async () => {
-            throw new Error('access denied')
-          }),
+    query: queryFns[queryResult],
     queryMore: vi.fn(),
     getBlob: vi.fn(),
     getBlobStream: vi.fn(),
@@ -400,5 +408,312 @@ describe('runAudit', () => {
 
     // Assert
     expect(sut.passed).toBe(false)
+  })
+})
+
+describe('SObject read access check', () => {
+  it('given SObject entries, when building checks, then includes check per unique (org, sObject)', () => {
+    // Arrange
+    const entries = [
+      { isElf: false, sourceOrg: 'srcA', sObject: 'Account' },
+      { isElf: false, sourceOrg: 'srcA', sObject: 'Contact' },
+      { isElf: false, sourceOrg: 'srcA', sObject: 'Account' },
+    ]
+    const sfPorts = new Map([['srcA', createMockSfPort()]])
+
+    // Act
+    const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
+    const readChecks = sut.filter(c => c.label.includes('read access'))
+    expect(readChecks.length).toBe(2)
+    expect(readChecks.map(c => c.label)).toEqual(
+      expect.arrayContaining([
+        'srcA: Account read access',
+        'srcA: Contact read access',
+      ])
+    )
+  })
+
+  it('given no SObject entries, when building checks, then skips sObject read access check', () => {
+    // Arrange
+    const entries = [{ isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' }]
+    const sfPorts = new Map([
+      ['srcA', createMockSfPort()],
+      ['anaA', createMockSfPort()],
+    ])
+
+    // Act
+    const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
+    const readChecks = sut.filter(c => c.label.includes('read access'))
+    expect(readChecks.length).toBe(0)
+  })
+
+  it('given sObject check, when executing, then queries with correct sObject SOQL', async () => {
+    // Arrange
+    const sfMock = createMockSfPort()
+    const entries = [{ isElf: false, sourceOrg: 'src', sObject: 'Account' }]
+    const sfPorts = new Map([['src', sfMock]])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const readCheck = checks.find(c => c.label.includes('read access'))!
+
+    // Act
+    await readCheck.execute()
+
+    // Assert
+    expect(sfMock.query).toHaveBeenCalledWith('SELECT Id FROM Account LIMIT 1')
+  })
+
+  it('given sObject query succeeds, when executing check, then returns true', async () => {
+    // Arrange
+    const entries = [{ isElf: false, sourceOrg: 'src', sObject: 'Account' }]
+    const sfPorts = new Map([['src', createMockSfPort('ok')]])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const readCheck = checks.find(c => c.label.includes('read access'))!
+
+    // Act
+    const sut = await readCheck.execute()
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given sObject query fails, when executing check, then returns false', async () => {
+    // Arrange
+    const entries = [{ isElf: false, sourceOrg: 'src', sObject: 'Account' }]
+    const sfPorts = new Map([['src', createMockSfPort('fail')]])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const readCheck = checks.find(c => c.label.includes('read access'))!
+
+    // Act
+    const sut = await readCheck.execute()
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given sObject check with missing sfPort, when executing, then returns false', async () => {
+    // Arrange
+    const entries = [{ isElf: false, sourceOrg: 'src', sObject: 'Account' }]
+    const sfPorts = new Map<string, SalesforcePort>()
+    const checks = buildAuditChecks(entries, sfPorts)
+    const readCheck = checks.find(c => c.label.includes('read access'))!
+
+    // Act
+    const sut = await readCheck.execute()
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+})
+
+describe('Dataset ready check', () => {
+  it('given entries with targetOrg and targetDataset, when building checks, then includes check per unique (org, dataset)', () => {
+    // Arrange
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'srcA',
+        targetOrg: 'anaA',
+        targetDataset: 'DS_One',
+      },
+      {
+        isElf: false,
+        sourceOrg: 'srcA',
+        targetOrg: 'anaA',
+        targetDataset: 'DS_Two',
+      },
+      {
+        isElf: false,
+        sourceOrg: 'srcA',
+        targetOrg: 'anaA',
+        targetDataset: 'DS_One',
+      },
+    ]
+    const sfPorts = new Map([
+      ['srcA', createMockSfPort()],
+      ['anaA', createMockSfPort()],
+    ])
+
+    // Act
+    const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
+    const datasetChecks = sut.filter(c => c.label.includes('dataset'))
+    expect(datasetChecks.length).toBe(2)
+    expect(datasetChecks.map(c => c.label)).toEqual(
+      expect.arrayContaining([
+        "anaA: dataset 'DS_One' ready",
+        "anaA: dataset 'DS_Two' ready",
+      ])
+    )
+  })
+
+  it('given entries without targetDataset, when building checks, then skips dataset ready check', () => {
+    // Arrange
+    const entries = [{ isElf: false, sourceOrg: 'srcA', targetOrg: 'anaA' }]
+    const sfPorts = new Map([
+      ['srcA', createMockSfPort()],
+      ['anaA', createMockSfPort()],
+    ])
+
+    // Act
+    const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
+    const datasetChecks = sut.filter(c => c.label.includes('dataset'))
+    expect(datasetChecks.length).toBe(0)
+  })
+
+  it('given dataset ready check, when executing, then queries with correct InsightsExternalData SOQL', async () => {
+    // Arrange
+    const anaMock = createMockSfPort()
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'MyDataset',
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', createMockSfPort()],
+      ['ana', anaMock],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const datasetCheck = checks.find(c => c.label.includes('dataset'))!
+
+    // Act
+    await datasetCheck.execute()
+
+    // Assert
+    expect(anaMock.query).toHaveBeenCalledWith(
+      "SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = 'MyDataset' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1"
+    )
+  })
+
+  it('given dataset query returns records, when executing check, then returns true', async () => {
+    // Arrange
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'MyDataset',
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', createMockSfPort()],
+      ['ana', createMockSfPort('ok')],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const datasetCheck = checks.find(c => c.label.includes('dataset'))!
+
+    // Act
+    const sut = await datasetCheck.execute()
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given dataset query returns 0 records, when executing check, then returns false', async () => {
+    // Arrange
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'MyDataset',
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', createMockSfPort()],
+      ['ana', createMockSfPort('empty')],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const datasetCheck = checks.find(c => c.label.includes('dataset'))!
+
+    // Act
+    const sut = await datasetCheck.execute()
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given dataset query throws, when executing check, then returns false', async () => {
+    // Arrange
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'MyDataset',
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', createMockSfPort()],
+      ['ana', createMockSfPort('fail')],
+    ])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const datasetCheck = checks.find(c => c.label.includes('dataset'))!
+
+    // Act
+    const sut = await datasetCheck.execute()
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given dataset ready check with missing sfPort, when executing, then returns false', async () => {
+    // Arrange
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'MyDataset',
+      },
+    ]
+    const sfPorts = new Map<string, SalesforcePort>()
+    const checks = buildAuditChecks(entries, sfPorts)
+    const datasetCheck = checks.find(c => c.label.includes('dataset'))!
+
+    // Act
+    const sut = await datasetCheck.execute()
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+})
+
+describe('Combined checks', () => {
+  it('given SObject entry targeting a dataset, when building checks, then produces both read access and dataset ready checks', () => {
+    // Arrange
+    const entries = [
+      {
+        isElf: false,
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        sObject: 'Account',
+        targetDataset: 'DS_Account',
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', createMockSfPort()],
+      ['ana', createMockSfPort()],
+    ])
+
+    // Act
+    const sut = buildAuditChecks(entries, sfPorts)
+
+    // Assert
+    const readChecks = sut.filter(c => c.label.includes('read access'))
+    const datasetChecks = sut.filter(c => c.label.includes('dataset'))
+    expect(readChecks.length).toBe(1)
+    expect(readChecks[0].label).toBe('src: Account read access')
+    expect(datasetChecks.length).toBe(1)
+    expect(datasetChecks[0].label).toBe("ana: dataset 'DS_Account' ready")
   })
 })
