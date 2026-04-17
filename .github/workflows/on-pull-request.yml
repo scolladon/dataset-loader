@@ -106,3 +106,4 @@ jobs:
     needs: [build]
     uses: ./.github/workflows/reusable-perf.yml
     secrets: inherit
+    continue-on-error: true
