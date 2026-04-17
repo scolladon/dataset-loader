@@ -125,8 +125,11 @@ describe('FanInStream', () => {
     expect(lines.sort()).toEqual(['"a","org1"', '"b","org2"'])
   })
 
-  it('given slow downstream, when producer writes many chunks, then backpressure holds in-flight count bounded', async () => {
-    // Arrange — downstream that intentionally delays its write callback
+  it('given slow downstream, when producer writes many chunks, then backpressure holds in-flight count strictly bounded', async () => {
+    // Arrange — downstream whose write() returns synchronously but only after
+    // inspecting the in-flight counter. Because slot.write passes the callback
+    // through, a new slot write cannot start until cb() returns on the
+    // previous one, which makes maxInFlight strictly 1. No timers, no races.
     let inFlight = 0
     let maxInFlight = 0
     const downstream = new Writable({
@@ -135,10 +138,12 @@ describe('FanInStream', () => {
       write(_chunk, _enc, cb) {
         inFlight++
         if (inFlight > maxInFlight) maxInFlight = inFlight
-        setTimeout(() => {
+        // Defer cb to the next microtask so "in flight" is observable across
+        // async boundaries, but keep the test deterministic.
+        queueMicrotask(() => {
           inFlight--
           cb()
-        }, 2)
+        })
       },
     })
     const sut = new FanInStream(downstream, 1)
@@ -149,10 +154,8 @@ describe('FanInStream', () => {
     await pipeline(Readable.from(batches), slot)
     await finished(downstream)
 
-    // Assert — the delayed callback creates backpressure; we never have more
-    // than a tiny number of concurrent in-flight writes (strict bound = 1 given
-    // highWaterMark:1, allow slack of 2 for timer race).
-    expect(maxInFlight).toBeLessThanOrEqual(2)
+    // Assert — callback-gated backpressure serialises writes strictly
+    expect(maxInFlight).toBe(1)
   })
 
   it('given N slots, when all close in sequence, then downstream ends exactly once', async () => {

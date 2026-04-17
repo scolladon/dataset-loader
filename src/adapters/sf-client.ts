@@ -102,12 +102,35 @@ export class SalesforceClient implements SalesforcePort {
   }
 
   private assertSameOrigin(url: string): void {
+    if (!url) {
+      throw new Error('Refusing to follow empty nextRecordsUrl')
+    }
+    // Protocol-relative URLs (//host/path) resolve to an off-origin host even
+    // though they start with '/' — reject them explicitly.
+    if (url.startsWith('//')) {
+      throw new Error(
+        `Refusing to follow protocol-relative nextRecordsUrl: ${url}`
+      )
+    }
     if (url.startsWith('/')) return
-    if (
-      this.connection.instanceUrl &&
-      url.startsWith(this.connection.instanceUrl)
-    )
-      return
+    const base = this.connection.instanceUrl
+    if (!base) {
+      throw new Error(
+        `Refusing to follow absolute nextRecordsUrl without instanceUrl: ${url}`
+      )
+    }
+    let targetOrigin: string
+    let baseOrigin: string
+    try {
+      targetOrigin = new URL(url).origin
+      baseOrigin = new URL(base).origin
+    } catch {
+      throw new Error(`Refusing to follow malformed nextRecordsUrl: ${url}`)
+    }
+    // URL.origin normalises host (lowercase, punycode, default ports) and
+    // ignores userinfo, so this blocks subdomain suffix, userinfo, and
+    // uppercase/IDN bypass attempts that a naive startsWith misses.
+    if (targetOrigin === baseOrigin) return
     throw new Error(
       `Refusing to follow nextRecordsUrl outside of instanceUrl: ${url}`
     )

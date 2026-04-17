@@ -180,19 +180,33 @@ const elfEntrySchema = baseEntrySchema
   .strict()
 
 // Deny-list for user-supplied WHERE clause: block statement separators, comment
-// markers, and control characters. Defense-in-depth against SOQL payloads even
-// though the config is considered a trusted input.
+// markers, control characters (incl. DEL and Unicode line/paragraph
+// separators), and unbalanced parentheses (which otherwise let a payload break
+// out of the `(${where})` wrapping). Defense-in-depth against SOQL payloads
+// even though the config is considered a trusted input.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally blocks ASCII control chars
-const FORBIDDEN_WHERE_CHARS = /[;`\\\x00-\x1f]/
+const FORBIDDEN_WHERE_CHARS = /[;`\\\x00-\x1f\x7f\u2028\u2029]/
 const FORBIDDEN_WHERE_SEQUENCES = /\/\*|\*\/|--/
+function parensAreBalanced(v: string): boolean {
+  let depth = 0
+  for (const ch of v) {
+    if (ch === '(') depth++
+    else if (ch === ')' && --depth < 0) return false
+  }
+  return depth === 0
+}
 const whereClause = z
   .string()
   .refine(v => !FORBIDDEN_WHERE_CHARS.test(v), {
     message:
-      'where clause contains forbidden characters (; ` \\ or control chars)',
+      'where clause contains forbidden characters (; ` \\, control chars, or Unicode separators)',
   })
   .refine(v => !FORBIDDEN_WHERE_SEQUENCES.test(v), {
     message: 'where clause contains forbidden comment markers (/*, */, --)',
+  })
+  .refine(parensAreBalanced, {
+    message:
+      'where clause has unbalanced parentheses — would break out of the AND-wrapping and broaden the filter',
   })
 
 const sobjectEntrySchema = baseEntrySchema
@@ -466,5 +480,6 @@ export function entryLabel(entry: ConfigEntry): string {
   if (isElfEntry(entry)) return `elf:${entry.eventLog}`
   if (isSObjectEntry(entry)) return `sobject:${entry.sObject}`
   if (isCsvEntry(entry)) return `csv:${entry.csvFile}`
+  /* v8 ignore next -- Zod schema guarantees one of the three discriminators so this is unreachable */
   throw new Error(`Unknown entry shape`)
 }

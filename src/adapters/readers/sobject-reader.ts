@@ -33,16 +33,19 @@ function buildFieldAccessor(field: string): FieldAccessor {
   }
 }
 
+// Excel and Google Sheets evaluate leading = + - @ as formulas even inside
+// double-quoted CSV cells. Prefix a TAB (OWASP-recommended) so the cell renders
+// as text. Also include CR, which triggers cell-split evaluation.
+const FORMULA_PREFIX = /^[=+\-@\t\r]/
 function quoteCsvField(value: string): string {
-  // Mirror csv-stringify {quoted: true, quoted_empty: true}: always wrap
-  // in double quotes, double any embedded quote. Quoting is unconditional so
-  // leading formula characters (= + - @) are not triggered by spreadsheet tools.
-  return `"${value.replaceAll('"', '""')}"`
+  const escaped = value.includes('"') ? value.replaceAll('"', '""') : value
+  const guarded = FORMULA_PREFIX.test(escaped) ? `\t${escaped}` : escaped
+  return `"${guarded}"`
 }
 
 function formatFieldValue(value: unknown): string {
   if (value === null || value === undefined) return '""'
-  return quoteCsvField(String(value))
+  return quoteCsvField(typeof value === 'string' ? value : String(value))
 }
 
 class SObjectHeader {

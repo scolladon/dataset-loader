@@ -306,7 +306,13 @@ describe('ConfigLoader', () => {
       ['sql line comment', "Industry = 'Tech' -- comment"],
       ['backtick', 'Industry = `Tech`'],
       ['backslash', 'Industry = "Tech\\"'],
-      ['control char', 'Industry = \u0000'],
+      ['null byte', 'Industry = \u0000'],
+      ['DEL (0x7F)', 'Industry = \u007f'],
+      ['Unicode line separator', 'Industry =\u2028 OR 1=1'],
+      ['Unicode paragraph separator', 'Industry =\u2029 OR 1=1'],
+      ['paren escape + OR broadening', '1=1) OR (1=1'],
+      ['trailing extra close paren', "Industry = 'Tech')"],
+      ['unclosed open paren', "(Industry = 'Tech'"],
     ])('given sobject entry with forbidden %s in where, when parsing, then rejects', async (_name, badWhere) => {
       // Arrange — defense in depth on the user-supplied WHERE clause
       const config = {

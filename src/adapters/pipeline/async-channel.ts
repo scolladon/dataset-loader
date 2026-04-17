@@ -75,6 +75,14 @@ export class AsyncChannel<T> {
       this.channelError = new Error('AsyncChannel: consumer cancelled')
       for (const p of this.waitingProducers) p.reject(this.channelError)
       this.waitingProducers.length = 0
+      // Resolve any pending waiter with done:true and clear it — so a racing
+      // producer's push() goes through the channelError branch (and rejects)
+      // instead of resolving a waiter that nobody is reading.
+      if (this.waiter) {
+        const { resolve } = this.waiter
+        this.waiter = undefined
+        resolve({ value: undefined, done: true } as IteratorResult<T>)
+      }
     }
     return {
       next: (): Promise<IteratorResult<T>> => {

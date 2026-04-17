@@ -392,22 +392,27 @@ export class DatasetWriter implements Writer {
   }
 
   private normalizeMetadata(metadataJson: string): string {
-    let meta: DatasetMetadata
     try {
-      meta = JSON.parse(metadataJson) as DatasetMetadata
+      const parsed: unknown = JSON.parse(metadataJson)
+      if (parsed === null || typeof parsed !== 'object') {
+        throw new Error('metadata root must be an object')
+      }
+      const meta = parsed as DatasetMetadata
+      if (meta.objects !== undefined && !Array.isArray(meta.objects)) {
+        throw new Error('metadata.objects must be an array')
+      }
+      const objects = meta.objects?.map(obj => ({
+        ...obj,
+        numberOfLinesToIgnore: 0,
+      }))
+      return JSON.stringify({ ...meta, objects })
     } catch (err: unknown) {
+      /* v8 ignore next -- JSON.parse and our own guards always throw Error */
       const message = err instanceof Error ? err.message : String(err)
       throw new Error(
         `Failed to parse metadata for dataset '${this.datasetName}': ${message}`
       )
     }
-    return JSON.stringify({
-      ...meta,
-      objects: meta.objects?.map(obj => ({
-        ...obj,
-        numberOfLinesToIgnore: 0,
-      })),
-    })
   }
 
   private async queryExistingMetadata(): Promise<string | null> {

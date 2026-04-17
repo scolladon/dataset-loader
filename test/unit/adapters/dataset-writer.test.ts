@@ -69,6 +69,21 @@ describe('GzipChunkingWritable', () => {
     expect(createGzipOptions[0]).toEqual(expect.objectContaining({ level: 3 }))
   })
 
+  it('given empty batch written, when stream ends, then does not upload any part', async () => {
+    // Arrange — kills the `if (batch.length > 0)` fast-path guard
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act — push an empty batch (edge case for the fast path)
+    sut.write([])
+    sut.end()
+    await finished(sut)
+
+    // Assert — nothing to upload
+    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sut.partCount).toBe(0)
+  })
+
   it('given lines written, when stream ends, then uploads one gzipped base64 part', async () => {
     // Arrange
     const sfPort = makeSfPort()
@@ -595,6 +610,29 @@ describe('DatasetWriter', () => {
       .MetadataJson as string
     const decoded = JSON.parse(Buffer.from(metaB64, 'base64').toString('utf-8'))
     expect(decoded.objects[0].numberOfLinesToIgnore).toBe(0)
+  })
+
+  it.each([
+    ['malformed JSON', 'not json'],
+    ['non-object root', '"just a string"'],
+    ['non-array objects field', '{"objects": "not-an-array"}'],
+  ])('given %s in existing metadata, when init called, then rejects with dataset name in the error', async (_name, badMeta) => {
+    // Arrange — kills partial try/catch mutations in normalizeMetadata
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(badMeta),
+    })
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+
+    // Act & Assert
+    await expect(sut.init()).rejects.toThrow(
+      /Failed to parse metadata for dataset/
+    )
+    await expect(sut.init()).rejects.toThrow(dsKey.name)
   })
 
   it('given no existing metadata, when init called, then throws SkipDatasetError', async () => {

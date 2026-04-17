@@ -98,7 +98,17 @@ describe('SalesforceClient', () => {
       expect(requestSpy).toHaveBeenCalled()
     })
 
-    it('given an off-origin nextRecordsUrl, when querying more, then throws without making a request', async () => {
+    it.each([
+      ['off-origin', 'https://attacker.example.com/steal-token'],
+      [
+        'suffix bypass (host as prefix)',
+        'https://my-org.my.salesforce.com.attacker.com/x',
+      ],
+      ['userinfo bypass', 'https://my-org.my.salesforce.com@attacker.com/x'],
+      ['protocol-relative', '//attacker.example.com/steal-token'],
+      ['empty string', ''],
+      ['malformed URL', 'https://['],
+    ])('given %s nextRecordsUrl, when querying more, then throws without making a request', (_name, badUrl) => {
       // Arrange — defend against malicious server redirecting next page to an attacker host
       const client = new SalesforceClient(
         mockConnection({
@@ -109,9 +119,44 @@ describe('SalesforceClient', () => {
       )
 
       // Act & Assert — validation throws synchronously before the request is made
+      expect(() => client.queryMore(badUrl)).toThrow(/Refusing|empty/)
+      expect(requestSpy).not.toHaveBeenCalled()
+    })
+
+    it('given uppercased-host nextRecordsUrl matching instanceUrl origin, when querying more, then allows the request', async () => {
+      // Arrange — URL.origin normalises the host to lowercase, so this is safe to follow
+      const client = new SalesforceClient(
+        mockConnection({
+          request: requestSpy,
+          instanceUrl: 'https://my-org.my.salesforce.com',
+        }) as never,
+        { retryBaseDelayMs: 0 }
+      )
+      requestSpy.mockResolvedValue({ totalSize: 0, done: true, records: [] })
+
+      // Act
+      await client.queryMore(
+        'https://MY-ORG.MY.SALESFORCE.COM/services/data/v62.0/query/01gxx-2000'
+      )
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalled()
+    })
+
+    it('given absolute nextRecordsUrl with no instanceUrl configured, when querying more, then throws', () => {
+      // Arrange — defense in depth: if the client is built without an instanceUrl we cannot verify origin
+      const client = new SalesforceClient(
+        mockConnection({
+          request: requestSpy,
+          instanceUrl: undefined,
+        }) as never,
+        { retryBaseDelayMs: 0 }
+      )
+
+      // Act & Assert
       expect(() =>
-        client.queryMore('https://attacker.example.com/steal-token')
-      ).toThrow(/instanceUrl|Refusing/)
+        client.queryMore('https://my-org.my.salesforce.com/services/...')
+      ).toThrow(/without instanceUrl/)
       expect(requestSpy).not.toHaveBeenCalled()
     })
   })
@@ -280,6 +325,42 @@ describe('SalesforceClient', () => {
 
       // Assert
       expect(refreshAuth).not.toHaveBeenCalled()
+    })
+
+    it('given undefined accessToken, when getBlobStream, then sends empty Bearer header and relies on 401 retry path', async () => {
+      // Arrange — kills the `accessToken ?? ''` fallback mutation
+      const csvContent = 'body'
+      const fetchSpy = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(csvContent))
+            controller.close()
+          },
+        }),
+      })
+      vi.stubGlobal('fetch', fetchSpy)
+      const connection = mockConnection({
+        instanceUrl: 'https://test.salesforce.com',
+        accessToken: undefined,
+        refreshAuth: vi.fn(),
+        request: vi.fn(),
+      })
+      const sfClient = new SalesforceClient(connection as never, {
+        retryBaseDelayMs: 0,
+      })
+
+      // Act
+      await sfClient.getBlobStream('/path')
+
+      // Assert — empty Bearer, not "Bearer undefined"
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://test.salesforce.com/path',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer ' }),
+        })
+      )
     })
 
     it('given non-ok response, when getBlobStream, then thrown error has statusCode', async () => {

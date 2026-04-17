@@ -1,5 +1,11 @@
+// Excel and Google Sheets evaluate leading = + - @ as formulas even inside
+// double-quoted CSV cells. Prefix a TAB (OWASP-recommended) so the cell renders
+// as text.
+const FORMULA_PREFIX = /^[=+\-@\t\r]/
 function csvQuote(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`
+  const escaped = value.includes('"') ? value.replaceAll('"', '""') : value
+  const guarded = FORMULA_PREFIX.test(escaped) ? `\t${escaped}` : escaped
+  return `"${guarded}"`
 }
 
 export function buildAugmentSuffix(columns: Record<string, string>): string {
