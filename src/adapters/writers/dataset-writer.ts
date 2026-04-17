@@ -81,13 +81,15 @@ export class GzipChunkingWritable extends Writable {
       return
     }
     this.listener?.onRowsWritten(batch.length)
-    // Fast path: if the whole batch fits in the current part, concat once and
-    // hand a single chunk to zlib — avoids N gz.write calls and N byteLength
-    // passes for the common case. Falls through to the per-line path when the
-    // batch would span a 10 MB part boundary so rotation stays line-precise.
+    // Fast path: if the whole batch fits in the current part, encode to a
+    // Buffer once and hand that single chunk to zlib. Using Buffer (not a
+    // string) avoids both (a) the extra Buffer.byteLength UTF-8 scan and
+    // (b) zlib's internal string→Buffer conversion on the hot path. Falls
+    // through to the per-line path when the batch would span a 10 MB part
+    // boundary so rotation stays line-precise.
     if (batch.length > 0) {
-      const whole = batch.join('\n') + '\n'
-      const wholeBytes = Buffer.byteLength(whole)
+      const whole = Buffer.from(batch.join('\n') + '\n', 'utf8')
+      const wholeBytes = whole.length
       const projected =
         this.chunk.compressedSize + this.chunk.pendingBytes + wholeBytes
       if (base64Length(projected) < this.partMaxBytes) {
