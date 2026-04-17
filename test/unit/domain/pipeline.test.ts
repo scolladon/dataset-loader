@@ -1769,6 +1769,47 @@ describe('executePipeline (streaming)', () => {
       expect.stringContaining("Entry 'e2' failed:")
     )
   })
+
+  it('given pipeline stream error, when executing, then ticks failed so progress bar advances', async () => {
+    // Arrange — stream-level error must tick so the progress bar reaches 100%
+    const tick = vi.fn()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick,
+        trackGroup: vi.fn(() => createMockGroupTracker()),
+        stop: vi.fn(),
+      })),
+    }
+    const fetcher = mockFetcher(async () =>
+      createFetchResult(
+        ['"a"\n'],
+        Watermark.fromString('2024-01-02T00:00:00.000Z')
+      )
+    )
+    const { Writable } = await import('node:stream')
+    const errorWritable = new Writable({
+      objectMode: true,
+      write(_chunk, _enc, cb) {
+        cb(new Error('sink exploded'))
+      },
+    })
+    const writer = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const entry = createEntry({ fetcher, label: 'elf:Login', index: 7 })
+
+    // Act
+    await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => writer) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — tick was called with a 'failed' detail for the failed entry
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('failed'))
+    expect(tick).toHaveBeenCalledWith(expect.stringContaining('elf:Login'))
+  })
 })
 
 describe('groupByReader', () => {

@@ -125,6 +125,57 @@ describe('FanInStream', () => {
     expect(lines.sort()).toEqual(['"a","org1"', '"b","org2"'])
   })
 
+  it('given slow downstream, when producer writes many chunks, then backpressure holds in-flight count bounded', async () => {
+    // Arrange — downstream that intentionally delays its write callback
+    let inFlight = 0
+    let maxInFlight = 0
+    const downstream = new Writable({
+      objectMode: true,
+      highWaterMark: 1,
+      write(_chunk, _enc, cb) {
+        inFlight++
+        if (inFlight > maxInFlight) maxInFlight = inFlight
+        setTimeout(() => {
+          inFlight--
+          cb()
+        }, 2)
+      },
+    })
+    const sut = new FanInStream(downstream, 1)
+    const slot = sut.createSlot()
+
+    // Act — pump 30 batches through the slot
+    const batches = Array.from({ length: 30 }, (_, i) => [`row-${i}`])
+    await pipeline(Readable.from(batches), slot)
+    await finished(downstream)
+
+    // Assert — the delayed callback creates backpressure; we never have more
+    // than a tiny number of concurrent in-flight writes (strict bound = 1 given
+    // highWaterMark:1, allow slack of 2 for timer race).
+    expect(maxInFlight).toBeLessThanOrEqual(2)
+  })
+
+  it('given N slots, when all close in sequence, then downstream ends exactly once', async () => {
+    // Arrange
+    let endCount = 0
+    const downstream = new PassThrough({ objectMode: true })
+    downstream.on('end', () => endCount++)
+    const sut = new FanInStream(downstream, 4)
+    downstream.resume() // keep flowing
+
+    // Act
+    await Promise.all(
+      [0, 1, 2, 3].map(i =>
+        pipeline(Readable.from([[`s${i}`]]), sut.createSlot())
+      )
+    )
+    await finished(downstream)
+
+    // Assert
+    expect(endCount).toBe(1)
+    expect(downstream.readableEnded).toBe(true)
+  })
+
   it('given slot with chained transforms, when data flows through, then transforms applied in order', async () => {
     // Arrange
     const { writable: downstream, lines } = collectWritable()

@@ -294,6 +294,7 @@ function pipelineWithEntryTracking(
       input.logger.warn(
         `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
       )
+      phase.tick(`  [${entry.index}] ${entry.label} — failed`)
       slot.entryResults.push({ status: 'failed' })
     })
 }

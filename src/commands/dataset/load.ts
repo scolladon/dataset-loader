@@ -356,7 +356,12 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     return {
       create(dataset, operation, listener, headerProvider) {
         if (dataset.org) {
-          const sfPort = sfPorts.get(dataset.org)!
+          const sfPort = sfPorts.get(dataset.org)
+          if (!sfPort) {
+            throw new Error(
+              `No authenticated connection for target org '${dataset.org}'`
+            )
+          }
           return new DatasetWriterFactory(sfPort).create(
             dataset,
             operation,
