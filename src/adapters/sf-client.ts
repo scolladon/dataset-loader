@@ -172,6 +172,11 @@ export class SalesforceClient implements SalesforcePort {
 
   private fetchStream(path: string): Promise<Response> {
     const token = this.connection.accessToken ?? ''
+    // Accept-Encoding: gzip is explicit here only for parity with the
+    // request() call sites. Node's undici-based fetch already adds it by
+    // default and auto-decompresses the body before handing it to us, so
+    // this is not a wire-level change and Readable.fromWeb(res.body) receives
+    // plain bytes regardless.
     return fetch(`${this.connection.instanceUrl}${path}`, {
       headers: {
         Authorization: `Bearer ${token}`,
