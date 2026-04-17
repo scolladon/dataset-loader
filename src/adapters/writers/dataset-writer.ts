@@ -396,7 +396,11 @@ export class DatasetWriter implements Writer {
   private normalizeMetadata(metadataJson: string): string {
     try {
       const parsed: unknown = JSON.parse(metadataJson)
-      if (parsed === null || typeof parsed !== 'object') {
+      if (
+        parsed === null ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed)
+      ) {
         throw new Error('metadata root must be an object')
       }
       const meta = parsed as DatasetMetadata

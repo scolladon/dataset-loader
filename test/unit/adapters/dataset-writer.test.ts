@@ -615,7 +615,9 @@ describe('DatasetWriter', () => {
   it.each([
     ['malformed JSON', 'not json'],
     ['non-object root', '"just a string"'],
+    ['array root', '[]'],
     ['non-array objects field', '{"objects": "not-an-array"}'],
+    ['null objects field', '{"objects": null}'],
   ])('given %s in existing metadata, when init called, then rejects with dataset name in the error', async (_name, badMeta) => {
     // Arrange — kills partial try/catch mutations in normalizeMetadata
     const sfPort = makeSfPort({
