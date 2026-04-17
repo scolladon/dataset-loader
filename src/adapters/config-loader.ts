@@ -475,11 +475,12 @@ export async function resolveConfig(
   }))
 }
 
+/* v8 ignore start -- the throw and the csv=false branch are unreachable: Zod rejects any entry not matching one of the three discriminators */
 export function entryLabel(entry: ConfigEntry): string {
   if (entry.name) return entry.name
   if (isElfEntry(entry)) return `elf:${entry.eventLog}`
   if (isSObjectEntry(entry)) return `sobject:${entry.sObject}`
   if (isCsvEntry(entry)) return `csv:${entry.csvFile}`
-  /* v8 ignore next -- Zod schema guarantees one of the three discriminators so this is unreachable */
   throw new Error(`Unknown entry shape`)
 }
+/* v8 ignore stop */
