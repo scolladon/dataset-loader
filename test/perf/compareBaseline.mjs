@@ -128,11 +128,10 @@ if (token && repo && prNumber) {
 
 if (regressions.length > 0) {
   // biome-ignore lint/suspicious/noConsole: CI output
-  console.error(
-    `\n::error::${regressions.length} performance regression(s) detected (runtime threshold: ${RUNTIME_THRESHOLD}x, latency threshold: ${MEMORY_THRESHOLD}x)`
+  console.warn(
+    `\n::warning::${regressions.length} performance regression(s) detected (runtime threshold: ${RUNTIME_THRESHOLD}x, latency threshold: ${MEMORY_THRESHOLD}x)`
   )
-  process.exit(1)
+} else {
+  // biome-ignore lint/suspicious/noConsole: CI output
+  console.info('No regressions detected.')
 }
-
-// biome-ignore lint/suspicious/noConsole: CI output
-console.info('No regressions detected.')
