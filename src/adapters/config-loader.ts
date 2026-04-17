@@ -183,13 +183,35 @@ const elfEntrySchema = baseEntrySchema
 // markers, control characters (incl. DEL and Unicode line/paragraph
 // separators), and unbalanced parentheses (which otherwise let a payload break
 // out of the `(${where})` wrapping). Defense-in-depth against SOQL payloads
-// even though the config is considered a trusted input.
+// even though the config is considered a trusted input. Backslash is allowed
+// because SOQL uses `\'` to escape a single quote inside a string literal;
+// parensAreBalanced handles that escape correctly.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally blocks ASCII control chars
-const FORBIDDEN_WHERE_CHARS = /[;`\\\x00-\x1f\x7f\u2028\u2029]/
+const FORBIDDEN_WHERE_CHARS = /[;`\x00-\x1f\x7f\u2028\u2029]/
 const FORBIDDEN_WHERE_SEQUENCES = /\/\*|\*\/|--/
+// Balance parens OUTSIDE single-quoted SOQL string literals. `'foo)bar'` is
+// legitimate and must not trip the guard; only structural parens (outside any
+// quoted string) are counted. SOQL escapes a literal quote inside a string as
+// `\'`, so a backslash toggles an escape-next-char flag instead of closing the
+// string. Double-single-quote escaping (`''`) is not used by SOQL.
 function parensAreBalanced(v: string): boolean {
   let depth = 0
+  let inString = false
+  let escaped = false
   for (const ch of v) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (ch === "'") {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
     if (ch === '(') depth++
     else if (ch === ')' && --depth < 0) return false
   }

@@ -305,7 +305,6 @@ describe('ConfigLoader', () => {
       ['block comment closer', "Industry = 'Tech' */"],
       ['sql line comment', "Industry = 'Tech' -- comment"],
       ['backtick', 'Industry = `Tech`'],
-      ['backslash', 'Industry = "Tech\\"'],
       ['null byte', 'Industry = \u0000'],
       ['DEL (0x7F)', 'Industry = \u007f'],
       ['Unicode line separator', 'Industry =\u2028 OR 1=1'],
@@ -331,6 +330,38 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).rejects.toThrow(/where/i)
+    })
+
+    it.each([
+      ['unmatched close paren in string', "Name = 'foo)bar'"],
+      ['unmatched open paren in string', "Name LIKE '(partial'"],
+      [
+        'balanced structural parens around string parens',
+        "(Description = 'a(b)c')",
+      ],
+      ['escaped quote inside string', "Name = 'don\\'t'"],
+    ])('given sobject entry with %s in where, when parsing, then accepts (string-aware balance)', async (_name, goodWhere) => {
+      // Arrange — legitimate SOQL whose inside-string parens must not trip
+      // the balance check.
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'src',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sObject: 'Account',
+            fields: ['Id'],
+            where: goodWhere,
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries).toHaveLength(1)
     })
 
     it('given entry with multiple discriminator fields, when loading, then throws ambiguity error', async () => {
