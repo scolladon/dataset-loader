@@ -299,6 +299,34 @@ describe('ConfigLoader', () => {
       }
     })
 
+    it.each([
+      ['semicolon', "Industry = 'Tech'; DROP TABLE Foo"],
+      ['block comment opener', "Industry = 'Tech' /* comment"],
+      ['block comment closer', "Industry = 'Tech' */"],
+      ['sql line comment', "Industry = 'Tech' -- comment"],
+      ['backtick', 'Industry = `Tech`'],
+      ['backslash', 'Industry = "Tech\\"'],
+      ['control char', 'Industry = \u0000'],
+    ])('given sobject entry with forbidden %s in where, when parsing, then rejects', async (_name, badWhere) => {
+      // Arrange — defense in depth on the user-supplied WHERE clause
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'src',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sObject: 'Account',
+            fields: ['Id'],
+            where: badWhere,
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(/where/i)
+    })
+
     it('given entry with multiple discriminator fields, when loading, then throws ambiguity error', async () => {
       // Arrange
       const config = {

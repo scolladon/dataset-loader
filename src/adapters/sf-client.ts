@@ -87,6 +87,7 @@ export class SalesforceClient implements SalesforcePort {
   }
 
   queryMore<T>(nextRecordsUrl: string): Promise<QueryResult<T>> {
+    this.assertSameOrigin(nextRecordsUrl)
     return this.limiter(() =>
       withRetry(
         () =>
@@ -97,6 +98,18 @@ export class SalesforceClient implements SalesforcePort {
           }),
         this.baseDelay
       )
+    )
+  }
+
+  private assertSameOrigin(url: string): void {
+    if (url.startsWith('/')) return
+    if (
+      this.connection.instanceUrl &&
+      url.startsWith(this.connection.instanceUrl)
+    )
+      return
+    throw new Error(
+      `Refusing to follow nextRecordsUrl outside of instanceUrl: ${url}`
     )
   }
 
@@ -135,8 +148,12 @@ export class SalesforceClient implements SalesforcePort {
   }
 
   private fetchStream(path: string): Promise<Response> {
+    const token = this.connection.accessToken ?? ''
     return fetch(`${this.connection.instanceUrl}${path}`, {
-      headers: { Authorization: `Bearer ${this.connection.accessToken}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Accept-Encoding': 'gzip',
+      },
     })
   }
 

@@ -179,14 +179,31 @@ const elfEntrySchema = baseEntrySchema
   })
   .strict()
 
+// Deny-list for user-supplied WHERE clause: block statement separators, comment
+// markers, and control characters. Defense-in-depth against SOQL payloads even
+// though the config is considered a trusted input.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally blocks ASCII control chars
+const FORBIDDEN_WHERE_CHARS = /[;`\\\x00-\x1f]/
+const FORBIDDEN_WHERE_SEQUENCES = /\/\*|\*\/|--/
+const whereClause = z
+  .string()
+  .refine(v => !FORBIDDEN_WHERE_CHARS.test(v), {
+    message:
+      'where clause contains forbidden characters (; ` \\ or control chars)',
+  })
+  .refine(v => !FORBIDDEN_WHERE_SEQUENCES.test(v), {
+    message: 'where clause contains forbidden comment markers (/*, */, --)',
+  })
+
 const sobjectEntrySchema = baseEntrySchema
   .extend({
     sObject: sfIdentifier,
     fields: z.array(soqlRelationshipPath).min(1),
     dateField: sfIdentifier.default('LastModifiedDate'),
-    // Trust boundary: where clause is user-supplied SOQL interpolated directly into queries.
-    // The config file is a trusted input — do not construct it from untrusted sources.
-    where: z.string().optional(),
+    // Trust boundary: where clause is user-supplied SOQL interpolated directly
+    // into queries. Narrowed via whereClause to reject statement separators
+    // and comment markers; config file is still a trusted input.
+    where: whereClause.optional(),
     limit: z.number().int().positive().optional(),
   })
   .strict()
@@ -220,7 +237,7 @@ const csvEntrySchema = z
 const DISCRIMINATOR_FIELDS = ['eventLog', 'sObject', 'csvFile'] as const
 
 const entrySchema = z
-  .any()
+  .unknown()
   .superRefine((val, ctx) => {
     if (typeof val !== 'object' || val === null || Array.isArray(val)) {
       ctx.addIssue({

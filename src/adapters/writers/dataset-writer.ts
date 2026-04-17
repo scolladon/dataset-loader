@@ -81,6 +81,23 @@ export class GzipChunkingWritable extends Writable {
       return
     }
     this.listener?.onRowsWritten(batch.length)
+    // Fast path: if the whole batch fits in the current part, concat once and
+    // hand a single chunk to zlib — avoids N gz.write calls and N byteLength
+    // passes for the common case. Falls through to the per-line path when the
+    // batch would span a 10 MB part boundary so rotation stays line-precise.
+    if (batch.length > 0) {
+      const whole = batch.join('\n') + '\n'
+      const wholeBytes = Buffer.byteLength(whole)
+      const projected =
+        this.chunk.compressedSize + this.chunk.pendingBytes + wholeBytes
+      if (base64Length(projected) < this.partMaxBytes) {
+        this.chunk.gz.write(whole)
+        this.chunk.pendingBytes += wholeBytes
+        callback()
+        return
+      }
+    }
+    // Slow path: batch straddles a 10 MB part boundary — walk line-by-line.
     this.writeBatch(batch, 0, callback)
   }
 
@@ -96,12 +113,14 @@ export class GzipChunkingWritable extends Writable {
         return
       }
       const line = batch[i++]
-      const lineBytes = Buffer.byteLength(line + '\n')
+      const data = line + '\n'
+      const lineBytes = Buffer.byteLength(data)
       if (this.wouldExceed(lineBytes)) {
         this.rotateIfNeeded(line, lineBytes, batch, i, callback)
         return
       }
-      this.writeLineToGz(line)
+      this.chunk.gz.write(data)
+      this.chunk.pendingBytes += lineBytes
     }
     callback()
   }
@@ -121,16 +140,17 @@ export class GzipChunkingWritable extends Writable {
       }
       this.chunk.pendingBytes = 0
       if (!this.wouldExceed(lineBytes)) {
-        this.writeLineToGz(line)
+        this.writeLineToGz(line, lineBytes)
         this.writeBatch(batch, i, callback)
         return
       }
-      this.finishAndRotate(line, batch, i, callback)
+      this.finishAndRotate(line, lineBytes, batch, i, callback)
     })
   }
 
   private finishAndRotate(
     line: string,
+    lineBytes: number,
     batch: string[],
     i: number,
     callback: (error?: Error | null) => void
@@ -153,16 +173,15 @@ export class GzipChunkingWritable extends Writable {
           await Promise.race([...this.pendingUploads])
         }
         this.chunk = this.createChunkState()
-        this.writeLineToGz(line)
+        this.writeLineToGz(line, lineBytes)
         this.writeBatch(batch, i, callback)
       })
       .catch((err: Error) => callback(err))
   }
 
-  private writeLineToGz(line: string): void {
-    const data = line + '\n'
-    this.chunk.gz.write(data)
-    this.chunk.pendingBytes += Buffer.byteLength(data)
+  private writeLineToGz(line: string, lineBytes: number): void {
+    this.chunk.gz.write(line + '\n')
+    this.chunk.pendingBytes += lineBytes
   }
 
   override _final(callback: (error?: Error | null) => void): void {
@@ -373,7 +392,15 @@ export class DatasetWriter implements Writer {
   }
 
   private normalizeMetadata(metadataJson: string): string {
-    const meta: DatasetMetadata = JSON.parse(metadataJson)
+    let meta: DatasetMetadata
+    try {
+      meta = JSON.parse(metadataJson) as DatasetMetadata
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(
+        `Failed to parse metadata for dataset '${this.datasetName}': ${message}`
+      )
+    }
     return JSON.stringify({
       ...meta,
       objects: meta.objects?.map(obj => ({

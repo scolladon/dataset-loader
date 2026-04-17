@@ -80,6 +80,40 @@ describe('SalesforceClient', () => {
       })
       expect(result).toEqual(expected)
     })
+
+    it('given an absolute URL matching instanceUrl, when querying more, then allows the request', async () => {
+      // Arrange
+      const instanceUrl = 'https://my-org.my.salesforce.com'
+      const absoluteUrl = `${instanceUrl}/services/data/v62.0/query/01gxx-2000`
+      const client = new SalesforceClient(
+        mockConnection({ request: requestSpy, instanceUrl }) as never,
+        { retryBaseDelayMs: 0 }
+      )
+      requestSpy.mockResolvedValue({ totalSize: 0, done: true, records: [] })
+
+      // Act
+      await client.queryMore(absoluteUrl)
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalled()
+    })
+
+    it('given an off-origin nextRecordsUrl, when querying more, then throws without making a request', async () => {
+      // Arrange — defend against malicious server redirecting next page to an attacker host
+      const client = new SalesforceClient(
+        mockConnection({
+          request: requestSpy,
+          instanceUrl: 'https://my-org.my.salesforce.com',
+        }) as never,
+        { retryBaseDelayMs: 0 }
+      )
+
+      // Act & Assert — validation throws synchronously before the request is made
+      expect(() =>
+        client.queryMore('https://attacker.example.com/steal-token')
+      ).toThrow(/instanceUrl|Refusing/)
+      expect(requestSpy).not.toHaveBeenCalled()
+    })
   })
 
   describe('getBlob', () => {
@@ -146,7 +180,12 @@ describe('SalesforceClient', () => {
       expect(Buffer.concat(chunks).toString()).toBe(csvContent)
       expect(fetchSpy).toHaveBeenCalledWith(
         'https://test.salesforce.com/services/data/v62.0/sobjects/EventLogFile/0AT1/LogFile',
-        { headers: { Authorization: 'Bearer token123' } }
+        {
+          headers: {
+            Authorization: 'Bearer token123',
+            'Accept-Encoding': 'gzip',
+          },
+        }
       )
     })
 
