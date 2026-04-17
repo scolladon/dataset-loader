@@ -33,10 +33,12 @@ function buildFieldAccessor(field: string): FieldAccessor {
   }
 }
 
-// Excel and Google Sheets evaluate leading = + - @ as formulas even inside
-// double-quoted CSV cells. Prefix a TAB (OWASP-recommended) so the cell renders
-// as text. Also include CR, which triggers cell-split evaluation.
-const FORMULA_PREFIX = /^[=+\-@\t\r]/
+// Excel and Google Sheets evaluate leading = + - @ | as formulas (or DDE
+// payloads) even inside double-quoted CSV cells. Prefix a TAB
+// (OWASP-recommended) so the cell renders as text. CR splits cells, and `|`
+// covers legacy DDE (e.g. `cmd|'/c calc'!A0`) that still fires on old Excel
+// configurations.
+const FORMULA_PREFIX = /^[=+\-@|\t\r]/
 function quoteCsvField(value: string): string {
   const escaped = value.includes('"') ? value.replaceAll('"', '""') : value
   const guarded = FORMULA_PREFIX.test(escaped) ? `\t${escaped}` : escaped

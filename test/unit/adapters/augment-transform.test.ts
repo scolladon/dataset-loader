@@ -42,6 +42,7 @@ describe('buildAugmentSuffix', () => {
     ['+', '+evil'],
     ['-', '-evil'],
     ['@', '@evil'],
+    ['|', "|cmd'/c calc'!A0"],
     ['\\t', '\tevil'],
     ['\\r', '\revil'],
   ])('given value starting with formula character %s, when building suffix, then prefixes TAB to defuse formula evaluation', (_label, payload) => {

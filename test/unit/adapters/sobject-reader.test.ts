@@ -733,6 +733,7 @@ describe('SObjectReader', () => {
     ['plus formula', '+SUM(A1:A10)'],
     ['minus formula', '-2+3'],
     ['at formula', '@SUM(1,2)'],
+    ['leading pipe', "|cmd'/c calc'!A0"],
     ['tab-prefixed', '\texisting tab'],
     ['cr-prefixed', '\rcarriage'],
   ])('given field value starting with %s, when fetching, then prefixes with TAB to defuse spreadsheet formula evaluation', async (_name, payload) => {
