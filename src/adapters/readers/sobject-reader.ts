@@ -7,6 +7,7 @@ import {
   SF_IDENTIFIER_PATTERN,
   SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../../ports/types.js'
+import { csvQuote } from '../pipeline/csv-quote.js'
 
 interface SObjectReaderConfig {
   readonly sobject: string
@@ -33,21 +34,9 @@ function buildFieldAccessor(field: string): FieldAccessor {
   }
 }
 
-// Excel and Google Sheets evaluate leading = + - @ | as formulas (or DDE
-// payloads) even inside double-quoted CSV cells. Prefix a TAB
-// (OWASP-recommended) so the cell renders as text. CR splits cells, and `|`
-// covers legacy DDE (e.g. `cmd|'/c calc'!A0`) that still fires on old Excel
-// configurations.
-const FORMULA_PREFIX = /^[=+\-@|\t\r]/
-function quoteCsvField(value: string): string {
-  const escaped = value.includes('"') ? value.replaceAll('"', '""') : value
-  const guarded = FORMULA_PREFIX.test(escaped) ? `\t${escaped}` : escaped
-  return `"${guarded}"`
-}
-
 function formatFieldValue(value: unknown): string {
   if (value === null || value === undefined) return '""'
-  return quoteCsvField(typeof value === 'string' ? value : String(value))
+  return csvQuote(typeof value === 'string' ? value : String(value))
 }
 
 class SObjectHeader {
