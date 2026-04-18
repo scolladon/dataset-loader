@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.2.1](https://github.com/scolladon/dataset-loader/compare/v1.2.0...v1.2.1) (2026-04-18)
+
+
+### Bug Fixes
+
+* performance, security and correctness issues ([#24](https://github.com/scolladon/dataset-loader/issues/24)) ([132432e](https://github.com/scolladon/dataset-loader/commit/132432e23f4014709136d9df2082c7dc1f74394c))
+
 ## [1.2.0](https://github.com/scolladon/dataset-loader/compare/v1.1.0...v1.2.0) (2026-04-17)
 
 ### Features
