@@ -212,13 +212,13 @@ Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{s
 </details>
 
 <!-- commands -->
-- [`sf dataset load`](#sf-dataset-load)
+* [`sf dataset load`](#sf-dataset-load)
 
 ## `sf dataset load`
 
 Load Event Log Files and SObject data into CRM Analytics datasets
 
-```text
+```
 USAGE
   $ sf dataset load [--json] [--flags-dir <value>] [-c <value>] [-s <value>] [--audit] [--dry-run] [--entry
     <value>]

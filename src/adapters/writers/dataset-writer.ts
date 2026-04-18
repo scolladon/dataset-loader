@@ -90,9 +90,7 @@ export class GzipChunkingWritable extends Writable {
     if (batch.length > 0) {
       const whole = Buffer.from(batch.join('\n') + '\n', 'utf8')
       const wholeBytes = whole.length
-      const projected =
-        this.chunk.compressedSize + this.chunk.pendingBytes + wholeBytes
-      if (base64Length(projected) < this.partMaxBytes) {
+      if (!this.exceedsPartLimit(wholeBytes)) {
         this.chunk.gz.write(whole)
         this.chunk.pendingBytes += wholeBytes
         callback()
@@ -227,10 +225,21 @@ export class GzipChunkingWritable extends Writable {
     return state
   }
 
-  private wouldExceed(additionalBytes: number): boolean {
+  // Pessimistic projection: `compressed + pending + additional` is the
+  // worst-case size assuming zlib produced zero compression. Monotonic in the
+  // input bytes, so if this doesn't exceed partMaxBytes (after base64) the
+  // actual emitted part can't either.
+  private exceedsPartLimit(additionalBytes: number): boolean {
     const estimatedSize =
       this.chunk.compressedSize + this.chunk.pendingBytes + additionalBytes
-    return this.hasData && base64Length(estimatedSize) >= this.partMaxBytes
+    return base64Length(estimatedSize) >= this.partMaxBytes
+  }
+
+  // Slow-path predicate: same projection, plus a guard that says "never rotate
+  // an empty part" — otherwise an oversized first line would spin forever
+  // rotating through empty parts.
+  private wouldExceed(additionalBytes: number): boolean {
+    return this.hasData && this.exceedsPartLimit(additionalBytes)
   }
 
   private uploadPart(compressed: Buffer): Promise<void> {
