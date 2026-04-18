@@ -18,17 +18,17 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The
 
 ## Scenario
 
-**8 entries**, 3 source orgs (`xrmru`, `alm-prod`, `alm-dev`), 1 target CRM Analytics org (`alm-devops`).
+**8 entries**, 3 source orgs (`alm-xrmru`, `alm-prod`, `alm-dev`), 1 target CRM Analytics org (`alm-devops`).
 
 **Reader bundles** (grouped by ReaderKey + watermark):
 
 | Bundle                         | Source   | Type                        | Watermark              | Fan-out                                                        |
 |--------------------------------|----------|-----------------------------|------------------------|----------------------------------------------------------------|
-| pageviews-xrmru                | xrmru    | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
+| pageviews-xrmru                | alm-xrmru | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
 | pageviews-prod                 | alm-prod | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
 | pageviews-prod-all + prod-file | alm-prod | ELF LightningPageView Daily | none                   | fan-out → AllLightningPageView.csv + ProdLightningPageView.csv |
-| pageviews-xrmru-all            | xrmru    | ELF LightningPageView Daily | none                   | solo → AllLightningPageView.csv                                |
-| users-xrmru + xrmru-file       | xrmru    | SObject User                | none                   | fan-out → Test_User + XrmruUser.csv                            |
+| pageviews-xrmru-all            | alm-xrmru | ELF LightningPageView Daily | none                   | solo → AllLightningPageView.csv                                |
+| users-xrmru + xrmru-file       | alm-xrmru | SObject User                | none                   | fan-out → Test_User + XrmruUser.csv                            |
 | users-dev                      | alm-dev  | SObject User                | none                   | solo → Test_User                                               |
 
 **Bottleneck bundle**: `alm-prod ELF LightningPageView Daily wm=(today−7d)` → 7 days of incremental data. At 2026-03-27 the fixed 2026-03-15 baseline covered ~12 days / 1.84M lines / ~42 parts; at a 7-day window that is roughly 1.1M lines / ~25 parts, which keeps the fast path exercised without inflating runtime.
