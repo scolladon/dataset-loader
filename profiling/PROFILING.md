@@ -7,11 +7,10 @@
 profiling/
   PROFILING.md              this file
   profiling.config.json     baseline config for reproducible runs
-  profiling.state.json      baseline state (watermarks as of 2026-03-15)
-  reset.sh                  reset script — run between every profiling run
+  prepare.sh                build a fresh state file + clear output CSVs — run before every profiling run
 ```
 
-CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand).
+CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The live state file `.dataset-load.state.json` at the repo root is generated on demand by `prepare.sh` and is git-ignored.
 
 ---
 
@@ -21,16 +20,16 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand).
 
 **Reader bundles** (grouped by ReaderKey + watermark):
 
-| Bundle                         | Source   | Type                        | Watermark  | Fan-out                                                        |
-|--------------------------------|----------|-----------------------------|------------|----------------------------------------------------------------|
-| pageviews-xrmru                | xrmru    | ELF LightningPageView Daily | 2026-03-15 | solo → Test_LightningPageView                                  |
-| pageviews-prod                 | alm-prod | ELF LightningPageView Daily | 2026-03-15 | solo → Test_LightningPageView                                  |
-| pageviews-prod-all + prod-file | alm-prod | ELF LightningPageView Daily | none       | fan-out → AllLightningPageView.csv + ProdLightningPageView.csv |
-| pageviews-xrmru-all            | xrmru    | ELF LightningPageView Daily | none       | solo → AllLightningPageView.csv                                |
-| users-xrmru + xrmru-file       | xrmru    | SObject User                | none       | fan-out → Test_User + XrmruUser.csv                            |
-| users-dev                      | alm-dev  | SObject User                | none       | solo → Test_User                                               |
+| Bundle                         | Source   | Type                        | Watermark              | Fan-out                                                        |
+|--------------------------------|----------|-----------------------------|------------------------|----------------------------------------------------------------|
+| pageviews-xrmru                | xrmru    | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
+| pageviews-prod                 | alm-prod | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
+| pageviews-prod-all + prod-file | alm-prod | ELF LightningPageView Daily | none                   | fan-out → AllLightningPageView.csv + ProdLightningPageView.csv |
+| pageviews-xrmru-all            | xrmru    | ELF LightningPageView Daily | none                   | solo → AllLightningPageView.csv                                |
+| users-xrmru + xrmru-file       | xrmru    | SObject User                | none                   | fan-out → Test_User + XrmruUser.csv                            |
+| users-dev                      | alm-dev  | SObject User                | none                   | solo → Test_User                                               |
 
-**Bottleneck bundle**: `alm-prod ELF LightningPageView Daily wm=2026-03-15` → ~11 days of incremental data, **1.84M lines**, ~40 gzip parts uploaded.
+**Bottleneck bundle**: `alm-prod ELF LightningPageView Daily wm=(today−7d)` → 7 days of incremental data. At 2026-03-27 the fixed 2026-03-15 baseline covered ~12 days / 1.84M lines / ~42 parts; at a 7-day window that is roughly 1.1M lines / ~25 parts, which keeps the fast path exercised without inflating runtime.
 
 ---
 
@@ -48,29 +47,32 @@ The config copy is only needed if `dataset-load.config.json` has been modified s
 
 ---
 
-## Between-run reset
+## Pre-run preparation
 
-**Always run this between profiling runs** — otherwise the state watermarks advance and subsequent runs fetch less data, making results incomparable.
+**Always run this before every profiling run** — otherwise the watermarks advance (or are missing) and subsequent runs fetch a different window, making results incomparable.
 
 ```bash
-bash profiling/reset.sh
+bash profiling/prepare.sh           # 7-day window (default)
+bash profiling/prepare.sh 14        # custom window, e.g. 14 days
 ```
 
 This:
 
-1. Restores `.dataset-load.state.json` from `profiling/state.json`
-2. Removes generated CSV output files: `AllLightningPageView.csv`, `ProdLightningPageView.csv`, `XrmruUser.csv`
+1. Computes `watermark = (today − N days) at 00:00 UTC` and writes `.dataset-load.state.json` with that watermark for `pageviews-xrmru` and `pageviews-prod`. All other entries run in their default bootstrap mode.
+2. Removes generated CSV output files: `AllLightningPageView.csv`, `ProdLightningPageView.csv`, `XrmruUser.csv`.
+
+Because the watermark is recomputed every time, the scenario is self-refreshing: profiling the same branch on 2026-04-18 and on 2026-05-18 both pull the same 7-day window, just anchored to the day the run starts.
 
 ---
 
 ## Run commands
 
-### Wall-clock baseline (3 runs, reset between each)
+### Wall-clock baseline (3 runs, prepare between each)
 
 ```bash
-bash profiling/reset.sh && time sf dataset load
-bash profiling/reset.sh && time sf dataset load
-bash profiling/reset.sh && time sf dataset load
+bash profiling/prepare.sh && time sf dataset load
+bash profiling/prepare.sh && time sf dataset load
+bash profiling/prepare.sh && time sf dataset load
 ```
 
 Record real time from each. If variance > 20%, network noise is high — take 5 runs and drop the outlier.
@@ -78,7 +80,7 @@ Record real time from each. If variance > 20%, network noise is high — take 5 
 ### CPU profile
 
 ```bash
-bash profiling/reset.sh
+bash profiling/prepare.sh
 mkdir -p profiles
 NODE_OPTIONS="--cpu-prof --cpu-prof-dir=./profiles --cpu-prof-interval=100" sf dataset load
 ```
@@ -95,7 +97,7 @@ Focus on:
 ### Heap profile
 
 ```bash
-bash profiling/reset.sh
+bash profiling/prepare.sh
 mkdir -p profiles
 NODE_OPTIONS="--heap-prof --heap-prof-dir=./profiles" sf dataset load
 ```
