@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD013 MD033 -- long table rows and intentional <details> blocks for collapsible sections -->
+<!-- markdownlint-disable MD013 MD033 MD040 -- long table rows, intentional <details> blocks, and oclif-generated command-usage fences without language tags -->
 # Dataset Loader
 
 [![Performance](https://img.shields.io/badge/Performance-Dashboard-58a6ff)](https://scolladon.github.io/dataset-loader/dev/bench/runtime/)
