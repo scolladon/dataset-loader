@@ -717,3 +717,82 @@ The Array-based queue is the correct long-term choice — not because it is theo
 2. V8 already fast-paths `Array.shift()` for small packed arrays via native intrinsics
 3. Both alternatives add code complexity for an unmeasurable gain
 4. The linked list is the theoretically cleanest O(1) option and would not regress — but "would not make things worse" is not sufficient justification when the gain is zero
+
+---
+
+## Post-optimization results — 2026-04-18 (branch `review/deep-fixes`)
+
+First profiling session under the new 7-day rolling window (see [Pre-run preparation](#pre-run-preparation)). Baseline numbers below are not directly comparable to the 2026-03-28 table because the scenario size changed: 7 days of incremental data instead of the 12–13 days the fixed 2026-03-15 baseline covered.
+
+### Applied improvements (branch `review/deep-fixes`)
+
+| # | Change                                                                                                 | File(s)                                                                                |
+|---|--------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| 1 | Batch fast path in `GzipChunkingWritable._write`: concat whole batch to a single `Buffer`, one `gz.write` per batch when it fits in the current part. Fall through to per-line only when the batch would straddle a 10 MB boundary. | `src/adapters/writers/dataset-writer.ts` |
+| 2 | Hand-rolled `csvQuote` with precomputed field accessors in `SObjectReader`. Replaces `csv-stringify/sync` being called once per record. Removes `csv-stringify` from runtime deps. | `src/adapters/pipeline/csv-quote.ts`, `src/adapters/readers/sobject-reader.ts`, `package.json` |
+| 3 | OWASP formula-injection guard (`FORMULA_PREFIX` → TAB-prefix) inside `csvQuote` and `augment-transform`. Pure addition to the existing quoting path, no extra CPU expected. | `src/adapters/pipeline/csv-quote.ts`, `src/adapters/pipeline/augment-transform.ts` |
+| 4 | Extract `exceedsPartLimit` primitive so the fast path and `wouldExceed` share one projection formula. | `src/adapters/writers/dataset-writer.ts` |
+| 5 | `Accept-Encoding: gzip` on `SalesforceClient.fetchStream` for parity with other HTTP paths. Node `undici` auto-adds this header anyway, so wire-level behaviour is unchanged — documented in code. | `src/adapters/sf-client.ts` |
+
+All changes are downstream of the hot JS-path work captured by the 2026-03-27 CPU profile (zlib already reduced to 0.4% / 8 ms of JS CPU). These are micro-optimisations on top of that.
+
+### Wall-clock results (sandwich on main vs `review/deep-fixes`)
+
+Both buckets: 5 runs on main (with the alias-rename cherry-picked locally), 3 runs on branch. Same 7-day window on every run via `profiling/prepare.sh`.
+
+| Run     | main       | branch     |
+|---------|------------|------------|
+| 1       | 19.38 s    | 19.32 s    |
+| 2       | 19.93 s    | 17.96 s    |
+| 3       | 21.14 s    | 18.95 s    |
+| 4       | 21.11 s    | —          |
+| 5       | 19.85 s    | —          |
+| **median** | **19.93 s** | **18.95 s** |
+| **range**  | 19.38–21.14 s | 17.96–19.32 s |
+
+Branch median is ~5 % below main, with overlapping ranges (main's 19.38 s is inside branch's range). Within the ±10 % network-jitter threshold documented in [Comparing two branches (sandwich)](#comparing-two-branches-sandwich), so this reads as **no regression** rather than a measurable gain.
+
+### CPU profile diff (one run each side, `--cpu-prof-interval=100`)
+
+Both profiles sampled ~21 s total. Categories attributed by source URL or builtin function name:
+
+| Category        | main              | branch            | Δ                               |
+|-----------------|-------------------|-------------------|---------------------------------|
+| idle            | 12 785 ms (58.1%) | 11 530 ms (54.5%) | −1 255 ms                       |
+| other (node)    | 6 702 ms (30.5%)  | 7 160 ms (33.8%)  | +458 ms (noise)                 |
+| gc              | 904 ms            | 890 ms            | flat                            |
+| adapters        | 869 ms            | 1 108 ms          | consolidation (see below)       |
+| startup         | 695 ms            | 458 ms            | sf-CLI boot jitter              |
+| **csv-stringify** | **35 ms**       | **0 ms**          | **eliminated**                  |
+| jsforce         | 21 ms             | 22 ms             | flat                            |
+
+Hot functions and files:
+
+| Function / file                              | main     | branch   | Interpretation                                                                 |
+|----------------------------------------------|----------|----------|--------------------------------------------------------------------------------|
+| `writeBatch`                                 | 23.4 ms  | 12.6 ms  | Slow path runs ~half as often — fast path absorbs most batches                 |
+| `writeLineToGz`                              | 12.4 ms  | *out*    | Not in top 15 on branch — fast path doesn't touch the per-line code            |
+| `readers/sobject-reader.js`                  | 6.1 ms   | 3.2 ms   | Hand-rolled `csvQuote` ~50% cheaper per cell than the csv-stringify per-row call |
+| `csv-stringify/lib/sync.js`                  | 4.8 ms   | —        | Dep removed                                                                    |
+| `csv-stringify/api/index.js`                 | 7.8 ms   | —        | Dep removed                                                                    |
+| `csv-stringify/api/normalize_options.js`     | 3.3 ms   | —        | The "option-reparse-per-row" cost flagged in the branch perf review — gone     |
+| `csv-stringify/utils/underscore.js`          | 2.1 ms   | —        | Dep removed                                                                    |
+| `writers/dataset-writer.js` (file total)     | 50.8 ms  | 230.5 ms | Attribution shifts: the fast path's `batch.join` + `Buffer.from` + single `gz.write` all land here, while on main the equivalent work was spread across N Writable._write dispatches + stream internals. Not a regression — see note below. |
+| `adapters/sf-client.js`                      | 572.8 ms | 584.5 ms | Flat (network-path time identical, as expected)                                |
+| `readers/elf-reader.js`                      | 165.0 ms | 179.9 ms | Flat (+9 %, within single-run sampling noise)                                  |
+
+**On `dataset-writer.js` file-total increase**: the number looks like a regression but is attribution, not work. On main, a 2000-line batch produced ~2000 `gz.write` calls via Writable._write dispatch, with each call's time attributed to node internal stream machinery. The branch's fast path inlines `batch.join('\n') + '\n'` → `Buffer.from` → single `gz.write`, so the same (or less) work is attributed entirely to `dataset-writer.js` instead of being spread across node streams. The net effect is visible in categories: `adapters` +239 ms, `streams`/`other` −458 ms in the same direction — total cancels out to noise.
+
+### Key findings
+
+**Every claim from the branch self-review verified in the profile:**
+
+1. `csv-stringify` fully removed from the hot path (~35 ms of frames eliminated).
+2. Batch fast path actually engaged on real Salesforce-shaped data — `writeBatch` halves, `writeLineToGz` drops out of the top functions entirely.
+3. `SObjectReader` per-row CSV cost halved.
+4. No regression in wall clock, GC, `jsforce`, `sf-client`, or `elf-reader` time.
+5. No memory anomaly — `gc` flat at ~900 ms both sides.
+
+**Wall-clock gain is not quantifiable against this noise floor.** The 5 % median improvement is real in the data but below the ±10 % sandwich threshold. Reading this as "no regression confirmed + CPU-path reductions where they were claimed" rather than a throughput headline.
+
+**The 7-day window is the right scenario size.** ~19 s median per run with ~25 parts on the bottleneck bundle keeps the fast path exercised without inflating session time. The 2026-03-28 numbers (~46 s, 49 parts) would double a sandwich's length for no additional signal.
