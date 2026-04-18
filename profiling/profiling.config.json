@@ -5,7 +5,7 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "xrmru",
+      "sourceOrg": "alm-xrmru",
       "targetOrg": "alm-devops",
       "targetDataset": "Test_LightningPageView"
     },
@@ -31,7 +31,7 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "xrmru",
+      "sourceOrg": "alm-xrmru",
       "targetFile": "AllLightningPageView.csv"
     },
     {
@@ -47,7 +47,7 @@
       "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
-      "sourceOrg": "xrmru",
+      "sourceOrg": "alm-xrmru",
       "targetOrg": "alm-devops",
       "targetDataset": "Test_User",
       "augmentColumns": {
@@ -71,7 +71,7 @@
       "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
-      "sourceOrg": "xrmru",
+      "sourceOrg": "alm-xrmru",
       "targetFile": "XrmruUser.csv",
       "augmentColumns": {
         "ORGANIZATION_ID": "{{sourceOrg.Id}}"

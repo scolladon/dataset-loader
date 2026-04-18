@@ -255,11 +255,7 @@ async function processBundle(
   } catch (err) {
     for (const { entry, slot, sink } of sinks) {
       sink.destroy()
-      input.logger.warn(
-        `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
-      )
-      phase.tick(`  [${entry.index}] ${entry.label} — failed`)
-      slot.entryResults.push({ status: 'failed' })
+      recordEntryFailure(entry, slot, err, input.logger, phase)
     }
     return
   }
@@ -291,10 +287,7 @@ function pipelineWithEntryTracking(
       )
     })
     .catch((err: Error): void => {
-      input.logger.warn(
-        `Entry '${entry.label}' failed: ${formatErrorMessage(err)}`
-      )
-      slot.entryResults.push({ status: 'failed' })
+      recordEntryFailure(entry, slot, err, input.logger, phase)
     })
 }
 
@@ -467,6 +460,18 @@ function groupByDataset(entries: readonly PipelineEntry[]): DatasetGroup[] {
     }
   }
   return [...map.values()]
+}
+
+function recordEntryFailure(
+  entry: PipelineEntry,
+  slot: WriterSlot,
+  err: unknown,
+  logger: LoggerPort,
+  phase: Pick<PhaseProgress, 'tick'>
+): void {
+  logger.warn(`Entry '${entry.label}' failed: ${formatErrorMessage(err)}`)
+  phase.tick(`  [${entry.index}] ${entry.label} — failed`)
+  slot.entryResults.push({ status: 'failed' })
 }
 
 function resolveEntryResult(

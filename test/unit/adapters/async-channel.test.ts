@@ -146,21 +146,131 @@ describe('AsyncChannel', () => {
     expect(result).toEqual({ value: 'direct', done: false })
   })
 
-  it('given closed channel, when push called, then item is queued and delivered on next iteration', async () => {
+  it('given closed channel, when push called, then push rejects and pre-close items still drain', async () => {
     // Arrange
     const sut = new AsyncChannel<string>(4)
     await sut.push('before')
     sut.close()
 
-    // Act — push after close
-    await sut.push('after')
+    // Act & Assert — post-close push is rejected (no silent data loss)
+    await expect(sut.push('after')).rejects.toThrow(/closed/i)
 
-    // Assert — both items are drained before the done signal
+    // Assert — the pre-close item is still drained
     const result: string[] = []
     for await (const item of sut) {
       result.push(item)
     }
-    expect(result).toEqual(['before', 'after'])
+    expect(result).toEqual(['before'])
+  })
+
+  it('given close called twice, when draining, then it is idempotent', async () => {
+    // Arrange
+    const sut = new AsyncChannel<string>(4)
+    await sut.push('x')
+
+    // Act
+    sut.close()
+    sut.close()
+
+    // Assert
+    const result: string[] = []
+    for await (const item of sut) {
+      result.push(item)
+    }
+    expect(result).toEqual(['x'])
+  })
+
+  it('given fail called twice, when iterating, then the first error is preserved', async () => {
+    // Arrange
+    const sut = new AsyncChannel<string>()
+    const first = new Error('first')
+    const second = new Error('second')
+
+    // Act
+    sut.fail(first)
+    sut.fail(second)
+
+    // Assert — first error wins, subsequent fail calls are no-ops
+    await expect(
+      (async () => {
+        for await (const _ of sut) {
+          /* consume */
+        }
+      })()
+    ).rejects.toThrow('first')
+  })
+
+  it('given consumer waiting with empty queue, when iterator.return called, then a subsequent push rejects instead of silently delivering to nobody', async () => {
+    // Arrange — consumer is suspended in next() (waiter set) and then cancels
+    const sut = new AsyncChannel<number>(4)
+    const iter = sut[Symbol.asyncIterator]()
+    const pending = iter.next() // suspends, sets waiter
+
+    // Act — consumer cancels while still waiting
+    // @ts-expect-error return is optional on AsyncIterator; we call it explicitly
+    await iter.return!()
+
+    // Assert — the suspended next() resolves done, and a later push is rejected
+    await expect(pending).resolves.toEqual({ value: undefined, done: true })
+    await expect(sut.push(1)).rejects.toThrow(/cancel|closed/i)
+  })
+
+  it('given channel already closed, when consumer breaks early, then cancel is a no-op (no error overrides clean close)', async () => {
+    // Arrange — channel is closed before iteration starts
+    const sut = new AsyncChannel<string>(4)
+    await sut.push('one')
+    sut.close()
+
+    // Act — start iterating and immediately break; cancel() should early-return
+    // because closed === true, so channelError stays unset and the drain is clean
+    for await (const item of sut) {
+      expect(item).toBe('one')
+      break
+    }
+
+    // Assert — re-iteration after a clean close yields nothing (and no rejection)
+    const rest: string[] = []
+    for await (const item of sut) rest.push(item)
+    expect(rest).toEqual([])
+  })
+
+  it('given fail then close then fail sequence, when iterating, then first error is preserved', async () => {
+    // Arrange
+    const sut = new AsyncChannel<string>()
+    const first = new Error('first')
+
+    // Act — fail wins, later close/fail are no-ops
+    sut.fail(first)
+    sut.close()
+    sut.fail(new Error('second'))
+
+    // Assert
+    await expect(
+      (async () => {
+        for await (const _ of sut) {
+          /* consume */
+        }
+      })()
+    ).rejects.toThrow('first')
+  })
+
+  it('given producer stalled at capacity, when consumer breaks early, then the stalled push rejects rather than hanging', async () => {
+    // Arrange — highWater=1 forces the second push to stall
+    const sut = new AsyncChannel<number>(1)
+
+    // Act — consume one item then break early while a producer is stalled
+    const producer = Promise.all([sut.push(1), sut.push(2), sut.push(3)])
+
+    const consumer = (async () => {
+      for await (const item of sut) {
+        if (item === 1) break
+      }
+    })()
+
+    await consumer
+
+    // Assert — stalled producers are released (rejected) instead of deadlocking
+    await expect(producer).rejects.toThrow(/closed|cancel|consumer/i)
   })
 
   it('given failed channel, when push called without stalling, then push rejects immediately', async () => {

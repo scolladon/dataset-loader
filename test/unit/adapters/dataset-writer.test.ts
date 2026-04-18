@@ -1,5 +1,5 @@
 import { finished } from 'node:stream/promises'
-import { type Gzip, type ZlibOptions } from 'node:zlib'
+import { type Gzip, gunzipSync, type ZlibOptions } from 'node:zlib'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DatasetWriter,
@@ -69,6 +69,21 @@ describe('GzipChunkingWritable', () => {
     expect(createGzipOptions[0]).toEqual(expect.objectContaining({ level: 3 }))
   })
 
+  it('given empty batch written, when stream ends, then does not upload any part', async () => {
+    // Arrange — kills the `if (batch.length > 0)` fast-path guard
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act — push an empty batch (edge case for the fast path)
+    sut.write([])
+    sut.end()
+    await finished(sut)
+
+    // Assert — nothing to upload
+    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sut.partCount).toBe(0)
+  })
+
   it('given lines written, when stream ends, then uploads one gzipped base64 part', async () => {
     // Arrange
     const sfPort = makeSfPort()
@@ -92,6 +107,91 @@ describe('GzipChunkingWritable', () => {
     expect(sut.partCount).toBe(1)
   })
 
+  it('given a batch that fits inside the current part, when writing, then the fast path hands a single Buffer to zlib (one gz.write, not per-line)', async () => {
+    // Arrange — kills L95 ConditionalExpression (`if (base64Length(projected)
+    // < partMaxBytes)` → `if (false)`). With the mutation, every batch would
+    // drop to the slow path and gz.write would be called once per line.
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+    const writeSpy = vi.spyOn(capturedGzipInstances[0], 'write')
+
+    // Act
+    sut.write(['"row-a"', '"row-b"', '"row-c"'])
+    sut.end()
+    await finished(sut)
+
+    // Assert — fast path issued exactly one gz.write for the batch's bytes.
+    // The call before `end()` is the batch; counting only batch writes.
+    const batchCalls = writeSpy.mock.calls.filter((c): c is [Buffer] =>
+      Buffer.isBuffer(c[0])
+    )
+    expect(batchCalls).toHaveLength(1)
+    expect(batchCalls[0][0].toString('utf8')).toBe(
+      '"row-a"\n"row-b"\n"row-c"\n'
+    )
+  })
+
+  it('given two batches via the fast path, when stream ends, then decoded gzip round-trips every line separated by \\n', async () => {
+    // Arrange — kills L91 (batch.join('\n') + '\n' trailing newline)
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act — two fast-path batches that never straddle a part boundary
+    sut.write(['"row-1"', '"row-2"'])
+    sut.write(['"row-3"'])
+    sut.end()
+    await finished(sut)
+
+    // Assert — decode the uploaded base64 gzip and verify exact content
+    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
+    expect(postCalls).toHaveLength(1)
+    const dataFile = postCalls[0][1].DataFile as string
+    const decoded = gunzipSync(Buffer.from(dataFile, 'base64')).toString('utf8')
+    expect(decoded).toBe('"row-1"\n"row-2"\n"row-3"\n')
+  })
+
+  it('given small partMaxBytes forcing slow-path rotation, when stream ends, then decoded gzip across all parts round-trips every line with \\n', async () => {
+    // Arrange — kills L118 (slow-path line + '\n') and L185 (writeLineToGz newline).
+    // Tiny partMaxBytes (50 base64 bytes) forces each batch into the slow path
+    // and rotation across multiple parts.
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      /* uploadHighWater */ 4,
+      /* partMaxBytes */ 50
+    )
+
+    // Act
+    sut.write([
+      '"alpha-row"',
+      '"beta-row"',
+      '"gamma-row"',
+      '"delta-row"',
+      '"epsilon-row"',
+    ])
+    sut.end()
+    await finished(sut)
+
+    // Assert — concatenating every decoded part reconstructs every line in
+    // order with newline separators. Kills any mutation that drops the '\n'
+    // inside the slow-path write.
+    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
+    expect(postCalls.length).toBeGreaterThan(1)
+    const decoded = postCalls
+      .map(c =>
+        gunzipSync(Buffer.from(c[1].DataFile as string, 'base64')).toString(
+          'utf8'
+        )
+      )
+      .join('')
+    expect(decoded).toBe(
+      '"alpha-row"\n"beta-row"\n"gamma-row"\n"delta-row"\n"epsilon-row"\n'
+    )
+  })
+
   it('given data exceeding 10MB base64, when stream ends, then splits into multiple parts', async () => {
     // Arrange
     const { randomBytes } = await import('node:crypto')
@@ -107,8 +207,11 @@ describe('GzipChunkingWritable', () => {
     sut.end()
     await finished(sut)
 
-    // Assert
+    // Assert — correct number of parts AND an upper bound that kills the L144
+    // mutation (!wouldExceed → false, which would force every line into its
+    // own part and blow partCount past 1000 for 12 000 rows).
     expect(sut.partCount).toBeGreaterThanOrEqual(2)
+    expect(sut.partCount).toBeLessThan(100)
     const PART_MAX = 10 * 1024 * 1024
     for (const call of (sfPort.post as ReturnType<typeof vi.fn>).mock.calls) {
       expect((call[1].DataFile as string).length).toBeLessThanOrEqual(PART_MAX)
@@ -595,6 +698,42 @@ describe('DatasetWriter', () => {
       .MetadataJson as string
     const decoded = JSON.parse(Buffer.from(metaB64, 'base64').toString('utf-8'))
     expect(decoded.objects[0].numberOfLinesToIgnore).toBe(0)
+  })
+
+  it.each([
+    ['malformed JSON', 'not json', /Unexpected token|not valid JSON/i],
+    ['null root', 'null', /metadata root must be an object/],
+    ['non-object root', '"just a string"', /metadata root must be an object/],
+    ['array root', '[]', /metadata root must be an object/],
+    [
+      'non-array objects field',
+      '{"objects": "not-an-array"}',
+      /metadata\.objects must be an array/,
+    ],
+    [
+      'null objects field',
+      '{"objects": null}',
+      /metadata\.objects must be an array/,
+    ],
+  ])('given %s in existing metadata, when init called, then rejects with dataset name and specific inner message', async (_name, badMeta, innerMessage) => {
+    // Arrange — kills L400 (null-check), L404/L408 (error message literals),
+    // and partial try/catch mutations in normalizeMetadata
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(badMeta),
+    })
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+
+    // Act & Assert — outer wrap carries dataset name AND inner diagnostic
+    await expect(sut.init()).rejects.toThrow(
+      /Failed to parse metadata for dataset/
+    )
+    await expect(sut.init()).rejects.toThrow(dsKey.name)
+    await expect(sut.init()).rejects.toThrow(innerMessage)
   })
 
   it('given no existing metadata, when init called, then throws SkipDatasetError', async () => {

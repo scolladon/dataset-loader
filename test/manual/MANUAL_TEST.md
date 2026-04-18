@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 MD032 -- manual-test scenario with long command lines and inline lists -->
 # Manual Test Scenario
 
 ## Prerequisites

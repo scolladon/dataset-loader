@@ -299,6 +299,119 @@ describe('ConfigLoader', () => {
       }
     })
 
+    it.each([
+      // Forbidden characters — killed by L222/L224 assertions
+      [
+        'semicolon',
+        "Industry = 'Tech'; DROP TABLE Foo",
+        /forbidden characters/,
+      ],
+      ['backtick', 'Industry = `Tech`', /forbidden characters/],
+      ['null byte', 'Industry = \u0000', /forbidden characters/],
+      ['DEL (0x7F)', 'Industry = \u007f', /forbidden characters/],
+      [
+        'Unicode line separator',
+        'Industry =\u2028 OR 1=1',
+        /forbidden characters/,
+      ],
+      [
+        'Unicode paragraph separator',
+        'Industry =\u2029 OR 1=1',
+        /forbidden characters/,
+      ],
+      // Comment-marker family — killed by L226 assertion
+      [
+        'block comment opener',
+        "Industry = 'Tech' /* comment",
+        /forbidden comment markers/,
+      ],
+      [
+        'block comment closer',
+        "Industry = 'Tech' */",
+        /forbidden comment markers/,
+      ],
+      [
+        'sql line comment',
+        "Industry = 'Tech' -- comment",
+        /forbidden comment markers/,
+      ],
+      // Unbalanced parens family — killed by L229/L231 assertion
+      [
+        'paren escape + OR broadening',
+        '1=1) OR (1=1',
+        /unbalanced parentheses/,
+      ],
+      [
+        'trailing extra close paren',
+        "Industry = 'Tech')",
+        /unbalanced parentheses/,
+      ],
+      ['unclosed open paren', "(Industry = 'Tech'", /unbalanced parentheses/],
+    ])('given sobject entry with forbidden %s in where, when parsing, then rejects with the specific error message', async (_name, badWhere, expectedMessage) => {
+      // Arrange — each row asserts the precise Zod error message, which
+      // kills string-literal mutants on the refine messages (L224, L227,
+      // L231) AND the ObjectLiteral → `{}` mutants (L222, L226, L229) that
+      // would erase the message entirely.
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'src',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sObject: 'Account',
+            fields: ['Id'],
+            where: badWhere,
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act & Assert — both wrapper + specific message
+      await expect(parseConfig('config.json')).rejects.toThrow(/where/i)
+      await expect(parseConfig('config.json')).rejects.toThrow(expectedMessage)
+    })
+
+    it.each([
+      ['unmatched close paren in string', "Name = 'foo)bar'"],
+      ['unmatched open paren in string', "Name LIKE '(partial'"],
+      [
+        'balanced structural parens around string parens',
+        "(Description = 'a(b)c')",
+      ],
+      ['escaped quote inside string', "Name = 'don\\'t'"],
+      // Killer for the backslash-escape path in parensAreBalanced
+      // (L202/L203/L206/L207). The `\'` inside the string keeps the opener
+      // active so the structural `) (` are safely inside the literal. With any
+      // escape-handling mutation the string closes early and the `)` goes
+      // negative — rejected.
+      [
+        'escape prevents the string from closing early',
+        "Name = 'foo\\' bar) (baz'",
+      ],
+    ])('given sobject entry with %s in where, when parsing, then accepts (string-aware balance)', async (_name, goodWhere) => {
+      // Arrange — legitimate SOQL whose inside-string parens must not trip
+      // the balance check.
+      const config = {
+        entries: [
+          {
+            sourceOrg: 'src',
+            targetOrg: 'ana',
+            targetDataset: 'DS',
+            sObject: 'Account',
+            fields: ['Id'],
+            where: goodWhere,
+          },
+        ],
+      }
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries).toHaveLength(1)
+    })
+
     it('given entry with multiple discriminator fields, when loading, then throws ambiguity error', async () => {
       // Arrange
       const config = {

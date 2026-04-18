@@ -67,6 +67,25 @@ describe('CsvReader', () => {
       // Assert
       expect(result).toBe('')
     })
+
+    it('given file that yields zero lines, when calling header, then returns the fallback empty string', async () => {
+      // Arrange — a truly empty stream (no '\n', no bytes). The readline
+      // iterator finishes without yielding any line, exercising the L25
+      // `return ''` fallback path rather than the for-await `return line`.
+      async function* noLines(): AsyncGenerator<Buffer> {
+        // yields nothing
+      }
+      vi.mocked(createReadStream).mockReturnValue(
+        Readable.from(noLines()) as unknown as ReadStream
+      )
+      const sut = new CsvReader('./data/truly-empty.csv')
+
+      // Act
+      const result = await sut.header()
+
+      // Assert
+      expect(result).toBe('')
+    })
   })
 
   describe('fetch()', () => {

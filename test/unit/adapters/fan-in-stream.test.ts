@@ -125,6 +125,60 @@ describe('FanInStream', () => {
     expect(lines.sort()).toEqual(['"a","org1"', '"b","org2"'])
   })
 
+  it('given slow downstream, when producer writes many chunks, then backpressure holds in-flight count strictly bounded', async () => {
+    // Arrange — downstream whose write() returns synchronously but only after
+    // inspecting the in-flight counter. Because slot.write passes the callback
+    // through, a new slot write cannot start until cb() returns on the
+    // previous one, which makes maxInFlight strictly 1. No timers, no races.
+    let inFlight = 0
+    let maxInFlight = 0
+    const downstream = new Writable({
+      objectMode: true,
+      highWaterMark: 1,
+      write(_chunk, _enc, cb) {
+        inFlight++
+        if (inFlight > maxInFlight) maxInFlight = inFlight
+        // Defer cb to the next microtask so "in flight" is observable across
+        // async boundaries, but keep the test deterministic.
+        queueMicrotask(() => {
+          inFlight--
+          cb()
+        })
+      },
+    })
+    const sut = new FanInStream(downstream, 1)
+    const slot = sut.createSlot()
+
+    // Act — pump 30 batches through the slot
+    const batches = Array.from({ length: 30 }, (_, i) => [`row-${i}`])
+    await pipeline(Readable.from(batches), slot)
+    await finished(downstream)
+
+    // Assert — callback-gated backpressure serialises writes strictly
+    expect(maxInFlight).toBe(1)
+  })
+
+  it('given N slots, when all close in sequence, then downstream ends exactly once', async () => {
+    // Arrange
+    let endCount = 0
+    const downstream = new PassThrough({ objectMode: true })
+    downstream.on('end', () => endCount++)
+    const sut = new FanInStream(downstream, 4)
+    downstream.resume() // keep flowing
+
+    // Act
+    await Promise.all(
+      [0, 1, 2, 3].map(i =>
+        pipeline(Readable.from([[`s${i}`]]), sut.createSlot())
+      )
+    )
+    await finished(downstream)
+
+    // Assert
+    expect(endCount).toBe(1)
+    expect(downstream.readableEnded).toBe(true)
+  })
+
   it('given slot with chained transforms, when data flows through, then transforms applied in order', async () => {
     // Arrange
     const { writable: downstream, lines } = collectWritable()

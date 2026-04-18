@@ -5,6 +5,10 @@
  * Producers call push() and await backpressure when the queue is full.
  * The consumer iterates with `for await (const item of channel)`.
  * Call close() to signal end-of-stream, or fail(err) to propagate an error.
+ *
+ * close() and fail() are idempotent. push() after close() or fail() rejects.
+ * If the consumer breaks early out of `for await`, the iterator's return()
+ * closes the channel and releases any stalled producers.
  */
 export class AsyncChannel<T> {
   private readonly queue: T[] = []
@@ -23,6 +27,9 @@ export class AsyncChannel<T> {
 
   push(item: T): Promise<void> {
     if (this.channelError) return Promise.reject(this.channelError)
+    if (this.closed) {
+      return Promise.reject(new Error('AsyncChannel: push on closed channel'))
+    }
     if (this.waiter) {
       const { resolve } = this.waiter
       this.waiter = undefined
@@ -39,6 +46,7 @@ export class AsyncChannel<T> {
   }
 
   close(): void {
+    if (this.closed || this.channelError) return
     this.closed = true
     for (const p of this.waitingProducers) p.resolve()
     this.waitingProducers.length = 0
@@ -50,6 +58,7 @@ export class AsyncChannel<T> {
   }
 
   fail(err: Error): void {
+    if (this.channelError || this.closed) return
     this.channelError = err
     for (const p of this.waitingProducers) p.reject(err)
     this.waitingProducers.length = 0
@@ -61,6 +70,20 @@ export class AsyncChannel<T> {
   }
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
+    const cancel = (): void => {
+      if (this.closed || this.channelError) return
+      this.channelError = new Error('AsyncChannel: consumer cancelled')
+      for (const p of this.waitingProducers) p.reject(this.channelError)
+      this.waitingProducers.length = 0
+      // Resolve any pending waiter with done:true and clear it — so a racing
+      // producer's push() goes through the channelError branch (and rejects)
+      // instead of resolving a waiter that nobody is reading.
+      if (this.waiter) {
+        const { resolve } = this.waiter
+        this.waiter = undefined
+        resolve({ value: undefined, done: true } as IteratorResult<T>)
+      }
+    }
     return {
       next: (): Promise<IteratorResult<T>> => {
         if (this.queue.length > 0) {
@@ -80,6 +103,13 @@ export class AsyncChannel<T> {
         return new Promise<IteratorResult<T>>((resolve, reject) => {
           this.waiter = { resolve, reject }
         })
+      },
+      return: (): Promise<IteratorResult<T>> => {
+        cancel()
+        return Promise.resolve({
+          value: undefined,
+          done: true,
+        } as IteratorResult<T>)
       },
     }
   }

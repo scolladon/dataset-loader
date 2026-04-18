@@ -1,4 +1,3 @@
-import { stringify } from 'csv-stringify/sync'
 import { Watermark } from '../../domain/watermark.js'
 import {
   type FetchResult,
@@ -8,6 +7,7 @@ import {
   SF_IDENTIFIER_PATTERN,
   SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../../ports/types.js'
+import { csvQuote } from '../pipeline/csv-quote.js'
 
 interface SObjectReaderConfig {
   readonly sobject: string
@@ -17,13 +17,26 @@ interface SObjectReaderConfig {
   readonly queryLimit?: number
 }
 
-function resolveField(record: Record<string, unknown>, field: string): unknown {
-  let current: unknown = record
-  for (const part of field.split('.')) {
-    if (current === null || typeof current !== 'object') return null
-    current = (current as Record<string, unknown>)[part]
+type FieldAccessor = (record: Record<string, unknown>) => unknown
+
+function buildFieldAccessor(field: string): FieldAccessor {
+  if (!field.includes('.')) {
+    return record => record[field]
   }
-  return current
+  const parts = field.split('.')
+  return record => {
+    let current: unknown = record
+    for (const part of parts) {
+      if (current === null || typeof current !== 'object') return null
+      current = (current as Record<string, unknown>)[part]
+    }
+    return current
+  }
+}
+
+function formatFieldValue(value: unknown): string {
+  if (value === null || value === undefined) return '""'
+  return csvQuote(typeof value === 'string' ? value : String(value))
 }
 
 class SObjectHeader {
@@ -37,6 +50,7 @@ export class SObjectReader implements ReaderPort {
   private readonly queryFields: string[]
   private readonly sobject: string
   private readonly fields: string[]
+  private readonly fieldAccessors: readonly FieldAccessor[]
   private readonly dateField: string
   private readonly where?: string
   private readonly queryLimit?: number
@@ -58,6 +72,7 @@ export class SObjectReader implements ReaderPort {
     }
     this.sobject = config.sobject
     this.fields = config.fields
+    this.fieldAccessors = config.fields.map(buildFieldAccessor)
     this.dateField = config.dateField
     this.where = config.where
     this.queryLimit = config.queryLimit
@@ -86,7 +101,7 @@ export class SObjectReader implements ReaderPort {
     let pagesProcessed = 0
     let lastRecord: Record<string, unknown> | undefined
 
-    const fields = this.fields
+    const accessors = this.fieldAccessors
     const dateField = this.dateField
     const sfPort = this.sfPort
 
@@ -102,12 +117,18 @@ export class SObjectReader implements ReaderPort {
             : null
 
         if (currentPage.records.length > 0) {
-          const batch = currentPage.records.map(record =>
-            stringify(
-              [fields.map(f => String(resolveField(record, f) ?? ''))],
-              { quoted: true, quoted_empty: true }
-            ).trimEnd()
-          )
+          // Hand-roll CSV quoting per page: csv-stringify/sync was invoked once
+          // per record which re-ran its option parser N times per page. This
+          // loop keeps identical output (quoted: true, quoted_empty: true).
+          const batch = new Array<string>(currentPage.records.length)
+          for (let r = 0; r < currentPage.records.length; r++) {
+            const record = currentPage.records[r]
+            const cells = new Array<string>(accessors.length)
+            for (let c = 0; c < accessors.length; c++) {
+              cells[c] = formatFieldValue(accessors[c](record))
+            }
+            batch[r] = cells.join(',')
+          }
           lastRecord = currentPage.records.at(-1)
           pagesProcessed++
           yield batch

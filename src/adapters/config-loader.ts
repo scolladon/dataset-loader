@@ -179,14 +179,67 @@ const elfEntrySchema = baseEntrySchema
   })
   .strict()
 
+// Deny-list for user-supplied WHERE clause: block statement separators, comment
+// markers, control characters (incl. DEL and Unicode line/paragraph
+// separators), and unbalanced parentheses (which otherwise let a payload break
+// out of the `(${where})` wrapping). Defense-in-depth against SOQL payloads
+// even though the config is considered a trusted input. Backslash is allowed
+// because SOQL uses `\'` to escape a single quote inside a string literal;
+// parensAreBalanced handles that escape correctly.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally blocks ASCII control chars
+const FORBIDDEN_WHERE_CHARS = /[;`\x00-\x1f\x7f\u2028\u2029]/
+const FORBIDDEN_WHERE_SEQUENCES = /\/\*|\*\/|--/
+// Balance parens OUTSIDE single-quoted SOQL string literals. `'foo)bar'` is
+// legitimate and must not trip the guard; only structural parens (outside any
+// quoted string) are counted. SOQL escapes a literal quote inside a string as
+// `\'`, so a backslash toggles an escape-next-char flag instead of closing the
+// string. Double-single-quote escaping (`''`) is not used by SOQL.
+function parensAreBalanced(v: string): boolean {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (const ch of v) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (ch === "'") {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (ch === '(') depth++
+    else if (ch === ')' && --depth < 0) return false
+  }
+  return depth === 0
+}
+const whereClause = z
+  .string()
+  .refine(v => !FORBIDDEN_WHERE_CHARS.test(v), {
+    message:
+      'where clause contains forbidden characters (; ` \\, control chars, or Unicode separators)',
+  })
+  .refine(v => !FORBIDDEN_WHERE_SEQUENCES.test(v), {
+    message: 'where clause contains forbidden comment markers (/*, */, --)',
+  })
+  .refine(parensAreBalanced, {
+    message:
+      'where clause has unbalanced parentheses — would break out of the AND-wrapping and broaden the filter',
+  })
+
 const sobjectEntrySchema = baseEntrySchema
   .extend({
     sObject: sfIdentifier,
     fields: z.array(soqlRelationshipPath).min(1),
     dateField: sfIdentifier.default('LastModifiedDate'),
-    // Trust boundary: where clause is user-supplied SOQL interpolated directly into queries.
-    // The config file is a trusted input — do not construct it from untrusted sources.
-    where: z.string().optional(),
+    // Trust boundary: where clause is user-supplied SOQL interpolated directly
+    // into queries. Narrowed via whereClause to reject statement separators
+    // and comment markers; config file is still a trusted input.
+    where: whereClause.optional(),
     limit: z.number().int().positive().optional(),
   })
   .strict()
@@ -220,7 +273,7 @@ const csvEntrySchema = z
 const DISCRIMINATOR_FIELDS = ['eventLog', 'sObject', 'csvFile'] as const
 
 const entrySchema = z
-  .any()
+  .unknown()
   .superRefine((val, ctx) => {
     if (typeof val !== 'object' || val === null || Array.isArray(val)) {
       ctx.addIssue({
@@ -444,6 +497,7 @@ export async function resolveConfig(
   }))
 }
 
+/* v8 ignore start -- the throw and the csv=false branch are unreachable: Zod rejects any entry not matching one of the three discriminators */
 export function entryLabel(entry: ConfigEntry): string {
   if (entry.name) return entry.name
   if (isElfEntry(entry)) return `elf:${entry.eventLog}`
@@ -451,3 +505,4 @@ export function entryLabel(entry: ConfigEntry): string {
   if (isCsvEntry(entry)) return `csv:${entry.csvFile}`
   throw new Error(`Unknown entry shape`)
 }
+/* v8 ignore stop */

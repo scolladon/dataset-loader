@@ -1,7 +1,7 @@
+<!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
 ## [1.2.0](https://github.com/scolladon/dataset-loader/compare/v1.1.0...v1.2.0) (2026-04-17)
-
 
 ### Features
 
@@ -9,13 +9,11 @@
 
 ## [1.1.0](https://github.com/scolladon/dataset-loader/compare/v1.0.0...v1.1.0) (2026-04-15)
 
-
 ### Features
 
 * simplify config format ([#20](https://github.com/scolladon/dataset-loader/issues/20)) ([c045462](https://github.com/scolladon/dataset-loader/commit/c045462effa1ae6bea96e0eb80144ae9015ff322))
 
 ## 1.0.0 (2026-04-01)
-
 
 ### Features
 
@@ -25,7 +23,6 @@
 * replace bare-token \$var syntax with mustache {{token}} interpolation in augmentColumns ([289b29c](https://github.com/scolladon/dataset-loader/commit/289b29ce93e77b54b2d2a9e419d0ba9b8bbab198))
 * support SOQL relationship traversal fields in sobject entries ([de4ac9c](https://github.com/scolladon/dataset-loader/commit/de4ac9c3e3bb5364a78a4a468604504fbe4571d9))
 
-
 ### Bug Fixes
 
 * correct profiling filenames in reset.sh and PROFILING.md ([4bced5f](https://github.com/scolladon/dataset-loader/commit/4bced5f0e1732b3df7eb35623e04ec032875c931))
@@ -34,7 +31,6 @@
 * include CompletedWithWarnings in metadata query ([5912b2e](https://github.com/scolladon/dataset-loader/commit/5912b2e5904e81471d9cb358309e967d45f09465))
 * propagate chunker write errors back through pipeline via forwarder ([0ac4561](https://github.com/scolladon/dataset-loader/commit/0ac4561686033625ce4e915f9acf69e7c175817f))
 * restore 100% coverage after Vitest 4 upgrade ([566178b](https://github.com/scolladon/dataset-loader/commit/566178b695de353656e2b8dd0d2ecb5dbdae0308))
-
 
 ### Performance Improvements
 

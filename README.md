@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 MD033 MD040 -- long table rows, intentional <details> blocks, and oclif-generated command-usage fences without language tags -->
 # Dataset Loader
 
 [![Performance](https://img.shields.io/badge/Performance-Dashboard-58a6ff)](https://scolladon.github.io/dataset-loader/dev/bench/runtime/)
@@ -25,11 +26,11 @@ SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesfor
 <details>
 <summary>Required Permissions</summary>
 
-| Org | Permissions |
-| --- | --- |
-| **Source org** (ELF) | `API Enabled`, `View Event Log Files` (`ViewEventLogFiles`) |
-| **Source org** (SObject) | `API Enabled` |
-| **Analytic org** | `API Enabled`, `Upload External Data to CRM Analytics` (`InsightsAppUploadUser`) |
+| Org                      | Permissions                                                                      |
+|--------------------------|----------------------------------------------------------------------------------|
+| **Source org** (ELF)     | `API Enabled`, `View Event Log Files` (`ViewEventLogFiles`)                      |
+| **Source org** (SObject) | `API Enabled`                                                                    |
+| **Analytic org**         | `API Enabled`, `Upload External Data to CRM Analytics` (`InsightsAppUploadUser`) |
 
 </details>
 
@@ -77,6 +78,7 @@ sf dataset load
 ```
 
 > **Note:**
+>
 > - **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
 > - **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
 
@@ -86,14 +88,14 @@ sf dataset load
 
 All entry types share these output fields:
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `name` | no | Optional entry identifier. Used as watermark key override and for --entry filtering |
-| `targetOrg` | no | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead |
-| `targetDataset` | no | CRM Analytics dataset API name. Required when `targetOrg` is set |
-| `targetFile` | no | Local file path to write output. Required when `targetOrg` is omitted |
-| `operation` | no | `"Append"` (default) or `"Overwrite"` |
-| `augmentColumns` | no | Extra columns to append to every row (see [Augment Columns](#augment-columns)) |
+| Field            | Required | Description                                                                         |
+|------------------|----------|-------------------------------------------------------------------------------------|
+| `name`           | no       | Optional entry identifier. Used as watermark key override and for --entry filtering |
+| `targetOrg`      | no       | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead        |
+| `targetDataset`  | no       | CRM Analytics dataset API name. Required when `targetOrg` is set                    |
+| `targetFile`     | no       | Local file path to write output. Required when `targetOrg` is omitted               |
+| `operation`      | no       | `"Append"` (default) or `"Overwrite"`                                               |
+| `augmentColumns` | no       | Extra columns to append to every row (see the Augment Columns details below)        |
 
 > **Type inference:** Entry type is inferred from shape — entries with `eventLog` are ELF, entries with `sObject` are SObject, entries with `csvFile` are CSV.
 
@@ -110,11 +112,11 @@ All entry types share these output fields:
 }
 ```
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `sourceOrg` | yes | SF CLI alias of the org containing EventLogFiles |
-| `eventLog` | yes | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
-| `interval` | yes | `"Daily"` or `"Hourly"` (Hourly requires Shield license) |
+| Field       | Required | Description                                                  |
+|-------------|----------|--------------------------------------------------------------|
+| `sourceOrg` | yes      | SF CLI alias of the org containing EventLogFiles             |
+| `eventLog`  | yes      | EventLogFile type (e.g. `Login`, `LightningPageView`, `API`) |
+| `interval`  | yes      | `"Daily"` or `"Hourly"` (Hourly requires Shield license)     |
 
 ### SObject Entry
 
@@ -130,14 +132,14 @@ All entry types share these output fields:
 }
 ```
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `sourceOrg` | yes | SF CLI alias of the source org |
-| `sObject` | yes | SObject API name (e.g. `Account`, `Opportunity`) |
-| `fields` | yes | Array of field API names to query |
-| `dateField` | no | Field used for watermarking (default: `LastModifiedDate`) |
-| `where` | no | Additional SOQL WHERE clause |
-| `limit` | no | Max number of records to fetch (appends `LIMIT n` to SOQL) |
+| Field       | Required | Description                                                |
+|-------------|----------|------------------------------------------------------------|
+| `sourceOrg` | yes      | SF CLI alias of the source org                             |
+| `sObject`   | yes      | SObject API name (e.g. `Account`, `Opportunity`)           |
+| `fields`    | yes      | Array of field API names to query                          |
+| `dateField` | no       | Field used for watermarking (default: `LastModifiedDate`)  |
+| `where`     | no       | Additional SOQL WHERE clause                               |
+| `limit`     | no       | Max number of records to fetch (appends `LIMIT n` to SOQL) |
 
 ### CSV Entry
 
@@ -150,9 +152,9 @@ All entry types share these output fields:
 }
 ```
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `csvFile` | yes | Path to the local CSV file to load |
+| Field     | Required | Description                        |
+|-----------|----------|------------------------------------|
+| `csvFile` | yes      | Path to the local CSV file to load |
 
 > **Note:** CSV entries only support static `augmentColumns` values. Dynamic `{{sourceOrg.*}}` / `{{targetOrg.*}}` expressions are not supported.
 
@@ -161,13 +163,13 @@ All entry types share these output fields:
 
 Append static or dynamic columns to every row. Values support mustache-style `{{token}}` interpolation, including mixed with static text (e.g. `"PROD-{{sourceOrg.Name}}"`):
 
-| Token | Resolves to |
-| --- | --- |
-| `{{sourceOrg.Id}}` | 18-char Organization Id of the source org |
-| `{{sourceOrg.Name}}` | Organization Name of the source org |
-| `{{targetOrg.Id}}` | 18-char Organization Id of the target CRM Analytics org |
-| `{{targetOrg.Name}}` | Organization Name of the target CRM Analytics org |
-| Any other string | Used as-is (static value) |
+| Token                | Resolves to                                             |
+|----------------------|---------------------------------------------------------|
+| `{{sourceOrg.Id}}`   | 18-char Organization Id of the source org               |
+| `{{sourceOrg.Name}}` | Organization Name of the source org                     |
+| `{{targetOrg.Id}}`   | 18-char Organization Id of the target CRM Analytics org |
+| `{{targetOrg.Name}}` | Organization Name of the target CRM Analytics org       |
+| Any other string     | Used as-is (static value)                               |
 
 Column names may contain dots (e.g. `"Org.Name"`) as CRM Analytics supports dotted dimension names.
 
@@ -177,6 +179,7 @@ Column names may contain dots (e.g. `"Org.Name"`) as CRM Analytics supports dott
 <summary>Grouping</summary>
 
 Entries targeting the same destination are merged into a single write job:
+
 - **CRM Analytics targets**: same `(targetOrg, targetDataset)` → single `InsightsExternalData` upload
 - **File targets**: same `targetFile` path → single file write
 
@@ -243,11 +246,11 @@ _See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-l
 <details>
 <summary>Exit Codes</summary>
 
-| Code | Meaning |
-| --- | --- |
-| `0` | All entries processed successfully |
-| `1` | Partial success (some entries failed, some succeeded) |
-| `2` | Fatal error (config invalid, all entries failed, or audit failure) |
+| Code | Meaning                                                            |
+|------|--------------------------------------------------------------------|
+| `0`  | All entries processed successfully                                 |
+| `1`  | Partial success (some entries failed, some succeeded)              |
+| `2`  | Fatal error (config invalid, all entries failed, or audit failure) |
 
 </details>
 

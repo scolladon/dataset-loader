@@ -273,7 +273,6 @@
     "@salesforce/core": "^8.28.1",
     "@salesforce/sf-plugins-core": "^12.2.6",
     "cli-progress": "^3.12.0",
-    "csv-stringify": "^6.7.0",
     "p-limit": "^7.3.0",
     "zod": "^4.3.6"
   },

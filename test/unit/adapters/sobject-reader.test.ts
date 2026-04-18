@@ -695,4 +695,75 @@ describe('SObjectReader', () => {
     expect(lines[0]).toContain('"001"')
     expect(lines[0]).toContain('"Acme"')
   })
+
+  it.each([
+    ['number', 42, '"42"'],
+    ['boolean', true, '"true"'],
+  ])('given %s field value, when fetching, then coerces via String() and CSV-quotes', async (_name, payload, expected) => {
+    // Arrange — kills the typeof === 'string' short-circuit branch
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [
+          {
+            Id: '001',
+            NumField: payload,
+            LastModifiedDate: '2026-03-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    })
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'NumField'],
+      dateField: 'LastModifiedDate',
+    })
+
+    // Act
+    const result = await sut.fetch()
+    const lines = await collectLines(result.lines)
+
+    // Assert
+    expect(lines[0]).toContain(expected as string)
+  })
+
+  it.each([
+    ['equals formula', '=HYPERLINK("http://evil","click")'],
+    ['plus formula', '+SUM(A1:A10)'],
+    ['minus formula', '-2+3'],
+    ['at formula', '@SUM(1,2)'],
+    ['leading pipe', "|cmd'/c calc'!A0"],
+    ['tab-prefixed', '\texisting tab'],
+    ['cr-prefixed', '\rcarriage'],
+  ])('given field value starting with %s, when fetching, then prefixes with TAB to defuse spreadsheet formula evaluation', async (_name, payload) => {
+    // Arrange
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [
+          {
+            Id: '001',
+            Name: payload,
+            LastModifiedDate: '2026-03-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    })
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'Name'],
+      dateField: 'LastModifiedDate',
+    })
+
+    // Act
+    const result = await sut.fetch()
+    const lines = await collectLines(result.lines)
+
+    // Assert — field is wrapped in quotes AND prefixed with a TAB (with
+    // any embedded " doubled per CSV escaping)
+    const expected = `"\t${payload.replaceAll('"', '""')}"`
+    expect(lines[0]).toContain(expected)
+  })
 })
