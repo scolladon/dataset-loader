@@ -7,6 +7,7 @@
 profiling/
   PROFILING.md              this file
   profiling.config.json     baseline config for reproducible runs
+  setup-plugin.sh           sf plugin link + restore package-lock — run once per machine
   rebuild.sh                npm ci + tsc + verify plugin link — run once per branch switch
   prepare.sh                build a fresh state file + clear output CSVs — run before every profiling run
 ```
@@ -41,8 +42,15 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The
 **One-time (per machine):**
 
 ```bash
-sf plugins link .
+bash profiling/setup-plugin.sh
 ```
+
+This script detects the current plugin state and:
+
+- If the plugin is installed from npm (type `user`), uninstalls it and links this checkout.
+- If it's linked to a different directory, re-links to this one.
+- If it's already linked here, exits with "Nothing to do".
+- Restores `package-lock.json` afterwards — `sf plugins link` can rewrite it via yarn-normalization differences, which would dirty the tree before a sandwich.
 
 **Every branch switch (or after any change under `src/`):**
 
