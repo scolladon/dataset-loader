@@ -7,10 +7,11 @@
 profiling/
   PROFILING.md              this file
   profiling.config.json     baseline config for reproducible runs
+  rebuild.sh                npm ci + tsc + verify plugin link — run once per branch switch
   prepare.sh                build a fresh state file + clear output CSVs — run before every profiling run
 ```
 
-CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The live state file `.dataset-load.state.json` at the repo root is generated on demand by `prepare.sh` and is git-ignored.
+CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The live state file `.dataset-load.state.json`, the active config `dataset-load.config.json`, and all `*.csv` output files at the repo root are generated on demand and git-ignored — so `git checkout` across branches never triggers a dirty-tree conflict on them.
 
 ---
 
@@ -30,6 +31,33 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The
 | users-dev                      | alm-dev  | SObject User                | none                   | solo → Test_User                                               |
 
 **Bottleneck bundle**: `alm-prod ELF LightningPageView Daily wm=(today−7d)` → 7 days of incremental data. At 2026-03-27 the fixed 2026-03-15 baseline covered ~12 days / 1.84M lines / ~42 parts; at a 7-day window that is roughly 1.1M lines / ~25 parts, which keeps the fast path exercised without inflating runtime.
+
+---
+
+## Plugin setup (per checkout / per branch switch)
+
+`sf dataset load` resolves the command from the installed plugins registry, **not** from `lib/` in this directory. To profile this checkout you must link the plugin so `sf` executes the `lib/` we just compiled.
+
+**One-time (per machine):**
+
+```bash
+sf plugins link .
+```
+
+**Every branch switch (or after any change under `src/`):**
+
+```bash
+bash profiling/rebuild.sh
+```
+
+`rebuild.sh`:
+
+1. Refuses to run if the working tree has uncommitted tracked changes — stash or commit first.
+2. Runs `npm ci` (not `npm install`). `ci` syncs `node_modules` *from* `package-lock.json` without ever mutating it, and fails loudly if `package.json` and the lockfile disagree. This catches the sandwich hazard where `npm install` rewrites the lockfile mid-session and contaminates the next branch checkout.
+3. Rebuilds `lib/` via `tsc` (incremental — near-instant on a warm build).
+4. Asserts the `dataset-loader` plugin is linked to this directory. If it's unlinked, linked elsewhere, or installed from npm, the script exits non-zero with the fix instruction.
+
+**Never** run `npm install` during a profiling session. Always `npm ci` (directly or via `rebuild.sh`).
 
 ---
 
@@ -76,6 +104,37 @@ bash profiling/prepare.sh && time sf dataset load
 ```
 
 Record real time from each. If variance > 20%, network noise is high — take 5 runs and drop the outlier.
+
+### Comparing two branches (sandwich)
+
+To measure a change against `main` while controlling for network drift during the session, run the baseline on both sides of the feature branch:
+
+```bash
+# Baseline A (main)
+git checkout main
+bash profiling/rebuild.sh
+for i in 1 2 3; do
+  bash profiling/prepare.sh && time sf dataset load
+done 2>&1 | tee /tmp/main-a.log
+
+# Under test
+git checkout <feature-branch>
+bash profiling/rebuild.sh
+for i in 1 2 3; do
+  bash profiling/prepare.sh && time sf dataset load
+done 2>&1 | tee /tmp/branch.log
+
+# Baseline B (main again — catches network drift during the session)
+git checkout main
+bash profiling/rebuild.sh
+for i in 1 2 3; do
+  bash profiling/prepare.sh && time sf dataset load
+done 2>&1 | tee /tmp/main-b.log
+```
+
+If the medians of `main-a` and `main-b` differ by > 10 %, network conditions shifted enough to mask the feature-branch delta — discard the session and re-measure, or extend to 5 runs per bucket.
+
+The `.dataset-load.state.json`, `dataset-load.config.json`, and `*.csv` files written during each run are git-ignored, so every `git checkout` succeeds without `-f` or `git stash`.
 
 ### CPU profile
 
