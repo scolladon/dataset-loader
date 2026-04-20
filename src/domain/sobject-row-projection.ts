@@ -1,5 +1,6 @@
 import { type ProjectionLayout, SkipDatasetError } from '../ports/types.js'
 import { csvQuote } from './csv-quote.js'
+import { formatSchemaMismatch } from './schema-check.js'
 
 interface SObjectProjectionInput {
   readonly datasetName: string
@@ -71,20 +72,9 @@ function rejectMismatch(
   )
   if (missing.length === 0 && extra.length === 0) return
 
-  const lines = [
-    `Schema mismatch for dataset '${input.datasetName}' (entry '${input.entryLabel}'):`,
-  ]
-  if (missing.length > 0) {
-    lines.push(
-      `  expected by dataset, missing from input: [${missing.join(', ')}]`
-    )
-  }
-  if (extra.length > 0) {
-    lines.push(
-      `  provided by input, not in dataset:       [${extra.join(', ')}]`
-    )
-  }
-  throw new SkipDatasetError(lines.join('\n'))
+  throw new SkipDatasetError(
+    formatSchemaMismatch(input.datasetName, input.entryLabel, missing, extra)
+  )
 }
 
 function buildDatasetIndex(

@@ -251,7 +251,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 ### "Order mismatch for dataset" (ELF/CSV only)
 
 - **Symptom**: `Order mismatch for dataset '<name>' (entry '<label>'): position N: dataset expects 'A', input provides 'B'`.
-- **Cause**: The source column **set** matches the dataset's, but their **order** differs. ELF and CSV rows are streamed as-is — we don't reorder them at runtime because parsing every CSV line would double the hot-path cost. CRMA interprets rows by position, so any order diff corrupts every row in exactly the way your dataflow digest reports: values shift into wrong columns. (SObject entries are safe: the loader reorders per-row at runtime.)
+- **Cause**: The source column **set** matches the dataset's, but their **order** differs. ELF and CSV rows are streamed as-is — we don't reorder them at runtime because parsing every CSV line would double the hot-path cost. CRM Analytics interprets rows by position, so any order diff corrupts every row in exactly the way your dataflow digest reports: values shift into wrong columns. (SObject entries are safe: the loader reorders per-row at runtime.)
 - **Resolution**:
   - ELF: the dataset metadata must match the current `LogFileFieldNames` order for the EventType. If Salesforce reordered the event schema in a release, recreate the dataset from a fresh initial load.
   - CSV: either reorder the source file's columns to match the dataset, or recreate the dataset from the source file.
@@ -262,7 +262,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 - **Symptom**: Audit line logs `[WARN]` rather than `[PASS]` or `[FAIL]`.
 - **Cause**: Non-blocking advisory:
   - `No prior EventLogFile for <type>/<interval>; schema check skipped` — there's no blob to compare against. A real run would load zero rows anyway (no data to check).
-  - `Schema casing differs from dataset metadata; dataset will keep its canonical casing` — source column names differ only in letter case from the dataset's; CRMA keeps the dataset's canonical casing, so this is harmless but flagged for visibility.
+  - `Schema casing differs from dataset metadata; dataset will keep its canonical casing` — source column names differ only in letter case from the dataset's; CRM Analytics keeps the dataset's canonical casing, so this is harmless but flagged for visibility.
 - **Resolution**: No action required. WARN does not set a non-zero exit code.
 
 ### "Cannot share SObject reader across sinks with divergent projections"

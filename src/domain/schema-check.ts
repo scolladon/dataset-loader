@@ -81,13 +81,15 @@ function collectOrderDiffs(
   return diffs
 }
 
-function formatSetMismatch(
-  input: SchemaCheckInput,
+// Exported so the SObject projection builder formats identical messages.
+export function formatSchemaMismatch(
+  datasetName: string,
+  entryLabel: string,
   missing: readonly string[],
   extra: readonly string[]
 ): string {
   const lines = [
-    `Schema mismatch for dataset '${input.datasetName}' (entry '${input.entryLabel}'):`,
+    `Schema mismatch for dataset '${datasetName}' (entry '${entryLabel}'):`,
   ]
   if (missing.length > 0) {
     lines.push(
@@ -100,6 +102,19 @@ function formatSetMismatch(
     )
   }
   return lines.join('\n')
+}
+
+function formatSetMismatch(
+  input: SchemaCheckInput,
+  missing: readonly string[],
+  extra: readonly string[]
+): string {
+  return formatSchemaMismatch(
+    input.datasetName,
+    input.entryLabel,
+    missing,
+    extra
+  )
 }
 
 function formatOrderMismatch(

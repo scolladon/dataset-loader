@@ -96,16 +96,20 @@ const sobjectReadAccess: AuditCheckStrategy = {
   },
 }
 
-// targetDataset values are validated against SF_IDENTIFIER_PATTERN at config parse boundary
+// Shared selector for dataset-scoped strategies — emits one check per
+// (targetOrg, targetDataset) pair, skipping entries without either.
+// targetDataset values are validated against SF_IDENTIFIER_PATTERN at config parse boundary.
+const selectByDataset: AuditCheckStrategy['select'] = e =>
+  e.targetOrg && e.targetDataset
+    ? [{ org: e.targetOrg, key: e.targetDataset }]
+    : []
+
 const datasetReady: AuditCheckStrategy = {
-  select: e =>
-    e.targetOrg && e.targetDataset
-      ? [{ org: e.targetOrg, key: e.targetDataset }]
-      : [],
+  select: selectByDataset,
   label: (org, key) => `${org}: dataset '${key}' ready`,
   evaluate: async (sfPort, key) => {
     // Fast path: verify at least one completed-status record exists. The
-    // actual metadata blob is fetched (and memoised) by schemaAlignment.
+    // actual metadata blob is fetched by schemaAlignment when it runs.
     const result: QueryResult<unknown> = await sfPort.query(
       `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${key}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
     )
@@ -116,10 +120,7 @@ const datasetReady: AuditCheckStrategy = {
 }
 
 const schemaAlignment: AuditCheckStrategy = {
-  select: e =>
-    e.targetOrg && e.targetDataset
-      ? [{ org: e.targetOrg, key: e.targetDataset }]
-      : [],
+  select: selectByDataset,
   label: (org, key) => `${org}: dataset '${key}' schema alignment`,
   evaluate: async (sfPort, key, entry, ctx) => {
     const metadata = await fetchMetadata(sfPort, key)
