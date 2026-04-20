@@ -1,28 +1,57 @@
 import {
+  type AuditOutcome,
+  formatErrorMessage,
   type LoggerPort,
   type QueryResult,
+  type ReaderKind,
   type SalesforcePort,
+  SkipDatasetError,
 } from '../ports/types.js'
+import { parseCsvHeader } from './column-name.js'
+import { checkSchemaAlignment } from './schema-check.js'
+import { buildSObjectRowProjection } from './sobject-row-projection.js'
 
 interface AuditCheck {
   readonly org: string
   readonly label: string
-  readonly execute: () => Promise<boolean>
+  readonly execute: () => Promise<AuditOutcome>
 }
 
-interface AuditEntry {
-  readonly isElf: boolean
+export interface AuditEntry {
   readonly sourceOrg: string
   readonly targetOrg?: string
-  readonly sObject?: string
   readonly targetDataset?: string
+  readonly readerKind: ReaderKind
+  readonly sObject?: string
+  readonly readerFields?: readonly string[]
+  readonly augmentColumns: Readonly<Record<string, string>>
+  readonly eventType?: string
+  readonly interval?: string
+  readonly csvFile?: string
+}
+
+interface AuditContext {
+  readonly metadataCache: Map<string, Promise<string | null>>
+  // Needed by schemaAlignment for ELF — the strategy's bound `sfPort` is the
+  // target org's connection, but `EventLogFile.LogFileFieldNames` lives in
+  // the source org. We look up the source port from this map at evaluate time.
+  readonly sfPorts: ReadonlyMap<string, SalesforcePort>
 }
 
 interface AuditCheckStrategy {
   readonly select: (entry: AuditEntry) => { org: string; key: string }[]
   readonly label: (org: string, key: string) => string
-  readonly evaluate: (sfPort: SalesforcePort, key: string) => Promise<boolean>
+  readonly evaluate: (
+    sfPort: SalesforcePort,
+    key: string,
+    entry: AuditEntry,
+    ctx: AuditContext
+  ) => Promise<AuditOutcome>
 }
+
+const pass = (): AuditOutcome => ({ kind: 'pass' })
+const fail = (message: string): AuditOutcome => ({ kind: 'fail', message })
+const warn = (message: string): AuditOutcome => ({ kind: 'warn', message })
 
 const authConnectivity: AuditCheckStrategy = {
   select: e =>
@@ -35,16 +64,17 @@ const authConnectivity: AuditCheckStrategy = {
   label: org => `${org}: auth and connectivity`,
   evaluate: async sfPort => {
     await sfPort.query('SELECT Id FROM Organization LIMIT 1')
-    return true
+    return pass()
   },
 }
 
 const elfAccess: AuditCheckStrategy = {
-  select: e => (e.isElf ? [{ org: e.sourceOrg, key: 'elf' }] : []),
+  select: e =>
+    e.readerKind === 'elf' ? [{ org: e.sourceOrg, key: 'elf' }] : [],
   label: org => `${org}: EventLogFile access (ViewEventLogFiles)`,
   evaluate: async sfPort => {
     await sfPort.query('SELECT Id FROM EventLogFile LIMIT 1')
-    return true
+    return pass()
   },
 }
 
@@ -53,7 +83,7 @@ const insightsAccess: AuditCheckStrategy = {
   label: org => `${org}: InsightsExternalData access`,
   evaluate: async sfPort => {
     await sfPort.query('SELECT Id FROM InsightsExternalData LIMIT 1')
-    return true
+    return pass()
   },
 }
 
@@ -63,7 +93,7 @@ const sobjectReadAccess: AuditCheckStrategy = {
   label: (org, key) => `${org}: ${key} read access`,
   evaluate: async (sfPort, key) => {
     await sfPort.query(`SELECT Id FROM ${key} LIMIT 1`)
-    return true
+    return pass()
   },
 }
 
@@ -74,12 +104,232 @@ const datasetReady: AuditCheckStrategy = {
       ? [{ org: e.targetOrg, key: e.targetDataset }]
       : [],
   label: (org, key) => `${org}: dataset '${key}' ready`,
-  evaluate: async (sfPort, key) => {
-    const result: QueryResult<unknown> = await sfPort.query(
-      `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${key}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
+  evaluate: async (sfPort, key, entry, ctx) => {
+    const metadata = await fetchMetadataMemoised(
+      sfPort,
+      key,
+      ctx,
+      /* v8 ignore next -- selector guarantees targetOrg is defined */
+      entry.targetOrg ?? '<unknown>'
     )
-    return result.records.length > 0
+    return metadata ? pass() : fail(`Dataset '${key}' has no prior metadata`)
   },
+}
+
+const schemaAlignment: AuditCheckStrategy = {
+  select: e =>
+    e.targetOrg && e.targetDataset
+      ? [{ org: e.targetOrg, key: e.targetDataset }]
+      : [],
+  label: (org, key) => `${org}: dataset '${key}' schema alignment`,
+  evaluate: async (sfPort, key, entry, ctx) => {
+    const metadata = await fetchMetadataMemoised(
+      sfPort,
+      key,
+      ctx,
+      /* v8 ignore next -- selector guarantees targetOrg is defined */
+      entry.targetOrg ?? '<unknown>'
+    )
+    if (!metadata) {
+      // datasetReady already FAILed; nothing to compare against
+      return pass()
+    }
+    const datasetFields = extractDatasetFields(metadata)
+    if (!datasetFields) {
+      return fail(
+        `Dataset '${key}' metadata has no objects[0].fields; cannot enforce column alignment`
+      )
+    }
+
+    const providedFields = await resolveProvidedFields(entry, ctx)
+    if (providedFields === 'warn:no-prior-elf') {
+      return warn(
+        `No prior EventLogFile for ${entry.eventType}/${entry.interval}; schema check skipped`
+      )
+    }
+    if (providedFields === 'fail:csv-missing') {
+      return fail(
+        `CSV file '${entry.csvFile}' could not be read for schema check`
+      )
+    }
+
+    return runSchemaChecks(entry, key, datasetFields, providedFields)
+  },
+}
+
+function runSchemaChecks(
+  entry: AuditEntry,
+  datasetName: string,
+  datasetFields: readonly string[],
+  providedFields: readonly string[]
+): AuditOutcome {
+  const augmentKeys = Object.keys(entry.augmentColumns)
+  const overlap = detectOverlap(providedFields, augmentKeys)
+  if (overlap.length > 0) {
+    return fail(
+      `Schema overlap for dataset '${datasetName}': augment columns also present as reader fields: [${overlap.join(', ')}]`
+    )
+  }
+
+  if (entry.readerKind === 'sobject') {
+    return runSObjectCheck(entry, datasetName, datasetFields, providedFields)
+  }
+
+  const provided = [...providedFields, ...augmentKeys]
+  // `targetDataset` is guaranteed by the schemaAlignment selector.
+  /* v8 ignore next */
+  const entryLabel = entry.targetDataset ?? datasetName
+  const result = checkSchemaAlignment({
+    datasetName,
+    entryLabel,
+    expected: datasetFields,
+    provided,
+    checkOrder: true,
+  })
+  if (!result.ok) return fail(result.reason)
+  if (result.casingDiff) {
+    return warn(
+      `Schema casing differs from dataset '${datasetName}' metadata; dataset will keep its canonical casing`
+    )
+  }
+  return pass()
+}
+
+function runSObjectCheck(
+  entry: AuditEntry,
+  datasetName: string,
+  datasetFields: readonly string[],
+  providedFields: readonly string[]
+): AuditOutcome {
+  // `targetDataset` is guaranteed by the schemaAlignment selector.
+  /* v8 ignore next */
+  const entryLabel = entry.targetDataset ?? datasetName
+  try {
+    buildSObjectRowProjection({
+      datasetName,
+      entryLabel,
+      readerFields: providedFields,
+      augmentColumns: entry.augmentColumns,
+      datasetFields,
+    })
+  } catch (err) {
+    // buildSObjectRowProjection throws only SkipDatasetError. Any other
+    // error is a plumbing bug — rethrow to let buildChecks surface it.
+    /* v8 ignore next */
+    if (!(err instanceof SkipDatasetError)) throw err
+    return fail(err.message)
+  }
+  // Casing WARN for SObject: set-only match, but raw case-sensitive sets differ
+  const exactProvided = new Set([
+    ...providedFields.map(f => f.replace(/\./g, '_')),
+    ...Object.keys(entry.augmentColumns),
+  ])
+  const missesCase = datasetFields.some(n => !exactProvided.has(n))
+  if (missesCase) {
+    return warn(
+      `Schema casing differs from dataset '${datasetName}' metadata; dataset will keep its canonical casing`
+    )
+  }
+  return pass()
+}
+
+function detectOverlap(
+  readerFields: readonly string[],
+  augmentKeys: readonly string[]
+): string[] {
+  const readerNormalized = new Set(
+    readerFields.map(f => f.replace(/\./g, '_').toLowerCase())
+  )
+  return augmentKeys.filter(k =>
+    readerNormalized.has(k.replace(/\./g, '_').toLowerCase())
+  )
+}
+
+async function resolveProvidedFields(
+  entry: AuditEntry,
+  ctx: AuditContext
+): Promise<readonly string[] | 'warn:no-prior-elf' | 'fail:csv-missing'> {
+  if (entry.readerKind === 'sobject') {
+    // readerFields is always populated for SObject entries (commands layer
+    // sets it from config.fields). Fallback is defensive.
+    /* v8 ignore next */
+    return entry.readerFields ?? []
+  }
+  if (entry.readerKind === 'elf') {
+    const sourcePort = ctx.sfPorts.get(entry.sourceOrg)
+    if (!sourcePort) return 'warn:no-prior-elf'
+    // Safe interpolation: eventType is SF_IDENTIFIER_PATTERN-constrained,
+    // interval is z.enum(['Daily','Hourly']) — both validated at config
+    // parse (config-loader.ts:175-180). Neither admits single quotes.
+    const result = await sourcePort.query<{ LogFileFieldNames: string | null }>(
+      `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${entry.eventType}' AND Interval = '${entry.interval}' ORDER BY LogDate DESC LIMIT 1`
+    )
+    const raw = result.records[0]?.LogFileFieldNames
+    if (!raw) return 'warn:no-prior-elf'
+    return parseCsvHeader(raw)
+  }
+  // CSV
+  if (!entry.csvFile) return 'fail:csv-missing'
+  try {
+    const { readFile } = await import('node:fs/promises')
+    const content = await readFile(entry.csvFile, 'utf-8')
+    const firstLine = content.split('\n', 1)[0]
+    return parseCsvHeader(firstLine)
+  } catch {
+    return 'fail:csv-missing'
+  }
+}
+
+function extractDatasetFields(metadataJson: string): readonly string[] | null {
+  try {
+    const parsed: unknown = JSON.parse(metadataJson)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+      return null
+    const objects = (parsed as { objects?: unknown }).objects
+    if (!Array.isArray(objects) || objects.length === 0) return null
+    const obj0 = objects[0] as { fields?: unknown }
+    if (!Array.isArray(obj0.fields) || obj0.fields.length === 0) return null
+    const names: string[] = []
+    for (const f of obj0.fields) {
+      const name = (f as { fullyQualifiedName?: unknown }).fullyQualifiedName
+      if (typeof name !== 'string' || name.length === 0) return null
+      names.push(name)
+    }
+    return names
+    /* v8 ignore next 3 -- JSON parse failures surface as null; defensive */
+  } catch {
+    return null
+  }
+}
+
+async function fetchMetadataMemoised(
+  sfPort: SalesforcePort,
+  datasetName: string,
+  ctx: AuditContext,
+  org: string
+): Promise<string | null> {
+  // Cache key must include the target org — two different orgs could have
+  // unrelated datasets sharing the same EdgemartAlias.
+  const key = `${org}::${datasetName}`
+  const cached = ctx.metadataCache.get(key)
+  if (cached !== undefined) return cached
+  const promise = fetchMetadata(sfPort, datasetName)
+  ctx.metadataCache.set(key, promise)
+  return promise
+}
+
+async function fetchMetadata(
+  sfPort: SalesforcePort,
+  datasetName: string
+): Promise<string | null> {
+  const result: QueryResult<{ MetadataJson: string | null }> =
+    await sfPort.query(
+      `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${datasetName}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
+    )
+  if (result.records.length === 0 || !result.records[0].MetadataJson)
+    return null
+  const blob = await sfPort.getBlob(result.records[0].MetadataJson)
+  return typeof blob === 'string' ? blob : JSON.stringify(blob)
 }
 
 const STRATEGIES: readonly AuditCheckStrategy[] = [
@@ -88,19 +338,22 @@ const STRATEGIES: readonly AuditCheckStrategy[] = [
   insightsAccess,
   sobjectReadAccess,
   datasetReady,
+  schemaAlignment,
 ]
 
 export function buildAuditChecks(
   entries: readonly AuditEntry[],
   sfPorts: ReadonlyMap<string, SalesforcePort>
 ): readonly AuditCheck[] {
-  return STRATEGIES.flatMap(s => buildChecks(entries, s, sfPorts))
+  const ctx: AuditContext = { metadataCache: new Map(), sfPorts }
+  return STRATEGIES.flatMap(s => buildChecks(entries, s, sfPorts, ctx))
 }
 
 function buildChecks(
   entries: readonly AuditEntry[],
   strategy: AuditCheckStrategy,
-  sfPorts: ReadonlyMap<string, SalesforcePort>
+  sfPorts: ReadonlyMap<string, SalesforcePort>,
+  ctx: AuditContext
 ): readonly AuditCheck[] {
   const seen = new Set<string>()
   const checks: AuditCheck[] = []
@@ -115,11 +368,11 @@ function buildChecks(
         label: strategy.label(org, key),
         execute: async () => {
           const sfPort = sfPorts.get(org)
-          if (!sfPort) return false
+          if (!sfPort) return fail(`No SF connection for org '${org}'`)
           try {
-            return await strategy.evaluate(sfPort, key)
-          } catch {
-            return false
+            return await strategy.evaluate(sfPort, key, entry, ctx)
+          } catch (e) {
+            return fail(formatErrorMessage(e))
           }
         },
       })
@@ -133,13 +386,16 @@ export async function runAudit(
   logger: LoggerPort
 ): Promise<{ readonly passed: boolean }> {
   let allPassed = true
-  const promises: Promise<{ check: AuditCheck; passed: boolean }>[] = []
+  const promises: Promise<{ check: AuditCheck; outcome: AuditOutcome }>[] = []
   for (const check of checks) {
     promises.push(
       check
         .execute()
-        .then(passed => ({ check, passed }))
-        .catch(() => ({ check, passed: false }))
+        .then(outcome => ({ check, outcome }))
+        .catch(e => ({
+          check,
+          outcome: fail(formatErrorMessage(e)) satisfies AuditOutcome,
+        }))
     )
   }
   const results = await Promise.allSettled(promises)
@@ -147,11 +403,25 @@ export async function runAudit(
   for (const result of results) {
     /* v8 ignore next -- allSettled always fulfills since each promise has .catch() */
     if (result.status !== 'fulfilled') continue
-    const { check, passed } = result.value
-    logger.info(`  [${passed ? 'PASS' : 'FAIL'}] ${check.label}`)
-    if (!passed) allPassed = false
+    const { check, outcome } = result.value
+    const label = outcomeLabel(outcome)
+    const detail = outcome.kind === 'pass' ? '' : `: ${outcomeMessage(outcome)}`
+    logger.info(`  [${label}] ${check.label}${detail}`)
+    if (outcome.kind === 'fail') allPassed = false
   }
 
   logger.info(allPassed ? 'All checks passed' : 'Some checks failed')
   return { passed: allPassed }
+}
+
+function outcomeLabel(outcome: AuditOutcome): 'PASS' | 'WARN' | 'FAIL' {
+  if (outcome.kind === 'pass') return 'PASS'
+  if (outcome.kind === 'warn') return 'WARN'
+  return 'FAIL'
+}
+
+function outcomeMessage(outcome: AuditOutcome): string {
+  /* v8 ignore next -- pass path is handled by the caller */
+  if (outcome.kind === 'pass') return ''
+  return outcome.message
 }

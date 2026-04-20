@@ -4,6 +4,7 @@ import { buildAugmentSuffix } from '../adapters/pipeline/augment-transform.js'
 import { FanInStream } from '../adapters/pipeline/fan-in-stream.js'
 import { createFanOutTransform } from '../adapters/pipeline/fan-out-transform.js'
 import {
+  type AlignmentSpec,
   type BatchMiddleware,
   type CreateWriterPort,
   type FetchResult,
@@ -15,6 +16,7 @@ import {
   type PhaseProgress,
   type ProgressListener,
   type ProgressPort,
+  type ProjectionLayout,
   type ReaderPort,
   SkipDatasetError,
   type StatePort,
@@ -23,6 +25,7 @@ import {
 } from '../ports/types.js'
 import { type DatasetKey } from './dataset-key.js'
 import { type ReaderKey } from './reader-key.js'
+import { buildSObjectRowProjection } from './sobject-row-projection.js'
 import { type Watermark } from './watermark.js'
 import { type WatermarkKey } from './watermark-key.js'
 import { type WatermarkStore } from './watermark-store.js'
@@ -36,6 +39,7 @@ export interface PipelineEntry {
   readonly operation: Operation
   readonly augmentColumns: Record<string, string>
   readonly fetcher: ReaderPort
+  readonly alignment: AlignmentSpec
   header(): Promise<string>
 }
 
@@ -43,6 +47,28 @@ export interface ReaderBundle {
   readonly readerKey: ReaderKey
   readonly watermark: Watermark | undefined
   readonly entries: readonly PipelineEntry[]
+}
+
+// Structural equality on projection layouts. Both undefined → equal;
+// mixed → not equal. augmentSlots compared order-independently by pos.
+// Exported for unit testing of the fan-out constraint.
+export function layoutsEqual(
+  a: ProjectionLayout | undefined,
+  b: ProjectionLayout | undefined
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  if (a.targetSize !== b.targetSize) return false
+  if (a.outputIndex.length !== b.outputIndex.length) return false
+  for (let i = 0; i < a.outputIndex.length; i++) {
+    if (a.outputIndex[i] !== b.outputIndex[i]) return false
+  }
+  if (a.augmentSlots.length !== b.augmentSlots.length) return false
+  const bByPos = new Map(b.augmentSlots.map(s => [s.pos, s.quoted]))
+  for (const s of a.augmentSlots) {
+    if (bByPos.get(s.pos) !== s.quoted) return false
+  }
+  return true
 }
 
 export function groupByReader(
@@ -127,6 +153,10 @@ interface GroupResult {
 interface WriterSlot {
   readonly writer: Writer
   readonly chunker: Writable
+  // Dataset metadata column order (undefined for FileWriter and for
+  // DatasetWriter without alignment). Pipeline builds per-entry layouts
+  // from this at project() time.
+  readonly datasetFields?: readonly string[]
   readonly fanIn: FanInStream
   readonly group: DatasetGroup
   readonly tracker: GroupTracker
@@ -134,6 +164,37 @@ interface WriterSlot {
 }
 
 type Sink = { entry: PipelineEntry; slot: WriterSlot; sink: Writable }
+type SinkWithLayout = Sink & { layout: ProjectionLayout | undefined }
+
+// Defensive guard: writers only emit datasetFields when their reader is
+// expected to project. Mis-wiring this would mis-emit rows instead of
+// failing loudly. Always-throws when triggered; never reached in practice.
+/* v8 ignore next 6 */
+function assertNoLayoutWithoutProject(sinks: readonly SinkWithLayout[]): void {
+  if (sinks.some(s => s.layout !== undefined)) {
+    throw new Error(
+      'internal: layout supplied for non-projecting reader (plumbing bug)'
+    )
+  }
+}
+
+// Build the per-entry ProjectionLayout for an SObject sink, or undefined
+// for ELF/CSV or file targets. Throws SkipDatasetError on set/overlap
+// mismatch — the caller records a per-entry failure.
+function buildLayoutFor(
+  entry: PipelineEntry,
+  slot: WriterSlot
+): ProjectionLayout | undefined {
+  if (!slot.datasetFields) return undefined
+  if (entry.alignment.readerKind !== 'sobject') return undefined
+  return buildSObjectRowProjection({
+    datasetName: slot.group.datasetKey.name,
+    entryLabel: entry.alignment.entryLabel,
+    readerFields: entry.alignment.providedFields,
+    augmentColumns: entry.alignment.augmentColumns,
+    datasetFields: slot.datasetFields,
+  })
+}
 
 export async function executePipeline(
   input: PipelineInput
@@ -160,13 +221,15 @@ export async function executePipeline(
       group.datasetKey,
       group.operation,
       listener,
-      createHeaderProvider(group.entries)
+      createHeaderProvider(group.entries),
+      group.entries[0].alignment
     )
     try {
-      const chunker = await writer.init()
+      const { chunker, datasetFields } = await writer.init()
       slots.set(group.key, {
         writer,
         chunker,
+        datasetFields,
         fanIn: new FanInStream(chunker, group.entries.length),
         group,
         tracker,
@@ -238,16 +301,60 @@ async function processBundle(
   /* v8 ignore next -- outer filter ensures at least one entry has a slot; defensive guard */
   if (active.length === 0) return
 
-  // Create fanIn slots upfront — FanInStream counter must decrement even if fetch fails
-  const sinks = active.map(entry => {
+  // Build per-entry projection layouts from each sink's datasetFields +
+  // that entry's alignment (so augment *values* can differ per entry while
+  // the dataset's column order stays shared). SkipDatasetError from the
+  // projector build destroys the sink and records a per-entry failure.
+  // The FanInStream counter is always released — either via sink.destroy
+  // on failure, or via the normal pipeline close path on success.
+  const viableSinks: SinkWithLayout[] = []
+  for (const entry of active) {
     const slot = slots.get(entry.datasetKey.toString())!
-    const suffix = buildAugmentSuffix(entry.augmentColumns)
-    const transforms: BatchMiddleware[] = []
-    if (suffix) {
-      transforms.push(batch => batch.map(line => line + suffix))
+    let layout: ProjectionLayout | undefined
+    try {
+      layout = buildLayoutFor(entry, slot)
+    } catch (err) {
+      const sink = slot.fanIn.createSlot([])
+      sink.destroy()
+      recordEntryFailure(entry, slot, err, input.logger, phase)
+      continue
     }
-    return { entry, slot, sink: slot.fanIn.createSlot(transforms) }
-  })
+    const transforms: BatchMiddleware[] = []
+    if (layout === undefined) {
+      const suffix = buildAugmentSuffix(entry.augmentColumns)
+      if (suffix) transforms.push(batch => batch.map(line => line + suffix))
+    }
+    const sink = slot.fanIn.createSlot(transforms)
+    viableSinks.push({ entry, slot, sink, layout })
+  }
+  if (viableSinks.length === 0) return
+
+  // Fan-out constraint: all sinks sharing this reader must produce
+  // identical projection layouts.
+  const reader = active[0].fetcher
+  if (reader.project) {
+    const ref = viableSinks[0].layout
+    const allEqual = viableSinks.every(s => layoutsEqual(ref, s.layout))
+    if (!allEqual) {
+      const err = new SkipDatasetError(
+        'Cannot share SObject reader across sinks with divergent projections; split the config entries so their readerKeys differ'
+      )
+      for (const s of viableSinks) {
+        s.sink.destroy()
+        recordEntryFailure(s.entry, s.slot, err, input.logger, phase)
+      }
+      return
+    }
+    if (ref !== undefined) reader.project(ref)
+  } else {
+    assertNoLayoutWithoutProject(viableSinks)
+  }
+
+  const sinks = viableSinks.map(s => ({
+    entry: s.entry,
+    slot: s.slot,
+    sink: s.sink,
+  }))
 
   let result: FetchResult
   try {

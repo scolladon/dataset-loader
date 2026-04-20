@@ -6,6 +6,7 @@ import {
   DatasetGroup,
   executePipeline,
   groupByReader,
+  layoutsEqual,
   type PipelineEntry,
   type ReaderBundle,
 } from '../../../src/domain/pipeline.js'
@@ -14,6 +15,7 @@ import { Watermark } from '../../../src/domain/watermark.js'
 import { WatermarkKey } from '../../../src/domain/watermark-key.js'
 import { WatermarkStore } from '../../../src/domain/watermark-store.js'
 import {
+  type AlignmentSpec,
   type CreateWriterPort,
   type FetchResult,
   type GroupTracker,
@@ -26,6 +28,13 @@ import {
   type Writer,
   type WriterResult,
 } from '../../../src/ports/types.js'
+
+const defaultAlignment: AlignmentSpec = {
+  readerKind: 'elf',
+  entryLabel: 'elf:Login',
+  providedFields: ['COL'],
+  augmentColumns: {},
+}
 
 function createMockLogger(): LoggerPort {
   return { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
@@ -88,7 +97,7 @@ function createMockWriter(overrides: Partial<Writer> = {}): MockWriter {
   const mockWritable = new PassThrough({ objectMode: true })
   mockWritable.on('data', (batch: string[]) => writtenLines.push(...batch))
   return {
-    init: vi.fn(async () => mockWritable),
+    init: vi.fn(async () => ({ chunker: mockWritable })),
     finalize: vi.fn(
       async (): Promise<WriterResult> => ({
         parentId: '06V000000000001',
@@ -129,6 +138,7 @@ function createEntry(
     datasetKey: DatasetKey.fromEntry({ targetOrg: 'ana', targetDataset: 'DS' }),
     operation: 'Append',
     augmentColumns: {},
+    alignment: defaultAlignment,
     header: vi.fn(async () => 'HEADER'),
     ...overrides,
   }
@@ -346,7 +356,7 @@ describe('executePipeline (streaming)', () => {
     // Arrange
     const fetcher = mockFetcher(async () => ({
       lines: (async function* () {
-        yield '"v1"'
+        yield ['"v1"']
         throw new Error('stream error mid-way')
       })(),
       watermark: () => undefined,
@@ -388,7 +398,9 @@ describe('executePipeline (streaming)', () => {
       },
     })
     const fetcher = mockFetcher(async () => createFetchResult(['"v1"']))
-    const writer = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const writer = createMockWriter({
+      init: vi.fn(async () => ({ chunker: errorWritable })),
+    })
     const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
     const logger = createMockLogger()
 
@@ -712,7 +724,9 @@ describe('executePipeline (streaming)', () => {
           listener.onRowsWritten(batch.length)
         )
         writable.resume()
-        return createMockWriter({ init: vi.fn(async () => writable) })
+        return createMockWriter({
+          init: vi.fn(async () => ({ chunker: writable })),
+        })
       }),
     }
 
@@ -748,7 +762,7 @@ describe('executePipeline (streaming)', () => {
         return createMockWriter({
           init: vi.fn(async () => {
             listener.onSinkReady('06Vxxx')
-            return writable
+            return { chunker: writable }
           }),
         })
       }),
@@ -781,7 +795,9 @@ describe('executePipeline (streaming)', () => {
         const writable = new PassThrough({ objectMode: true })
         writable.on('data', () => listener.onChunkWritten())
         writable.resume()
-        return createMockWriter({ init: vi.fn(async () => writable) })
+        return createMockWriter({
+          init: vi.fn(async () => ({ chunker: writable })),
+        })
       }),
     }
 
@@ -987,7 +1003,7 @@ describe('executePipeline (streaming)', () => {
     })
     const errorFetcher = mockFetcher(async () => ({
       lines: (async function* () {
-        yield '"a","1"\n'
+        yield ['"a","1"\n']
         throw new Error('mid-stream failure')
       })(),
       watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
@@ -1106,7 +1122,9 @@ describe('executePipeline (streaming)', () => {
         cb(new Error('sink write failure'))
       },
     })
-    const writer2 = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const writer2 = createMockWriter({
+      init: vi.fn(async () => ({ chunker: errorWritable })),
+    })
     const entry1 = createEntryWithReader(readerKey, {
       index: 0,
       label: 'e1',
@@ -1446,7 +1464,9 @@ describe('executePipeline (streaming)', () => {
         cb(new Error('sink write failure'))
       },
     })
-    const writer1 = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const writer1 = createMockWriter({
+      init: vi.fn(async () => ({ chunker: errorWritable })),
+    })
     const writer2 = createMockWriter()
     const entry1 = createEntryWithReader(readerKey, {
       index: 0,
@@ -1658,7 +1678,7 @@ describe('executePipeline (streaming)', () => {
     })
     const errorFetcher = mockFetcher(async () => ({
       lines: (async function* () {
-        yield '"a"\n'
+        yield ['"a"\n']
         throw new Error('mid-stream failure')
       })(),
       watermark: () => undefined,
@@ -1727,7 +1747,9 @@ describe('executePipeline (streaming)', () => {
         cb(new Error('sink write failure'))
       },
     })
-    const writer2 = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const writer2 = createMockWriter({
+      init: vi.fn(async () => ({ chunker: errorWritable })),
+    })
     const logger = createMockLogger()
     const entry1 = createEntryWithReader(readerKey, {
       index: 0,
@@ -1793,7 +1815,9 @@ describe('executePipeline (streaming)', () => {
         cb(new Error('sink exploded'))
       },
     })
-    const writer = createMockWriter({ init: vi.fn(async () => errorWritable) })
+    const writer = createMockWriter({
+      init: vi.fn(async () => ({ chunker: errorWritable })),
+    })
     const entry = createEntry({ fetcher, label: 'elf:Login', index: 7 })
 
     // Act
@@ -1898,4 +1922,621 @@ describe('groupByReader', () => {
     // Assert
     expect(sut).toHaveLength(2)
   })
+})
+
+describe('layoutsEqual', () => {
+  it('given both undefined, when comparing, then returns true', () => {
+    // Arrange / Act
+    const sut = layoutsEqual(undefined, undefined)
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given one undefined one defined, when comparing, then returns false', () => {
+    // Arrange
+    const a = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0, 1]),
+      augmentSlots: [],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, undefined)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given layouts with same targetSize, outputIndex and augmentSlots, when comparing, then returns true', () => {
+    // Arrange
+    const a = {
+      targetSize: 3,
+      outputIndex: new Int32Array([2, 0, 1]),
+      augmentSlots: [{ pos: 1, quoted: '"x"' }],
+    }
+    const b = {
+      targetSize: 3,
+      outputIndex: new Int32Array([2, 0, 1]),
+      augmentSlots: [{ pos: 1, quoted: '"x"' }],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+
+  it('given layouts differing in targetSize, when comparing, then returns false', () => {
+    // Arrange
+    const a = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0, 1]),
+      augmentSlots: [],
+    }
+    const b = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0, 1]),
+      augmentSlots: [],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given layouts differing in outputIndex, when comparing, then returns false', () => {
+    // Arrange
+    const a = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0, 1]),
+      augmentSlots: [],
+    }
+    const b = {
+      targetSize: 2,
+      outputIndex: new Int32Array([1, 0]),
+      augmentSlots: [],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given layouts with different augment values at same pos, when comparing, then returns false', () => {
+    // Arrange
+    const a = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [{ pos: 1, quoted: '"x"' }],
+    }
+    const b = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [{ pos: 1, quoted: '"y"' }],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given layouts with same targetSize but different outputIndex lengths, when comparing, then returns false', () => {
+    // Arrange
+    const a = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0, 1]),
+      augmentSlots: [],
+    }
+    const b = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0, 1, 2]),
+      augmentSlots: [],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given layouts with different augmentSlots lengths, when comparing, then returns false', () => {
+    // Arrange
+    const a = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [{ pos: 1, quoted: '"x"' }],
+    }
+    const b = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
+  it('given augmentSlots in different order but same pos+quoted pairs, when comparing, then returns true', () => {
+    // Arrange
+    const a = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [
+        { pos: 1, quoted: '"x"' },
+        { pos: 2, quoted: '"y"' },
+      ],
+    }
+    const b = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [
+        { pos: 2, quoted: '"y"' },
+        { pos: 1, quoted: '"x"' },
+      ],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(true)
+  })
+})
+
+describe('executePipeline — fan-out constraint regression', () => {
+  // Reproduces the bug where two entries sharing a SObject reader targeted
+  // datasets with divergent projection layouts: all entries must fail
+  // deterministically, and the chunker must finalize (no FanInStream
+  // counter leak). Uses a projecting mock fetcher so the fan-out check
+  // actually runs.
+  it('given two sinks sharing a projecting reader with divergent layouts, when executing, then ALL entries fail and finalize completes', async () => {
+    // Arrange
+    const sharedReaderKey = ReaderKey.forSObject(
+      'src',
+      'Account',
+      ['A', 'B'],
+      'LastModifiedDate',
+      undefined,
+      undefined
+    )
+    const projectFn = vi.fn()
+    const fetcher: ReaderPort = {
+      fetch: vi.fn(async () => createFetchResult(['"v1","v2"'])),
+      header: vi.fn(async () => 'A,B'),
+      project: projectFn,
+    }
+
+    const writer1 = createMockWriter()
+    const writer2 = createMockWriter()
+    // Distinct datasetFields → buildLayoutFor produces different layouts
+    writer1.init = vi.fn(async () => ({
+      chunker: writer1._writable,
+      datasetFields: ['A', 'B'],
+    }))
+    writer2.init = vi.fn(async () => ({
+      chunker: writer2._writable,
+      datasetFields: ['B', 'A'], // reverse order → different layout
+    }))
+
+    const entry1: PipelineEntry = {
+      index: 0,
+      label: 'sobject:A1',
+      readerKey: sharedReaderKey,
+      watermarkKey: WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        sObject: 'Account',
+      }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_ONE',
+      }),
+      operation: 'Append',
+      augmentColumns: {},
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A1',
+        providedFields: ['A', 'B'],
+        augmentColumns: {},
+      },
+      fetcher,
+      header: vi.fn(async () => 'A,B'),
+    }
+    const entry2: PipelineEntry = {
+      ...entry1,
+      index: 1,
+      label: 'sobject:A2',
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_TWO',
+      }),
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A2',
+        providedFields: ['A', 'B'],
+        augmentColumns: {},
+      },
+    }
+    const createWriter: CreateWriterPort = {
+      create: vi.fn(dk =>
+        dk.toString().includes('DS_ONE') ? writer1 : writer2
+      ),
+    }
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert — both entries rejected, pipeline did not hang
+    expect(sut.entriesFailed).toBe(2)
+    expect(sut.entriesProcessed).toBe(0)
+    // project() is NOT called when constraint fails (all viable sinks rejected)
+    expect(projectFn).not.toHaveBeenCalled()
+  }, 5000)
+
+  it('given a projecting SObject reader with a file-target sink (no datasetFields), when executing, then project is NOT called', async () => {
+    // Covers pipeline.ts line 348: "if (ref !== undefined) reader.project(ref)"
+    // branch where ref is undefined (SObject reader feeding a file target).
+    // Arrange
+    const projectFn = vi.fn()
+    const fetcher: ReaderPort = {
+      fetch: vi.fn(async () => createFetchResult(['"v1"'])),
+      header: vi.fn(async () => 'COL'),
+      project: projectFn,
+    }
+    const writer = createMockWriter()
+    // File writer: no datasetFields → slot.layout is undefined → ref undefined
+    writer.init = vi.fn(async () => ({ chunker: writer._writable }))
+    const entry: PipelineEntry = {
+      index: 0,
+      label: 'sobject:A',
+      readerKey: ReaderKey.forSObject(
+        'src',
+        'Account',
+        ['COL'],
+        'LastModifiedDate',
+        undefined,
+        undefined
+      ),
+      watermarkKey: WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        sObject: 'Account',
+      }),
+      datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
+      operation: 'Append',
+      augmentColumns: {},
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A',
+        providedFields: ['COL'],
+        augmentColumns: {},
+      },
+      fetcher,
+      header: vi.fn(async () => 'COL'),
+    }
+    const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(sut.entriesProcessed).toBe(1)
+    expect(projectFn).not.toHaveBeenCalled()
+  }, 5000)
+
+  it('given an ELF entry whose writer returns datasetFields, when executing, then no layout is built and augment middleware is applied', async () => {
+    // Covers buildLayoutFor's non-sobject branch (entry.alignment.readerKind !== 'sobject')
+    // Arrange
+    const fetcher: ReaderPort = {
+      fetch: vi.fn(async () => createFetchResult(['"v1"'])),
+      header: vi.fn(async () => 'COL'),
+    }
+    const writer = createMockWriter()
+    writer.init = vi.fn(async () => ({
+      chunker: writer._writable,
+      datasetFields: ['COL', 'OrgId'],
+    }))
+    const entry: PipelineEntry = {
+      index: 0,
+      label: 'elf:Login',
+      readerKey: ReaderKey.forElf('src', 'Login', 'Daily'),
+      watermarkKey: WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        eventLog: 'Login',
+        interval: 'Daily',
+      }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_X',
+      }),
+      operation: 'Append',
+      augmentColumns: { OrgId: '00D' },
+      alignment: {
+        readerKind: 'elf',
+        entryLabel: 'elf:Login',
+        providedFields: ['COL'],
+        augmentColumns: { OrgId: '00D' },
+      },
+      fetcher,
+      header: vi.fn(async () => 'COL'),
+    }
+    const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert — processed, augment suffix appended (no projector)
+    expect(sut.entriesProcessed).toBe(1)
+    expect(writer._writtenLines[0]).toContain('"00D"')
+  }, 5000)
+
+  it('given all entries fail their projection build, when executing, then pipeline returns zero processed and finalize completes', async () => {
+    // Covers pipeline.ts: the "if (viableSinks.length === 0) return" early exit.
+    // Arrange
+    const fetcher: ReaderPort = {
+      fetch: vi.fn(async () => createFetchResult(['"v1"'])),
+      header: vi.fn(async () => 'A,B'),
+      project: vi.fn(),
+    }
+    const writer = createMockWriter()
+    writer.init = vi.fn(async () => ({
+      chunker: writer._writable,
+      datasetFields: ['A', 'B'],
+    }))
+    const baseEntry = {
+      readerKey: ReaderKey.forSObject(
+        'src',
+        'Account',
+        ['A', 'B'],
+        'LastModifiedDate',
+        undefined,
+        undefined
+      ),
+      watermarkKey: WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        sObject: 'Account',
+      }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_X',
+      }),
+      operation: 'Append' as const,
+      augmentColumns: {},
+      fetcher,
+      header: vi.fn(async () => 'A,B'),
+    }
+    const entry: PipelineEntry = {
+      ...baseEntry,
+      index: 0,
+      label: 'sobject:A',
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A',
+        providedFields: ['A', 'B', 'EXTRA'], // extra → build fails
+        augmentColumns: {},
+      },
+    }
+    const createWriter: CreateWriterPort = { create: vi.fn(() => writer) }
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.entriesProcessed).toBe(0)
+  }, 5000)
+
+  it('given a second entry whose projection build fails (divergent alignment), when executing, then that entry is recorded as failed and chunker finalize still completes', async () => {
+    // Arrange — two entries share a reader; entry0's alignment matches the
+    // dataset but entry1's readerFields include an unknown field, so the
+    // per-entry buildLayoutFor throws for entry1 only.
+    const sharedReaderKey = ReaderKey.forSObject(
+      'src',
+      'Account',
+      ['A', 'B'],
+      'LastModifiedDate',
+      undefined,
+      undefined
+    )
+    const fetcher: ReaderPort = {
+      fetch: vi.fn(async () => createFetchResult(['"v1","v2"'])),
+      header: vi.fn(async () => 'A,B'),
+      project: vi.fn(),
+    }
+
+    const writer1 = createMockWriter()
+    const writer2 = createMockWriter()
+    writer1.init = vi.fn(async () => ({
+      chunker: writer1._writable,
+      datasetFields: ['A', 'B'],
+    }))
+    writer2.init = vi.fn(async () => ({
+      chunker: writer2._writable,
+      datasetFields: ['A', 'B'],
+    }))
+
+    const entry1: PipelineEntry = {
+      index: 0,
+      label: 'sobject:A1',
+      readerKey: sharedReaderKey,
+      watermarkKey: WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        sObject: 'Account',
+      }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_ONE',
+      }),
+      operation: 'Append',
+      augmentColumns: {},
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A1',
+        providedFields: ['A', 'B'],
+        augmentColumns: {},
+      },
+      fetcher,
+      header: vi.fn(async () => 'A,B'),
+    }
+    const entry2: PipelineEntry = {
+      ...entry1,
+      index: 1,
+      label: 'sobject:A2',
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_TWO',
+      }),
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A2',
+        providedFields: ['A', 'B', 'EXTRA'], // extra reader field → fails
+        augmentColumns: {},
+      },
+    }
+    const createWriter: CreateWriterPort = {
+      create: vi.fn(dk =>
+        dk.toString().includes('DS_ONE') ? writer1 : writer2
+      ),
+    }
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(sut.entriesFailed).toBe(1)
+    expect(sut.entriesProcessed).toBe(1)
+  }, 5000)
+
+  it('given two sinks sharing a projecting reader with identical layouts, when executing, then project is called once and both entries process', async () => {
+    // Arrange
+    const sharedReaderKey = ReaderKey.forSObject(
+      'src',
+      'Account',
+      ['A', 'B'],
+      'LastModifiedDate',
+      undefined,
+      undefined
+    )
+    const projectFn = vi.fn()
+    const fetcher: ReaderPort = {
+      fetch: vi.fn(async () => createFetchResult(['"v1","v2"'])),
+      header: vi.fn(async () => 'A,B'),
+      project: projectFn,
+    }
+
+    const writer1 = createMockWriter()
+    const writer2 = createMockWriter()
+    const sameFields: readonly string[] = ['A', 'B']
+    writer1.init = vi.fn(async () => ({
+      chunker: writer1._writable,
+      datasetFields: sameFields,
+    }))
+    writer2.init = vi.fn(async () => ({
+      chunker: writer2._writable,
+      datasetFields: sameFields,
+    }))
+
+    const entry1: PipelineEntry = {
+      index: 0,
+      label: 'sobject:A1',
+      readerKey: sharedReaderKey,
+      watermarkKey: WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        sObject: 'Account',
+      }),
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_ONE',
+      }),
+      operation: 'Append',
+      augmentColumns: {},
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A1',
+        providedFields: ['A', 'B'],
+        augmentColumns: {},
+      },
+      fetcher,
+      header: vi.fn(async () => 'A,B'),
+    }
+    const entry2: PipelineEntry = {
+      ...entry1,
+      index: 1,
+      label: 'sobject:A2',
+      datasetKey: DatasetKey.fromEntry({
+        targetOrg: 'ana',
+        targetDataset: 'DS_TWO',
+      }),
+      alignment: {
+        readerKind: 'sobject',
+        entryLabel: 'sobject:A2',
+        providedFields: ['A', 'B'],
+        augmentColumns: {},
+      },
+    }
+    const createWriter: CreateWriterPort = {
+      create: vi.fn(dk =>
+        dk.toString().includes('DS_ONE') ? writer1 : writer2
+      ),
+    }
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(sut.entriesProcessed).toBe(2)
+    expect(projectFn).toHaveBeenCalledTimes(1)
+  }, 5000)
 })

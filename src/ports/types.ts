@@ -60,6 +60,7 @@ export interface QueryResult<T> {
 
 export type Operation = 'Append' | 'Overwrite'
 export type BatchMiddleware = (batch: string[]) => string[]
+export type ReaderKind = 'sobject' | 'elf' | 'csv'
 
 export interface FetchResult {
   readonly lines: AsyncIterable<string[]>
@@ -70,6 +71,10 @@ export interface FetchResult {
 export interface ReaderPort {
   fetch(watermark?: Watermark): Promise<FetchResult>
   header(): Promise<string>
+  // Optional: SObject readers project rows into the dataset's column order
+  // when supplied a layout. ELF / CSV readers do not implement this — their
+  // column order is the source-of-truth (file/blob), checked at audit time.
+  project?(layout: ProjectionLayout): void
 }
 
 export interface WriterResult {
@@ -77,12 +82,36 @@ export interface WriterResult {
   readonly partCount: number
 }
 
+export interface WriterInitResult {
+  readonly chunker: Writable
+  // Dataset metadata's canonical column order (CRMA target). Present only
+  // for DatasetWriter; undefined for FileWriter. The pipeline uses this to
+  // build a per-entry ProjectionLayout (each entry can have different
+  // augment values — e.g. different sourceOrg augmentColumns).
+  readonly datasetFields?: readonly string[]
+}
+
 export interface Writer {
-  init(): Promise<Writable>
+  init(): Promise<WriterInitResult>
   finalize(): Promise<WriterResult>
   abort(): Promise<void>
   skip(): Promise<void>
 }
+
+export interface AlignmentSpec {
+  readonly readerKind: ReaderKind
+  readonly entryLabel: string
+  // Source column names in source order. For SObject: dotted config fields
+  // (translated to underscores by the projection builder). For ELF:
+  // LogFileFieldNames split. For CSV: file header parsed via parseCsvHeader.
+  readonly providedFields: readonly string[]
+  readonly augmentColumns: Readonly<Record<string, string>>
+}
+
+export type AuditOutcome =
+  | { readonly kind: 'pass' }
+  | { readonly kind: 'warn'; readonly message: string }
+  | { readonly kind: 'fail'; readonly message: string }
 
 export class SkipDatasetError extends Error {
   constructor(message: string) {
@@ -112,7 +141,8 @@ export interface CreateWriterPort {
     dataset: DatasetKey,
     operation: Operation,
     listener: ProgressListener,
-    headerProvider: HeaderProvider
+    headerProvider: HeaderProvider,
+    alignment?: AlignmentSpec
   ): Writer
 }
 

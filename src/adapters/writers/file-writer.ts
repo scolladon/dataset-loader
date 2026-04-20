@@ -10,11 +10,13 @@ import { dirname } from 'node:path'
 import { Writable } from 'node:stream'
 import { type DatasetKey } from '../../domain/dataset-key.js'
 import {
+  type AlignmentSpec,
   type CreateWriterPort,
   type HeaderProvider,
   type Operation,
   type ProgressListener,
   type Writer,
+  type WriterInitResult,
   type WriterResult,
 } from '../../ports/types.js'
 
@@ -29,7 +31,7 @@ export class FileWriter implements Writer {
     private readonly listener?: ProgressListener
   ) {}
 
-  async init(): Promise<Writable> {
+  async init(): Promise<WriterInitResult> {
     mkdirSync(dirname(this.filePath), { recursive: true })
 
     const appendToNonEmpty =
@@ -45,7 +47,7 @@ export class FileWriter implements Writer {
       this.headerWritten = true
     }
 
-    return new Writable({
+    const chunker = new Writable({
       objectMode: true,
       write: (
         batch: string[],
@@ -56,6 +58,7 @@ export class FileWriter implements Writer {
         this.doWrite(batch).then(() => callback(), callback)
       },
     })
+    return { chunker }
   }
 
   private async doWrite(batch: string[]): Promise<void> {
@@ -108,8 +111,11 @@ export class FileWriterFactory implements CreateWriterPort {
     dataset: DatasetKey,
     operation: Operation,
     listener: ProgressListener,
-    headerProvider: HeaderProvider
+    headerProvider: HeaderProvider,
+    _alignment?: AlignmentSpec
   ): Writer {
+    // FileWriter ignores alignment — files preserve the source order;
+    // the dataset metadata contract does not apply to file targets.
     return new FileWriter(dataset.name, operation, headerProvider, listener)
   }
 }

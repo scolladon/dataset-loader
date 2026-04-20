@@ -1,13 +1,14 @@
+import { csvQuote } from '../../domain/csv-quote.js'
 import { Watermark } from '../../domain/watermark.js'
 import {
   type FetchResult,
+  type ProjectionLayout,
   type QueryResult,
   type ReaderPort,
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
   SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../../ports/types.js'
-import { csvQuote } from '../../domain/csv-quote.js'
 
 interface SObjectReaderConfig {
   readonly sobject: string
@@ -54,6 +55,7 @@ export class SObjectReader implements ReaderPort {
   private readonly dateField: string
   private readonly where?: string
   private readonly queryLimit?: number
+  private layout?: ProjectionLayout
 
   constructor(
     private readonly sfPort: SalesforcePort,
@@ -85,6 +87,18 @@ export class SObjectReader implements ReaderPort {
     return new SObjectHeader(this.fields).toString()
   }
 
+  project(layout: ProjectionLayout): void {
+    if (this.layout !== undefined) {
+      throw new Error('SObjectReader.project called twice')
+    }
+    if (layout.outputIndex.length !== this.fields.length) {
+      throw new Error(
+        `SObjectReader.project: outputIndex length ${layout.outputIndex.length} !== reader fields length ${this.fields.length}`
+      )
+    }
+    this.layout = layout
+  }
+
   async fetch(watermark?: Watermark): Promise<FetchResult> {
     const conditions: string[] = []
     if (watermark)
@@ -104,6 +118,32 @@ export class SObjectReader implements ReaderPort {
     const accessors = this.fieldAccessors
     const dateField = this.dateField
     const sfPort = this.sfPort
+    const layout = this.layout
+
+    // Build the row encoder once per fetch. Layout-aware path projects each
+    // record into the dataset's column order with augment values inlined at
+    // their target positions; legacy path emits cells in reader order (used
+    // by file targets and any reader without a configured layout).
+    const buildRow: (record: Record<string, unknown>) => string = layout
+      ? record => {
+          const out = new Array<string>(layout.targetSize)
+          const augmentSlots = layout.augmentSlots
+          const outputIndex = layout.outputIndex
+          for (let i = 0; i < augmentSlots.length; i++) {
+            out[augmentSlots[i].pos] = augmentSlots[i].quoted
+          }
+          for (let c = 0; c < accessors.length; c++) {
+            out[outputIndex[c]] = formatFieldValue(accessors[c](record))
+          }
+          return out.join(',')
+        }
+      : record => {
+          const cells = new Array<string>(accessors.length)
+          for (let c = 0; c < accessors.length; c++) {
+            cells[c] = formatFieldValue(accessors[c](record))
+          }
+          return cells.join(',')
+        }
 
     async function* generateLines(): AsyncGenerator<string[]> {
       let currentPage = firstPage
@@ -117,17 +157,9 @@ export class SObjectReader implements ReaderPort {
             : null
 
         if (currentPage.records.length > 0) {
-          // Hand-roll CSV quoting per page: csv-stringify/sync was invoked once
-          // per record which re-ran its option parser N times per page. This
-          // loop keeps identical output (quoted: true, quoted_empty: true).
           const batch = new Array<string>(currentPage.records.length)
           for (let r = 0; r < currentPage.records.length; r++) {
-            const record = currentPage.records[r]
-            const cells = new Array<string>(accessors.length)
-            for (let c = 0; c < accessors.length; c++) {
-              cells[c] = formatFieldValue(accessors[c](record))
-            }
-            batch[r] = cells.join(',')
+            batch[r] = buildRow(currentPage.records[r])
           }
           lastRecord = currentPage.records.at(-1)
           pagesProcessed++

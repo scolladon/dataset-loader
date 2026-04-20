@@ -1,7 +1,10 @@
 import { Writable } from 'node:stream'
-import { constants, createGzip, type Gzip } from 'node:zlib'
+import { createGzip, type Gzip } from 'node:zlib'
 import { type DatasetKey } from '../../domain/dataset-key.js'
+import { checkSchemaAlignment } from '../../domain/schema-check.js'
+import { buildSObjectRowProjection } from '../../domain/sobject-row-projection.js'
 import {
+  type AlignmentSpec,
   type CreateWriterPort,
   type HeaderProvider,
   type Operation,
@@ -10,6 +13,7 @@ import {
   SF_IDENTIFIER_PATTERN,
   SkipDatasetError,
   type Writer,
+  type WriterInitResult,
   type WriterResult,
 } from '../../ports/types.js'
 import { DEFAULT_CONCURRENCY } from '../sf-client.js'
@@ -25,8 +29,17 @@ interface GzipChunkState {
   pendingBytes: number
 }
 
+interface DatasetMetadataField {
+  fullyQualifiedName?: string
+}
+
+interface DatasetMetadataObject {
+  numberOfLinesToIgnore?: number
+  fields?: DatasetMetadataField[]
+}
+
 interface DatasetMetadata {
-  objects?: { numberOfLinesToIgnore?: number }[]
+  objects?: DatasetMetadataObject[]
 }
 
 const PART_MAX_BYTES = 10 * 1024 * 1024
@@ -341,7 +354,8 @@ export class DatasetWriter implements Writer {
     private readonly sfPort: SalesforcePort,
     dataset: DatasetKey,
     private readonly operation: Operation,
-    private readonly listener?: ProgressListener
+    private readonly listener?: ProgressListener,
+    private readonly alignment?: AlignmentSpec
   ) {
     this.basePath = `/services/data/v${sfPort.apiVersion}/sobjects`
     this.datasetName = dataset.name
@@ -350,14 +364,20 @@ export class DatasetWriter implements Writer {
     }
   }
 
-  async init(): Promise<Writable> {
+  async init(): Promise<WriterInitResult> {
     const metadata = await this.queryExistingMetadata()
     if (!metadata) {
       throw new SkipDatasetError(
         `No existing metadata for dataset '${this.datasetName}', skipping`
       )
     }
-    const patched = this.normalizeMetadata(metadata)
+    const { patched, datasetFields } = this.parseMetadata(metadata)
+    if (this.alignment) {
+      // Validate alignment against dataset metadata. For SObject, the same
+      // check runs again at project-build time in the pipeline (cheap; builds
+      // the per-entry layout). For ELF/CSV, this is the authoritative check.
+      this.validateAlignment(datasetFields, this.alignment)
+    }
     this.lazyWritable = new LazyGzipChunkingWritable(
       this.sfPort,
       this.basePath,
@@ -366,7 +386,62 @@ export class DatasetWriter implements Writer {
       patched,
       this.listener
     )
-    return this.lazyWritable
+    return {
+      chunker: this.lazyWritable,
+      datasetFields: this.alignment ? datasetFields : undefined,
+    }
+  }
+
+  private validateAlignment(
+    datasetFields: readonly string[],
+    alignment: AlignmentSpec
+  ): void {
+    if (alignment.readerKind === 'sobject') {
+      // Dry-run: buildSObjectRowProjection throws on mismatch. We discard
+      // the layout; the pipeline rebuilds one per-entry when calling project().
+      buildSObjectRowProjection({
+        datasetName: this.datasetName,
+        entryLabel: alignment.entryLabel,
+        readerFields: alignment.providedFields,
+        augmentColumns: alignment.augmentColumns,
+        datasetFields,
+      })
+      return
+    }
+    // ELF/CSV: reject augment-vs-reader overlap before the order check so the
+    // user sees a precise diagnostic instead of a generic set mismatch.
+    this.rejectAugmentOverlap(alignment)
+    if (alignment.providedFields.length === 0) {
+      // ELF with no prior log file, or empty CSV header — schema check is
+      // not actionable here; the audit's WARN is the authoritative signal.
+      return
+    }
+    const provided = [
+      ...alignment.providedFields,
+      ...Object.keys(alignment.augmentColumns),
+    ]
+    const result = checkSchemaAlignment({
+      datasetName: this.datasetName,
+      entryLabel: alignment.entryLabel,
+      expected: datasetFields,
+      provided,
+      checkOrder: true,
+    })
+    if (!result.ok) throw new SkipDatasetError(result.reason)
+  }
+
+  private rejectAugmentOverlap(alignment: AlignmentSpec): void {
+    const provided = new Set(
+      alignment.providedFields.map(f => f.replace(/\./g, '_').toLowerCase())
+    )
+    const overlap = Object.keys(alignment.augmentColumns).filter(k =>
+      provided.has(k.replace(/\./g, '_').toLowerCase())
+    )
+    if (overlap.length === 0) return
+    throw new SkipDatasetError(
+      `Schema overlap for dataset '${this.datasetName}' (entry '${alignment.entryLabel}'):\n` +
+        `  augment columns also present as reader fields: [${overlap.join(', ')}]`
+    )
   }
 
   async finalize(): Promise<WriterResult> {
@@ -402,7 +477,10 @@ export class DatasetWriter implements Writer {
     return this.abort()
   }
 
-  private normalizeMetadata(metadataJson: string): string {
+  private parseMetadata(metadataJson: string): {
+    patched: string
+    datasetFields: readonly string[]
+  } {
     try {
       const parsed: unknown = JSON.parse(metadataJson)
       if (
@@ -420,7 +498,10 @@ export class DatasetWriter implements Writer {
         ...obj,
         numberOfLinesToIgnore: 0,
       }))
-      return JSON.stringify({ ...meta, objects })
+      return {
+        patched: JSON.stringify({ ...meta, objects }),
+        datasetFields: this.extractDatasetFields(meta),
+      }
     } catch (err: unknown) {
       /* v8 ignore next -- JSON.parse and our own guards always throw Error */
       const message = err instanceof Error ? err.message : String(err)
@@ -428,6 +509,27 @@ export class DatasetWriter implements Writer {
         `Failed to parse metadata for dataset '${this.datasetName}': ${message}`
       )
     }
+  }
+
+  private extractDatasetFields(meta: DatasetMetadata): readonly string[] {
+    if (!this.alignment) return []
+    const obj0 = meta.objects?.[0]
+    if (!obj0 || !Array.isArray(obj0.fields) || obj0.fields.length === 0) {
+      throw new SkipDatasetError(
+        `Dataset '${this.datasetName}' metadata has no objects[0].fields; cannot enforce column alignment`
+      )
+    }
+    const names: string[] = []
+    for (const field of obj0.fields) {
+      const name = field.fullyQualifiedName
+      if (typeof name !== 'string' || name.length === 0) {
+        throw new SkipDatasetError(
+          `Dataset '${this.datasetName}' metadata has fields without fullyQualifiedName`
+        )
+      }
+      names.push(name)
+    }
+    return names
   }
 
   private async queryExistingMetadata(): Promise<string | null> {
@@ -451,8 +553,15 @@ export class DatasetWriterFactory implements CreateWriterPort {
     dataset: DatasetKey,
     operation: Operation,
     listener: ProgressListener,
-    _headerProvider: HeaderProvider
+    _headerProvider: HeaderProvider,
+    alignment?: AlignmentSpec
   ): Writer {
-    return new DatasetWriter(this.sfPort, dataset, operation, listener)
+    return new DatasetWriter(
+      this.sfPort,
+      dataset,
+      operation,
+      listener,
+      alignment
+    )
   }
 }

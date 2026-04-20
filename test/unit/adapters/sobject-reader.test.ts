@@ -767,3 +767,40 @@ describe('SObjectReader', () => {
     expect(lines[0]).toContain(expected)
   })
 })
+
+describe('SObjectReader.project', () => {
+  it('given project called twice on same reader, when calling, then throws Error', () => {
+    // Arrange
+    const sut = new SObjectReader(makeSfPort(), {
+      sobject: 'Account',
+      fields: ['Id', 'Name'],
+      dateField: 'LastModifiedDate',
+    })
+    const layout = {
+      targetSize: 2,
+      outputIndex: new Int32Array([0, 1]),
+      augmentSlots: [],
+    }
+    sut.project(layout)
+
+    // Act / Assert
+    expect(() => sut.project(layout)).toThrow(/project called twice/)
+  })
+
+  it('given layout whose outputIndex length differs from reader fields length, when calling project, then throws Error', () => {
+    // Arrange
+    const sut = new SObjectReader(makeSfPort(), {
+      sobject: 'Account',
+      fields: ['Id', 'Name'],
+      dateField: 'LastModifiedDate',
+    })
+    const layout = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0]), // length 1, reader has 2 fields
+      augmentSlots: [],
+    }
+
+    // Act / Assert
+    expect(() => sut.project(layout)).toThrow(/outputIndex length/)
+  })
+})
