@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.2.2](https://github.com/scolladon/dataset-loader/compare/v1.2.1...v1.2.2) (2026-04-20)
+
+
+### Bug Fixes
+
+* **align:** enforce SObject dataset column order against CRMA metadata ([#26](https://github.com/scolladon/dataset-loader/issues/26)) ([f1040c4](https://github.com/scolladon/dataset-loader/commit/f1040c4e33af2d1609a9d8a8ef8dd6af04364c88))
+
 ## [1.2.1](https://github.com/scolladon/dataset-loader/compare/v1.2.0...v1.2.1) (2026-04-18)
 
 
