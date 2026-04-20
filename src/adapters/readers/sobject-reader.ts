@@ -7,7 +7,7 @@ import {
   SF_IDENTIFIER_PATTERN,
   SOQL_RELATIONSHIP_PATH_PATTERN,
 } from '../../ports/types.js'
-import { csvQuote } from '../pipeline/csv-quote.js'
+import { csvQuote } from '../../domain/csv-quote.js'
 
 interface SObjectReaderConfig {
   readonly sobject: string
