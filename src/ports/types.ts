@@ -91,6 +91,12 @@ export class SkipDatasetError extends Error {
   }
 }
 
+export interface ProjectionLayout {
+  readonly targetSize: number
+  readonly augmentSlots: ReadonlyArray<{ pos: number; quoted: string }>
+  readonly outputIndex: Int32Array
+}
+
 export interface ProgressListener {
   onSinkReady(parentId: string): void
   onChunkWritten(): void
