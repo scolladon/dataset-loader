@@ -50,7 +50,7 @@ sf org display --target-org my-analytic-org
 | Org                      | Required Permissions                                                             |
 |--------------------------|----------------------------------------------------------------------------------|
 | **Source org** (ELF)     | `API Enabled`, `View Event Log Files` (`ViewEventLogFiles`)                      |
-| **Source org** (SObject) | `API Enabled`                                                                    |
+| **Source org** (SObject) | `API Enabled`, plus **Read** on every SObject listed in any entry's `sObject` field (including standard objects like `User`, `UserLogin`, etc.). License-gated objects (Event Monitoring, etc.) need the relevant feature license. |
 | **Analytic org**         | `API Enabled`, `Upload External Data to CRM Analytics` (`InsightsAppUploadUser`) |
 
 Assign via Permission Set or Profile. The `sf` CLI alias must authenticate as a user with these permissions.
@@ -222,11 +222,54 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 - **Cause**: Network issue or transient API failure during upload.
 - **Resolution**: Re-run — watermarks are only advanced on success, so the same data will be re-fetched and re-uploaded.
 
+### Audit FAIL: "{org}: {sObject} read access"
+
+- **Symptom**: `[FAIL] <org>: <sObject> read access: ...` in audit output. Often paired with a Salesforce error like `INSUFFICIENT_ACCESS`, `INVALID_TYPE`, or `sObject type '<name>' is not supported`.
+- **Cause**: The authenticated user lacks read permission on the queried SObject in the source org. The `sobjectReadAccess` strategy issues `SELECT Id FROM <sObject> LIMIT 1`; anything that rejects this query surfaces here — CRUD-level denial, a missing profile assignment, a standard object disabled for the user's license, or a typo in the config's `sObject` value.
+- **Resolution**:
+  1. Confirm the SObject name is spelled correctly (case-sensitive API name, including `__c` suffix for custom objects).
+  2. In Setup → Users, find the CLI user and verify their Profile and assigned Permission Sets grant **Read** on the object.
+  3. For standard objects controlled by license (e.g. `UserLogin`, `Audit*`, event-monitoring objects), the user needs the relevant feature license — check via "View Setup and Configuration" + the object-specific license (e.g. Event Monitoring).
+  4. Re-run `sf dataset load --audit` — the check should flip to `[PASS]`.
+- **Related**: `API Enabled` must also be on the user's profile (required for any SOQL call); verified by the `auth and connectivity` audit check, which fails earlier if missing.
+
 ### "No existing metadata for dataset, skipping"
 
 - **Symptom**: Log shows `No existing metadata for dataset '<name>', skipping` and the entry is skipped.
 - **Cause**: The CRM Analytics target dataset has no prior completed upload, so metadata cannot be resolved. This only affects CRM Analytics targets (`targetOrg` set); file targets are always writable.
 - **Resolution**: Create the dataset manually via the CRM Analytics UI (Analytics Studio > Data Manager) or perform a one-time dataflow upload first, then re-run.
+
+### "Schema mismatch for dataset" (audit FAIL or writer SkipDatasetError)
+
+- **Symptom**: `Schema mismatch for dataset '<name>' (entry '<label>'): expected by dataset, missing from input: [...]` or `provided by input, not in dataset: [...]`.
+- **Cause**: Your source columns don't match the dataset's canonical column set. For SObject entries, the config `fields` (after `.` → `_` translation) plus `augmentColumns` keys must equal the dataset metadata's `objects[0].fields[*].fullyQualifiedName` set, case-insensitively. For ELF/CSV, the same check applies against `LogFileFieldNames` (ELF) or the CSV file header.
+- **Resolution**:
+  - If a field is missing from the source: add it to `fields` (SObject) or re-extract the source (ELF/CSV).
+  - If a field is extra: remove it from `fields` or from `augmentColumns`.
+  - If the dataset has columns you didn't intend: recreate the dataset from a corrected initial load. The dataset's metadata freezes on first successful load; the loader will not add or remove columns.
+
+### "Order mismatch for dataset" (ELF/CSV only)
+
+- **Symptom**: `Order mismatch for dataset '<name>' (entry '<label>'): position N: dataset expects 'A', input provides 'B'`.
+- **Cause**: The source column **set** matches the dataset's, but their **order** differs. ELF and CSV rows are streamed as-is — we don't reorder them at runtime because parsing every CSV line would double the hot-path cost. CRMA interprets rows by position, so any order diff corrupts every row in exactly the way your dataflow digest reports: values shift into wrong columns. (SObject entries are safe: the loader reorders per-row at runtime.)
+- **Resolution**:
+  - ELF: the dataset metadata must match the current `LogFileFieldNames` order for the EventType. If Salesforce reordered the event schema in a release, recreate the dataset from a fresh initial load.
+  - CSV: either reorder the source file's columns to match the dataset, or recreate the dataset from the source file.
+  - Augment columns (if declared) must appear at the **trailing** positions of the dataset's metadata; that's a constraint of the append-suffix middleware ELF/CSV use.
+
+### Audit WARN: "no prior EventLogFile" / "casing differs"
+
+- **Symptom**: Audit line logs `[WARN]` rather than `[PASS]` or `[FAIL]`.
+- **Cause**: Non-blocking advisory:
+  - `No prior EventLogFile for <type>/<interval>; schema check skipped` — there's no blob to compare against. A real run would load zero rows anyway (no data to check).
+  - `Schema casing differs from dataset metadata; dataset will keep its canonical casing` — source column names differ only in letter case from the dataset's; CRMA keeps the dataset's canonical casing, so this is harmless but flagged for visibility.
+- **Resolution**: No action required. WARN does not set a non-zero exit code.
+
+### "Cannot share SObject reader across sinks with divergent projections"
+
+- **Symptom**: `Cannot share SObject reader across sinks with divergent projections; split the config entries so their readerKeys differ`. Every entry in the bundle is reported as failed.
+- **Cause**: Two SObject entries share a reader (identical `sourceOrg`, `sObject`, `fields`, `dateField`, `where`, `limit`) but target datasets whose metadata column orders differ. The pipeline can't satisfy both with a single reader stream.
+- **Resolution**: Perturb one entry's `ReaderKey` so the readers are distinct — change `dateField`, add a trivial `where` filter, or adjust `limit`. This yields two independent readers, each with its own projection.
 
 ### "field-count and header's column-count do not match"
 

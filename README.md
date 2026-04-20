@@ -81,6 +81,7 @@ sf dataset load
 >
 > - **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
 > - **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
+> - **Column alignment** — CRM Analytics ingests rows by position. `--audit` verifies that your source columns (SObject config `fields`, ELF `LogFileFieldNames`, or CSV header) match the dataset's metadata column set (and order for ELF/CSV) before any upload runs. SObject entries are automatically reordered at runtime to match the dataset's column order; ELF/CSV source order must already match the dataset and is enforced at audit time.
 
 ## Config Reference
 
@@ -226,7 +227,7 @@ USAGE
 FLAGS
   -c, --config-file=<value>  [default: dataset-load.config.json] Path to config JSON
   -s, --state-file=<value>   [default: .dataset-load.state.json] Path to watermark state file
-      --audit                Pre-flight checks only (auth, connectivity, permissions)
+      --audit                Pre-flight checks only (auth, connectivity, permissions, schema alignment)
       --dry-run              Show plan without executing
       --entry=<value>        Process only the entry with this name
 
@@ -259,8 +260,8 @@ _See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-l
 
 1. **Parse config** — validate JSON with Zod, check operation consistency across groups
 2. **Resolve** — authenticate orgs, resolve mustache tokens in augmentColumns
-3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access
-4. **Execute pipeline** — group entries by dataset, stream through Reader → Augment → Writer
+3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access, and dataset **schema alignment** (source columns match the target dataset's metadata)
+4. **Execute pipeline** — group entries by dataset, stream through Reader → Projection (SObject, reorders to dataset column order) → Augment (ELF/CSV) → Writer
 5. **Write** — CRM Analytics: gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API. File: stream rows directly to a local CSV
 6. **Update watermarks** — only for entries whose group uploaded successfully
 
