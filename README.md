@@ -227,7 +227,7 @@ USAGE
 FLAGS
   -c, --config-file=<value>  [default: dataset-load.config.json] Path to config JSON
   -s, --state-file=<value>   [default: .dataset-load.state.json] Path to watermark state file
-      --audit                Pre-flight checks only (auth, connectivity, permissions, schema alignment)
+      --audit                Pre-flight checks only (auth, connectivity, permissions)
       --dry-run              Show plan without executing
       --entry=<value>        Process only the entry with this name
 
