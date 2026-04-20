@@ -41,7 +41,7 @@ describe('FileWriter', () => {
   it('given FileWriter in Overwrite mode, when data is written, then creates file with header then data lines each terminated by newline', async () => {
     // Arrange
     const sut = new FileWriter(filePath, 'Overwrite', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act
     await pipeline(Readable.from([['line1', 'line2']]), chunker)
@@ -55,7 +55,7 @@ describe('FileWriter', () => {
   it('given FileWriter in Overwrite mode, when data is written, then finalize returns parentId and partCount zero', async () => {
     // Arrange
     const sut = new FileWriter(filePath, 'Overwrite', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act
     await pipeline(Readable.from([['data']]), chunker)
@@ -105,7 +105,7 @@ describe('FileWriter', () => {
   it('given FileWriter in Overwrite mode, when an empty batch is written, then file content has no spurious newline', async () => {
     // Arrange
     const sut = new FileWriter(filePath, 'Overwrite', mockHeaderProvider)
-    const writable = await sut.init()
+    const { chunker: writable } = await sut.init()
 
     // Act
     writable.write([])
@@ -122,7 +122,7 @@ describe('FileWriter', () => {
     // Arrange — kills `this.operation === 'Append'` → `true` mutation
     await writeFile(filePath, 'OLD_HEADER\nold-line\n')
     const sut = new FileWriter(filePath, 'Overwrite', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act
     await pipeline(Readable.from([['new-line']]), chunker)
@@ -137,7 +137,7 @@ describe('FileWriter', () => {
     // Arrange — kills `size > 0` → `>= 0` mutation (empty file should NOT be treated as non-empty)
     await writeFile(filePath, '')
     const sut = new FileWriter(filePath, 'Append', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act
     await pipeline(Readable.from([['data']]), chunker)
@@ -151,7 +151,7 @@ describe('FileWriter', () => {
   it('given FileWriter in Overwrite mode, when two batches are written, then header appears exactly once', async () => {
     // Arrange — kills `this.headerWritten = true` → `false` mutation
     const sut = new FileWriter(filePath, 'Overwrite', mockHeaderProvider)
-    const writable = await sut.init()
+    const { chunker: writable } = await sut.init()
 
     // Act — two separate write calls = two batches
     writable.write(['row1'])
@@ -168,7 +168,7 @@ describe('FileWriter', () => {
     // Arrange
     await writeFile(filePath, 'COL_A,COL_B\nexisting-line\n')
     const sut = new FileWriter(filePath, 'Append', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act
     await pipeline(Readable.from([['new-line']]), chunker)
@@ -209,7 +209,7 @@ describe('FileWriter', () => {
   it('given FileWriter in Append mode on missing file, when data is written, then creates file with header', async () => {
     // Arrange
     const sut = new FileWriter(filePath, 'Append', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act
     await pipeline(Readable.from([['data']]), chunker)
@@ -233,7 +233,7 @@ describe('FileWriter', () => {
       mockHeaderProvider,
       listener
     )
-    const writable = await sut.init()
+    const { chunker: writable } = await sut.init()
 
     // Act
     writable.write(['a', 'b'])
@@ -262,7 +262,7 @@ describe('FileWriter', () => {
     )
 
     const sut = new FileWriter(filePath, 'Overwrite', mockHeaderProvider)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['line1'])
 
     // Act & Assert
@@ -310,7 +310,7 @@ describe('FileWriterFactory', () => {
 
     // Act
     const writer = sut.create(dsKey, 'Overwrite', listener, headerProvider)
-    const writable = await writer.init()
+    const { chunker: writable } = await writer.init()
     writable.write(['row1'])
     writable.end()
     await finished(writable)

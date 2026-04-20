@@ -620,7 +620,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -688,7 +688,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -762,7 +762,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -796,7 +796,7 @@ describe('DatasetWriter', () => {
       }),
     })
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     vi.spyOn(
       chunker as LazyGzipChunkingWritable,
       'drainUploads'
@@ -829,7 +829,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -854,7 +854,7 @@ describe('DatasetWriter', () => {
       post: vi.fn().mockResolvedValue({ id: parentId }),
     })
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -883,7 +883,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.end()
     await finished(chunker)
     const result = await sut.finalize()
@@ -957,7 +957,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     postCallsBeforeWrite.push(
       (sfPort.post as ReturnType<typeof vi.fn>).mock.calls.length
     )
@@ -993,7 +993,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append', listener)
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     expect(listener.onSinkReady).not.toHaveBeenCalled()
     chunker.write(['"data"'])
     chunker.end()
@@ -1063,7 +1063,7 @@ describe('DatasetWriter', () => {
       post: vi.fn().mockResolvedValue({ id: parentId }),
     })
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
 
     // Act — two separate writes trigger the _chunker early-return on the second call
     chunker.write(['"row1"'])
@@ -1115,7 +1115,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -1142,7 +1142,7 @@ describe('DatasetWriter', () => {
 
     // Act
     const sut = new DatasetWriter(sfPort, dsKey, 'Append')
-    const chunker = await sut.init()
+    const { chunker } = await sut.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
@@ -1196,12 +1196,186 @@ describe('DatasetWriterFactory', () => {
 
     // Act
     const writer = sut.create(dsKey, 'Append', listener, headerProvider)
-    const chunker = await writer.init()
+    const { chunker } = await writer.init()
     chunker.write(['"data"'])
     chunker.end()
     await finished(chunker)
 
     // Assert
     expect(listener.onSinkReady).toHaveBeenCalledWith(parentId)
+  })
+})
+
+describe('DatasetWriter.init with alignment', () => {
+  function makePortWithMetadata(metadataJson: string): SalesforcePort {
+    return makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue(metadataJson),
+      post: vi.fn().mockResolvedValue({ id: parentId }),
+    })
+  }
+
+  const datasetMeta = (names: string[]): string =>
+    JSON.stringify({
+      objects: [{ fields: names.map(n => ({ fullyQualifiedName: n })) }],
+    })
+
+  it('given ELF alignment with matching order, when init called, then returns datasetFields and no layout', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(datasetMeta(['A', 'B', 'OrgId']))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'elf',
+      entryLabel: 'elf:Login',
+      providedFields: ['A', 'B'],
+      augmentColumns: { OrgId: '00D' },
+    })
+
+    // Act
+    const { datasetFields } = await sut.init()
+
+    // Assert
+    expect(datasetFields).toEqual(['A', 'B', 'OrgId'])
+  })
+
+  it('given ELF alignment with order mismatch, when init called, then throws SkipDatasetError naming positional diff', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(datasetMeta(['A', 'B']))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'elf',
+      entryLabel: 'elf:Login',
+      providedFields: ['B', 'A'],
+      augmentColumns: {},
+    })
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toThrow(/Order mismatch/)
+  })
+
+  it('given ELF alignment with empty providedFields (no prior log file), when init called, then does NOT throw and returns undefined datasetFields (audit WARN is authoritative)', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(datasetMeta(['A', 'B']))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'elf',
+      entryLabel: 'elf:Login',
+      providedFields: [],
+      augmentColumns: {},
+    })
+
+    // Act
+    const { datasetFields } = await sut.init()
+
+    // Assert — no schema enforcement happens on this path; pipeline skips projection
+    expect(datasetFields).toBeUndefined()
+  })
+
+  it('given ELF alignment with empty providedFields and legacy metadata without fields array, when init called, then does NOT throw (compatibility with pre-fix datasets)', async () => {
+    // Arrange — legacy metadata has no `fields` key, which would normally be
+    // rejected. Empty providedFields short-circuits before extraction.
+    const legacyMeta = JSON.stringify({
+      objects: [{ name: 'DS', numberOfLinesToIgnore: 1 }],
+    })
+    const sfPort = makePortWithMetadata(legacyMeta)
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'elf',
+      entryLabel: 'elf:Login',
+      providedFields: [],
+      augmentColumns: {},
+    })
+
+    // Act
+    const { datasetFields } = await sut.init()
+
+    // Assert
+    expect(datasetFields).toBeUndefined()
+  })
+
+  it('given CSV alignment with augment overlap in reader fields, when init called, then throws SkipDatasetError naming overlap', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(datasetMeta(['A', 'OrgId']))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'csv',
+      entryLabel: 'csv:file',
+      providedFields: ['A', 'OrgId'],
+      augmentColumns: { OrgId: '00D' },
+    })
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toThrow(/overlap/i)
+  })
+
+  it('given metadata without objects array, when init called, then throws SkipDatasetError', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(JSON.stringify({}))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'sobject',
+      entryLabel: 'sobject:User',
+      providedFields: ['A'],
+      augmentColumns: {},
+    })
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toThrow(/no objects\[0\]\.fields/)
+  })
+
+  it('given metadata with empty fields array, when init called, then throws SkipDatasetError', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(
+      JSON.stringify({ objects: [{ fields: [] }] })
+    )
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'sobject',
+      entryLabel: 'sobject:User',
+      providedFields: ['A'],
+      augmentColumns: {},
+    })
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toThrow(/no objects\[0\]\.fields/)
+  })
+
+  it('given metadata field missing fullyQualifiedName, when init called, then throws SkipDatasetError', async () => {
+    // Arrange — field object without the name key
+    const sfPort = makePortWithMetadata(
+      JSON.stringify({ objects: [{ fields: [{ type: 'Text' }] }] })
+    )
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'sobject',
+      entryLabel: 'sobject:User',
+      providedFields: ['A'],
+      augmentColumns: {},
+    })
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toThrow(/without fullyQualifiedName/)
+  })
+
+  it('given no alignment supplied, when init called, then datasetFields is undefined (legacy path)', async () => {
+    // Arrange — even with valid metadata, no alignment means no enforcement
+    const sfPort = makePortWithMetadata(datasetMeta(['A', 'B']))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+
+    // Act
+    const { datasetFields } = await sut.init()
+
+    // Assert
+    expect(datasetFields).toBeUndefined()
+  })
+
+  it('given SkipDatasetError from projection build, when init called, then error is an instance of SkipDatasetError (pipeline can branch on it)', async () => {
+    // Arrange
+    const sfPort = makePortWithMetadata(datasetMeta(['A']))
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'sobject',
+      entryLabel: 'sobject:User',
+      providedFields: ['A', 'Missing'], // extra → fail
+      augmentColumns: {},
+    })
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toBeInstanceOf(SkipDatasetError)
   })
 })

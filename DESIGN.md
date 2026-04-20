@@ -61,12 +61,16 @@ src/
 ├── commands/dataset/
 │   └── load.ts              # SF CLI command — composition root
 ├── domain/
-│   ├── pipeline.ts          # Core orchestration engine
-│   ├── auditor.ts           # Pre-flight permission checks
-│   ├── watermark.ts         # Value object: ISO 8601 timestamp
-│   ├── watermark-key.ts     # Value object: entry identifier
-│   ├── watermark-store.ts   # Immutable watermark map
-│   └── dataset-key.ts       # Value object: (targetOrg, targetDataset/targetFile) target identity
+│   ├── pipeline.ts               # Core orchestration engine
+│   ├── auditor.ts                # Pre-flight checks (auth, access, schema alignment)
+│   ├── column-name.ts            # parseCsvHeader: BOM/quote/CR/whitespace-safe CSV header parser
+│   ├── csv-quote.ts              # OWASP-safe CSV cell quoting
+│   ├── schema-check.ts           # Set + order comparison of column lists (case-insensitive)
+│   ├── sobject-row-projection.ts # Builds ProjectionLayout for SObject runtime row reordering
+│   ├── watermark.ts              # Value object: ISO 8601 timestamp
+│   ├── watermark-key.ts          # Value object: entry identifier
+│   ├── watermark-store.ts        # Immutable watermark map
+│   └── dataset-key.ts            # Value object: (targetOrg, targetDataset/targetFile) target identity
 ├── ports/
 │   └── types.ts             # Port interfaces + shared types (SF_IDENTIFIER_PATTERN, formatErrorMessage, EntryShape)
 └── adapters/
@@ -76,7 +80,7 @@ src/
     ├── progress-reporter.ts   # CLI progress bar
     ├── readers/
     │   ├── elf-reader.ts      # EventLogFile reader (yields CSV lines)
-    │   ├── sobject-reader.ts  # SObject query reader (yields CSV lines)
+    │   ├── sobject-reader.ts  # SObject query reader (yields CSV lines; applies ProjectionLayout when provided)
     │   └── csv-reader.ts      # Local CSV file reader
     ├── writers/
     │   ├── dataset-writer.ts  # CRM Analytics upload (InsightsExternalData)
@@ -105,9 +109,9 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 | Port               | Purpose                                                                                                                                 | Adapter                                     |
 |--------------------|-----------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------|
 | `SalesforcePort`   | SOQL queries, blob downloads, REST CRUD                                                                                                 | `SalesforceClient`                          |
-| `ReaderPort`       | Fetch data as `AsyncIterable<string[]>` CSV line batches                                                                                | `ElfReader`, `SObjectReader`                |
-| `CreateWriterPort` | Factory for writers per dataset (accepts `ProgressListener` for progress callbacks and `HeaderProvider` for deferred header resolution) | `DatasetWriterFactory`, `FileWriterFactory` |
-| `Writer`           | Init writable stream, finalize, abort on error, skip on no data                                                                         | `DatasetWriter`, `FileWriter`               |
+| `ReaderPort`       | Fetch data as `AsyncIterable<string[]>` CSV line batches. SObject readers implement the optional `project(layout)` method to reorder cells per-row into the dataset's canonical column order | `ElfReader`, `SObjectReader`                |
+| `CreateWriterPort` | Factory for writers per dataset (accepts `ProgressListener`, `HeaderProvider`, and an optional `AlignmentSpec` describing the source columns + augment columns for schema-alignment enforcement) | `DatasetWriterFactory`, `FileWriterFactory` |
+| `Writer`           | Init returns `{ chunker, datasetFields? }` — `datasetFields` is the metadata's canonical column order when alignment enforcement is active (DatasetWriter only); pipeline builds a per-entry `ProjectionLayout` from it. Also: finalize, abort, skip | `DatasetWriter`, `FileWriter`               |
 | `ProgressListener` | Callbacks for sink creation and part upload events                                                                                      | Wired in pipeline                           |
 | `HeaderProvider`   | Deferred header resolution (used by `FileWriter` to write header on first row)                                                          | `createHeaderProvider` closure (domain)     |
 | `StatePort`        | Read/write watermark persistence                                                                                                        | `FileStateManager`                          |
@@ -122,7 +126,11 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 - `EntryShape`, `ElfShape`, `SObjectShape`, `CsvShape` — Entry shape types; entry type is inferred from field presence (`eventLog` for ELF, `sObject` for SObject, `csvFile` for CSV) rather than an explicit `type` discriminator
 - `isElfShape()`, `isSObjectShape()`, `isCsvShape()` — Type guard functions for shape-based discrimination
 - `Operation`, `WatermarkEntry` — Shared type aliases
+- `ReaderKind` — `'sobject' | 'elf' | 'csv'` — discriminator used by `AlignmentSpec` and `AuditEntry`
 - `SkipDatasetError` — Thrown by `Writer.init()` to signal that a dataset should be silently skipped
+- `ProjectionLayout` — `{ targetSize, augmentSlots, outputIndex }` — describes a positional remapping from reader-cell order to dataset-metadata order. Built per-entry by the pipeline from the writer's `datasetFields` + the entry's `AlignmentSpec`; consumed by `SObjectReader.project()`
+- `AlignmentSpec` — `{ readerKind, entryLabel, providedFields, augmentColumns }` — passed to the writer factory. `providedFields` are the source columns: SObject config fields (dotted), ELF `LogFileFieldNames`, or CSV file header
+- `AuditOutcome` — Discriminated union `{ kind: 'pass' | 'warn' | 'fail', message? }` returned by every audit strategy; `runAudit` treats WARN as non-blocking
 
 ## Domain Value Objects
 
@@ -151,15 +159,17 @@ executePipeline()
   │
   ├── For each group (parallel via Promise.all with .catch()):
   │   │
-  │   ├── Init Writer (CRM Analytics: queries metadata, creates parent record; File: opens stream)
-  │   │   └── Throws SkipDatasetError if no existing CRM Analytics metadata found
-  │   ├── Returns shared chunker Writable for the group
+  │   ├── Init Writer (CRM Analytics: queries metadata, validates alignment, returns datasetFields; File: opens stream)
+  │   │   └── Throws SkipDatasetError on no-metadata, set/order mismatch, or augment-vs-reader overlap
+  │   ├── Returns shared chunker Writable + (for datasets) the canonical column order
   │   │
   │   ├── For each reader bundle (entries sharing same reader + watermark):
   │   │   │
-  │   │   ├── Single entry: Fetch via ReaderPort → AugmentTransform → RowCounter → chunker
+  │   │   ├── Build per-entry ProjectionLayout from slot.datasetFields + entry.alignment
+  │   │   ├── Fan-out constraint: reject whole bundle if viable layouts diverge
+  │   │   ├── Call reader.project(layout) once (SObject only) before fetch
+  │   │   ├── Single entry: Fetch via ReaderPort → [Projection baked in for SObject | AugmentTransform for ELF/CSV] → chunker
   │   │   └── Multiple entries: FanOutTransform tees the reader stream to each entry's channel
-  │   │       └── Each channel: AugmentTransform → RowCounter → its group's chunker
   │   │
   │   ├── End chunker stream and await completion
   │   ├── Finalize Writer
@@ -238,6 +248,35 @@ Error isolation: a failed entry aborts the entire group (sink is aborted, all en
 
 Metadata JSON is reused from the most recent completed upload for the dataset. If no prior upload exists, the group is skipped with a `SkipDatasetError`. The `numberOfLinesToIgnore` field is normalized to `0` since fetchers strip headers before streaming.
 
+## Column Alignment
+
+CRM Analytics ingests CSV rows **by position**, not by name. The dataset's metadata defines the canonical column order (`objects[0].fields[*].fullyQualifiedName`); the uploaded payload must emit cells in that exact order. Without explicit alignment, any drift between the source's column order and the dataset's column order silently corrupts every row — values land in the wrong columns and surface only as downstream type-parse errors in the dataflow digest.
+
+The loader enforces alignment in two places:
+
+1. **Audit-time (`--audit`)** — the `schemaAlignment` strategy fetches the dataset's `MetadataJson`, resolves the source's column list (SObject config `fields`, ELF `LogFileFieldNames`, or CSV file header), and compares them via `checkSchemaAlignment`:
+   - **SObject** — set-only check (case-insensitive, with `.`→`_` translation). Order is intentionally ignored because SObject rows are reordered at runtime.
+   - **ELF / CSV** — set **and** order check. ELF/CSV rows are streamed as-is (no per-row reorder) to keep the hot path cheap; any order drift fails the audit with a positional diff.
+   - **Augment overlap** — fails if an `augmentColumns` key also appears in the reader's source columns (the combined provided list would otherwise have duplicates).
+
+2. **Writer init** — `DatasetWriter.init()` reruns the same checks against the freshly-fetched metadata at pipeline start. If anything has drifted between audit and run, the offending entry is skipped per-group (preserving cross-dataset isolation).
+
+For **SObject runtime reordering**, the pipeline builds a `ProjectionLayout` per entry from the writer's returned `datasetFields` plus that entry's `AlignmentSpec`:
+
+```ts
+interface ProjectionLayout {
+  targetSize: number                                  // dataset column count
+  augmentSlots: ReadonlyArray<{ pos: number; quoted: string }>  // pre-quoted augment cells at their target positions
+  outputIndex: Int32Array                             // reader-cell index → target position
+}
+```
+
+`SObjectReader.project(layout)` is called once per reader before the first `fetch()`. The hot path branches once on layout presence; the per-row cost is identical to the pre-fix implementation (`N` cell writes + one join) but with augment cells baked in at their target positions instead of appended as a suffix.
+
+Two entries targeting the same dataset with different augment **values** (e.g. different `sourceOrg.Id`) each get their own layout — structural fields (`outputIndex`, positions) are shared via the writer's `datasetFields`, but `augmentSlots[i].quoted` carries per-entry values.
+
+**Fan-out constraint**: multiple sinks sharing an SObject reader must produce identical projection layouts (structural equality on `targetSize`, `outputIndex`, and augment pos+quoted pairs). Divergent layouts reject the whole bundle with a structured `SkipDatasetError`, leaving the user to split the config entries so their `ReaderKey`s differ.
+
 ## Components
 
 | Component              | Path                                     | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -257,7 +296,8 @@ Metadata JSON is reused from the most recent completed upload for the dataset. I
 | `FileStateManager`     | `adapters/state-manager.ts`              | Atomic read/write of watermark state file (temp file + rename, mode `0o600`)                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `ProgressReporter`     | `adapters/progress-reporter.ts`          | CLI progress display using `cli-progress` MultiBar. Main bar tracks entries, per-group sub-bars show real-time files fetched, rows processed, and parts uploaded. No-op for zero-length phases. Includes workaround for cli-progress non-TTY `bar.start()` bug.                                                                                                                                                                                                                                            |
 | `Pipeline`             | `domain/pipeline.ts`                     | Core orchestration: `executePipeline` (entry point). Three phases: (1) init one `WriterSlot` + `FanInStream` per `DatasetGroup`; (2) process reader bundles concurrently — single-entry path pipes directly, multi-entry path fans out via `FanOutTransform`; (3) await each `FanInStream`-owned chunker drain, then finalize/abort each writer. `DatasetGroup` is a pure data class; `createHeaderProvider` creates the deferred header closure.                                                          |
-| `Auditor`              | `domain/auditor.ts`                      | Builds and runs pre-flight checks decomposed into `buildAuthChecks`, `buildElfChecks`, `buildInsightsChecks`. Deduplicates checks across entries. `runAudit` executes all checks via `Promise.allSettled` with `.catch()` to preserve check labels on rejection.                                                                                                                                                                                                                                           |
+| `Auditor`              | `domain/auditor.ts`                      | Builds and runs pre-flight checks (`authConnectivity`, `elfAccess`, `insightsAccess`, `sobjectReadAccess`, `datasetReady`, `schemaAlignment`). Deduplicates by `(org, key)` across entries. `MetadataJson` is memoised per `(org, dataset)` within a single audit run. `runAudit` executes all checks via `Promise.allSettled`, logs `[PASS]`/`[WARN]`/`[FAIL]` per check, and returns `passed: boolean` (WARN is non-blocking). |
+| Domain helpers         | `domain/{column-name,schema-check,sobject-row-projection,csv-quote}.ts` | Pure utilities: `parseCsvHeader` (CSV-safe header tokenizer), `checkSchemaAlignment` (set + order comparison), `buildSObjectRowProjection` (ProjectionLayout builder with overlap/set rejection), `csvQuote` (OWASP-safe cell quoting). |
 
 ## Config Validation
 

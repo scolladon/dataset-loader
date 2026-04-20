@@ -1,4 +1,4 @@
-import { csvQuote } from './csv-quote.js'
+import { csvQuote } from '../../domain/csv-quote.js'
 
 export function buildAugmentSuffix(columns: Record<string, string>): string {
   const values = Object.values(columns)

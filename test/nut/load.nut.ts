@@ -239,8 +239,19 @@ describe('DatasetLoad NUT', () => {
 
   const METADATA_BLOB_URL =
     '/services/data/v65.0/sobjects/InsightsExternalData/06Vmeta/MetadataJson'
+  // Metadata served for both DS (ELF) and DS2 (SObject) queries. SObject
+  // tests exercise the runtime projection and need `fields` matching the
+  // SObject entry's fields exactly (Id, Name). ELF tests have empty
+  // providedFields (the fake doesn't route LogFileFieldNames) so they
+  // short-circuit in validateAlignment before touching this list.
   const DEFAULT_METADATA_JSON = JSON.stringify({
-    objects: [{ name: 'DS', numberOfLinesToIgnore: 1 }],
+    objects: [
+      {
+        name: 'DS',
+        numberOfLinesToIgnore: 1,
+        fields: [{ fullyQualifiedName: 'Id' }, { fullyQualifiedName: 'Name' }],
+      },
+    ],
   })
 
   function defaultMetadataQueryResponse() {
@@ -1191,7 +1202,7 @@ describe('DatasetLoad NUT', () => {
           targetOrg: 'ana-org',
           targetDataset: 'CaseDS',
           sObject: 'Case',
-          fields: ['Id', 'Subject'],
+          fields: ['Id', 'Name'],
           dateField: 'LastModifiedDate',
         }),
         elfEntry({
@@ -1233,7 +1244,7 @@ describe('DatasetLoad NUT', () => {
             defaultSObjectQueryResponse([
               {
                 Id: '500000000000001',
-                Subject: 'Test Case',
+                Name: 'Test Case',
                 LastModifiedDate: LOG_DATE_MAR_01,
               },
             ])
