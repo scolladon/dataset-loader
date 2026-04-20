@@ -31,7 +31,6 @@ export interface AuditEntry {
 }
 
 interface AuditContext {
-  readonly metadataCache: Map<string, Promise<string | null>>
   // Needed by schemaAlignment for ELF — the strategy's bound `sfPort` is the
   // target org's connection, but `EventLogFile.LogFileFieldNames` lives in
   // the source org. We look up the source port from this map at evaluate time.
@@ -104,15 +103,15 @@ const datasetReady: AuditCheckStrategy = {
       ? [{ org: e.targetOrg, key: e.targetDataset }]
       : [],
   label: (org, key) => `${org}: dataset '${key}' ready`,
-  evaluate: async (sfPort, key, entry, ctx) => {
-    const metadata = await fetchMetadataMemoised(
-      sfPort,
-      key,
-      ctx,
-      /* v8 ignore next -- selector guarantees targetOrg is defined */
-      entry.targetOrg ?? '<unknown>'
+  evaluate: async (sfPort, key) => {
+    // Fast path: verify at least one completed-status record exists. The
+    // actual metadata blob is fetched (and memoised) by schemaAlignment.
+    const result: QueryResult<unknown> = await sfPort.query(
+      `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${key}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
     )
-    return metadata ? pass() : fail(`Dataset '${key}' has no prior metadata`)
+    return result.records.length > 0
+      ? pass()
+      : fail(`Dataset '${key}' has no prior metadata`)
   },
 }
 
@@ -123,13 +122,7 @@ const schemaAlignment: AuditCheckStrategy = {
       : [],
   label: (org, key) => `${org}: dataset '${key}' schema alignment`,
   evaluate: async (sfPort, key, entry, ctx) => {
-    const metadata = await fetchMetadataMemoised(
-      sfPort,
-      key,
-      ctx,
-      /* v8 ignore next -- selector guarantees targetOrg is defined */
-      entry.targetOrg ?? '<unknown>'
-    )
+    const metadata = await fetchMetadata(sfPort, key)
     if (!metadata) {
       // datasetReady already FAILed; nothing to compare against
       return pass()
@@ -302,22 +295,6 @@ function extractDatasetFields(metadataJson: string): readonly string[] | null {
   }
 }
 
-async function fetchMetadataMemoised(
-  sfPort: SalesforcePort,
-  datasetName: string,
-  ctx: AuditContext,
-  org: string
-): Promise<string | null> {
-  // Cache key must include the target org — two different orgs could have
-  // unrelated datasets sharing the same EdgemartAlias.
-  const key = `${org}::${datasetName}`
-  const cached = ctx.metadataCache.get(key)
-  if (cached !== undefined) return cached
-  const promise = fetchMetadata(sfPort, datasetName)
-  ctx.metadataCache.set(key, promise)
-  return promise
-}
-
 async function fetchMetadata(
   sfPort: SalesforcePort,
   datasetName: string
@@ -345,7 +322,7 @@ export function buildAuditChecks(
   entries: readonly AuditEntry[],
   sfPorts: ReadonlyMap<string, SalesforcePort>
 ): readonly AuditCheck[] {
-  const ctx: AuditContext = { metadataCache: new Map(), sfPorts }
+  const ctx: AuditContext = { sfPorts }
   return STRATEGIES.flatMap(s => buildChecks(entries, s, sfPorts, ctx))
 }
 

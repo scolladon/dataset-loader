@@ -1124,8 +1124,9 @@ describe('schemaAlignment strategy', () => {
     if (sut.kind === 'fail') expect(sut.message).toMatch(/objects\[0\]\.fields/)
   })
 
-  it('given both datasetReady and schemaAlignment targeting the same dataset, when both execute, then MetadataJson is fetched once (cache hit path)', async () => {
-    // Arrange
+  it('given datasetReady runs ahead of schemaAlignment, when both execute, then each issues its own MetadataJson SOQL (no shared cache)', async () => {
+    // Arrange — datasetReady uses a fast count-only query; schemaAlignment
+    // fetches the blob. They are independent; each check makes its own call.
     const spy = { metadataCalls: 0 }
     const entries: AuditEntry[] = [
       {
@@ -1143,16 +1144,19 @@ describe('schemaAlignment strategy', () => {
       ['ana', metadataPort({ metadataJson: fields('UserId'), spy })],
     ])
 
-    // Act — run BOTH datasetReady and schemaAlignment for DS_X sequentially.
-    // The second call hits the memoization cache (line 315's branch).
+    // Act
     const checks = buildAuditChecks(entries, sfPorts)
     const readyCheck = checks.find(c => c.label.includes("' ready"))!
     const schemaCheck = checks.find(c => c.label.includes('schema alignment'))!
-    await readyCheck.execute()
-    await schemaCheck.execute()
+    const [r1, r2] = await Promise.all([
+      readyCheck.execute(),
+      schemaCheck.execute(),
+    ])
 
-    // Assert — exactly one metadata SOQL call across both checks
-    expect(spy.metadataCalls).toBe(1)
+    // Assert — both pass; two independent metadata queries happened
+    expect(r1.kind).toBe('pass')
+    expect(r2.kind).toBe('pass')
+    expect(spy.metadataCalls).toBe(2)
   })
 
   it('given CSV entry with missing file path, when running schema check, then FAIL', async () => {

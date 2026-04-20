@@ -1255,7 +1255,7 @@ describe('DatasetWriter.init with alignment', () => {
     await expect(sut.init()).rejects.toThrow(/Order mismatch/)
   })
 
-  it('given ELF alignment with empty providedFields (no prior log file), when init called, then does NOT throw (audit WARN is authoritative)', async () => {
+  it('given ELF alignment with empty providedFields (no prior log file), when init called, then does NOT throw and returns undefined datasetFields (audit WARN is authoritative)', async () => {
     // Arrange
     const sfPort = makePortWithMetadata(datasetMeta(['A', 'B']))
     const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
@@ -1268,8 +1268,29 @@ describe('DatasetWriter.init with alignment', () => {
     // Act
     const { datasetFields } = await sut.init()
 
+    // Assert — no schema enforcement happens on this path; pipeline skips projection
+    expect(datasetFields).toBeUndefined()
+  })
+
+  it('given ELF alignment with empty providedFields and legacy metadata without fields array, when init called, then does NOT throw (compatibility with pre-fix datasets)', async () => {
+    // Arrange — legacy metadata has no `fields` key, which would normally be
+    // rejected. Empty providedFields short-circuits before extraction.
+    const legacyMeta = JSON.stringify({
+      objects: [{ name: 'DS', numberOfLinesToIgnore: 1 }],
+    })
+    const sfPort = makePortWithMetadata(legacyMeta)
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append', undefined, {
+      readerKind: 'elf',
+      entryLabel: 'elf:Login',
+      providedFields: [],
+      augmentColumns: {},
+    })
+
+    // Act
+    const { datasetFields } = await sut.init()
+
     // Assert
-    expect(datasetFields).toEqual(['A', 'B'])
+    expect(datasetFields).toBeUndefined()
   })
 
   it('given CSV alignment with augment overlap in reader fields, when init called, then throws SkipDatasetError naming overlap', async () => {

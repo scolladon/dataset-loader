@@ -393,10 +393,23 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     // (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`) at config parse (config-loader.ts:177),
     // interval is `z.enum(['Daily','Hourly'])` (config-loader.ts:178) — both
     // exclude the single-quote character that would enable SOQL injection.
-    const result = await srcPort.query<{ LogFileFieldNames: string | null }>(
-      `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${elfEntry.eventLog}' AND Interval = '${elfEntry.interval}' ORDER BY LogDate DESC LIMIT 1`
-    )
-    const raw = result.records[0]?.LogFileFieldNames
+    //
+    // Errors (permissions, connectivity) are swallowed here: the audit phase
+    // is the authoritative place to surface them. Returning empty
+    // providedFields lets the writer-init short-circuit the schema check
+    // and lets the subsequent fetch() fail per-entry instead of killing
+    // the whole run.
+    let raw: string | null | undefined
+    try {
+      const result = await srcPort.query<{
+        LogFileFieldNames: string | null
+      }>(
+        `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${elfEntry.eventLog}' AND Interval = '${elfEntry.interval}' ORDER BY LogDate DESC LIMIT 1`
+      )
+      raw = result.records[0]?.LogFileFieldNames
+    } catch {
+      return []
+    }
     return raw ? parseCsvHeader(raw) : []
   }
 

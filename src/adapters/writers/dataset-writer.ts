@@ -371,13 +371,14 @@ export class DatasetWriter implements Writer {
         `No existing metadata for dataset '${this.datasetName}', skipping`
       )
     }
-    const { patched, datasetFields } = this.parseMetadata(metadata)
-    if (this.alignment) {
-      // Validate alignment against dataset metadata. For SObject, the same
-      // check runs again at project-build time in the pipeline (cheap; builds
-      // the per-entry layout). For ELF/CSV, this is the authoritative check.
-      this.validateAlignment(datasetFields, this.alignment)
-    }
+    const { patched, parsed } = this.parseMetadata(metadata)
+    // Dataset fields are extracted lazily — only when alignment actually
+    // requires them (SObject always; ELF/CSV only with non-empty
+    // providedFields). Legacy metadata without a `fields` array is still
+    // accepted for the no-alignment and empty-providedFields paths.
+    const datasetFields = this.alignment
+      ? this.validateAlignment(parsed, this.alignment)
+      : undefined
     this.lazyWritable = new LazyGzipChunkingWritable(
       this.sfPort,
       this.basePath,
@@ -386,19 +387,17 @@ export class DatasetWriter implements Writer {
       patched,
       this.listener
     )
-    return {
-      chunker: this.lazyWritable,
-      datasetFields: this.alignment ? datasetFields : undefined,
-    }
+    return { chunker: this.lazyWritable, datasetFields }
   }
 
   private validateAlignment(
-    datasetFields: readonly string[],
+    parsed: DatasetMetadata,
     alignment: AlignmentSpec
-  ): void {
+  ): readonly string[] | undefined {
     if (alignment.readerKind === 'sobject') {
-      // Dry-run: buildSObjectRowProjection throws on mismatch. We discard
-      // the layout; the pipeline rebuilds one per-entry when calling project().
+      // SObject always needs dataset fields — pipeline rebuilds the per-entry
+      // layout via buildSObjectRowProjection.
+      const datasetFields = this.extractDatasetFields(parsed)
       buildSObjectRowProjection({
         datasetName: this.datasetName,
         entryLabel: alignment.entryLabel,
@@ -406,7 +405,7 @@ export class DatasetWriter implements Writer {
         augmentColumns: alignment.augmentColumns,
         datasetFields,
       })
-      return
+      return datasetFields
     }
     // ELF/CSV: reject augment-vs-reader overlap before the order check so the
     // user sees a precise diagnostic instead of a generic set mismatch.
@@ -414,8 +413,11 @@ export class DatasetWriter implements Writer {
     if (alignment.providedFields.length === 0) {
       // ELF with no prior log file, or empty CSV header — schema check is
       // not actionable here; the audit's WARN is the authoritative signal.
-      return
+      // Legacy datasets without a `fields` metadata array are accepted on
+      // this path.
+      return undefined
     }
+    const datasetFields = this.extractDatasetFields(parsed)
     const provided = [
       ...alignment.providedFields,
       ...Object.keys(alignment.augmentColumns),
@@ -428,6 +430,7 @@ export class DatasetWriter implements Writer {
       checkOrder: true,
     })
     if (!result.ok) throw new SkipDatasetError(result.reason)
+    return datasetFields
   }
 
   private rejectAugmentOverlap(alignment: AlignmentSpec): void {
@@ -479,7 +482,7 @@ export class DatasetWriter implements Writer {
 
   private parseMetadata(metadataJson: string): {
     patched: string
-    datasetFields: readonly string[]
+    parsed: DatasetMetadata
   } {
     try {
       const parsed: unknown = JSON.parse(metadataJson)
@@ -500,7 +503,7 @@ export class DatasetWriter implements Writer {
       }))
       return {
         patched: JSON.stringify({ ...meta, objects }),
-        datasetFields: this.extractDatasetFields(meta),
+        parsed: meta,
       }
     } catch (err: unknown) {
       /* v8 ignore next -- JSON.parse and our own guards always throw Error */
@@ -512,7 +515,6 @@ export class DatasetWriter implements Writer {
   }
 
   private extractDatasetFields(meta: DatasetMetadata): readonly string[] {
-    if (!this.alignment) return []
     const obj0 = meta.objects?.[0]
     if (!obj0 || !Array.isArray(obj0.fields) || obj0.fields.length === 0) {
       throw new SkipDatasetError(
