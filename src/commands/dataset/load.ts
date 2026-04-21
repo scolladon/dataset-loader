@@ -1,7 +1,8 @@
-import { Org } from '@salesforce/core'
+import { Messages, Org } from '@salesforce/core'
 import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
 import {
   type ConfigEntry,
+  type ElfEntry,
   entryLabel,
   isCsvEntry,
   isElfEntry,
@@ -9,6 +10,7 @@ import {
   parseConfig,
   type ResolvedEntry,
   resolveConfig,
+  type SObjectEntry,
 } from '../../adapters/config-loader.js'
 import { buildAugmentHeaderSuffix } from '../../adapters/pipeline/augment-transform.js'
 import { ProgressReporter } from '../../adapters/progress-reporter.js'
@@ -26,8 +28,10 @@ import {
 } from '../../domain/auditor.js'
 import { parseCsvHeader } from '../../domain/column-name.js'
 import { DatasetKey } from '../../domain/dataset-key.js'
+import { DateBounds } from '../../domain/date-bounds.js'
 import { executePipeline, type PipelineEntry } from '../../domain/pipeline.js'
 import { ReaderKey } from '../../domain/reader-key.js'
+import { type Watermark } from '../../domain/watermark.js'
 import { WatermarkKey } from '../../domain/watermark-key.js'
 import { type WatermarkStore } from '../../domain/watermark-store.js'
 import {
@@ -39,6 +43,9 @@ import {
   type SalesforcePort,
   type StatePort,
 } from '../../ports/types.js'
+
+Messages.importMessagesDirectoryFromMetaUrl(import.meta.url)
+const messages = Messages.loadMessages('dataset-loader', 'dataset.load')
 
 interface DatasetLoadResult {
   entriesProcessed: number
@@ -59,34 +66,36 @@ interface PipelineEntrySlot {
 }
 
 export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
-  public static readonly summary =
-    'Load Event Log Files and SObject data into CRM Analytics datasets'
-  public static readonly examples = [
-    '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --config-file my-config.json --dry-run',
-  ]
+  public static readonly summary = messages.getMessage('summary')
+  public static readonly examples = messages.getMessages('examples')
 
   public static readonly flags = {
     'config-file': Flags.file({
       char: 'c',
-      summary: 'Path to config JSON',
+      summary: messages.getMessage('flags.config-file.summary'),
       default: 'dataset-load.config.json',
     }),
     'state-file': Flags.file({
       char: 's',
-      summary: 'Path to watermark state file',
+      summary: messages.getMessage('flags.state-file.summary'),
       default: '.dataset-load.state.json',
     }),
     audit: Flags.boolean({
-      summary: 'Pre-flight checks only (auth, connectivity, permissions)',
+      summary: messages.getMessage('flags.audit.summary'),
       default: false,
     }),
     'dry-run': Flags.boolean({
-      summary: 'Show plan without executing',
+      summary: messages.getMessage('flags.dry-run.summary'),
       default: false,
     }),
     entry: Flags.string({
-      summary: 'Process only the entry with this name',
+      summary: messages.getMessage('flags.entry.summary'),
+    }),
+    'start-date': Flags.string({
+      summary: messages.getMessage('flags.start-date.summary'),
+    }),
+    'end-date': Flags.string({
+      summary: messages.getMessage('flags.end-date.summary'),
     }),
   }
 
@@ -94,6 +103,8 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     const { flags } = await this.parse(DatasetLoad)
     const sfPorts = new Map<string, SalesforcePort>()
     const logger = this.createLogger()
+
+    const bounds = this.parseBounds(flags['start-date'], flags['end-date'])
 
     const resolvedEntries = await this.loadAndResolveConfig(
       flags['config-file'],
@@ -107,9 +118,30 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     const state = new FileStateManager(flags['state-file'])
     const watermarks = await state.read()
 
-    if (flags['dry-run']) return this.handleDryRun(filtered, watermarks)
+    if (flags['dry-run']) return this.handleDryRun(filtered, watermarks, bounds)
 
-    return this.handlePipeline(filtered, sfPorts, watermarks, state, logger)
+    return this.handlePipeline(
+      filtered,
+      sfPorts,
+      watermarks,
+      state,
+      logger,
+      bounds
+    )
+  }
+
+  private parseBounds(
+    start: string | undefined,
+    end: string | undefined
+  ): DateBounds {
+    try {
+      return DateBounds.from(start, end)
+    } catch (err) {
+      // this.error is `never`-returning but TypeScript doesn't always infer
+      // that in all code paths, so we also throw to make the control flow
+      // explicit for the caller.
+      this.error(formatErrorMessage(err))
+    }
   }
 
   private createLogger(): LoggerPort {
@@ -231,14 +263,29 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
 
   private handleDryRun(
     entries: ResolvedEntry[],
-    watermarks: WatermarkStore
+    watermarks: WatermarkStore,
+    bounds: DateBounds
   ): DatasetLoadResult {
+    this.emitBoundsWarnings(entries, watermarks, bounds)
     this.log('Dry run — planned entries:')
+    if (bounds.isEmpty()) {
+      for (const { entry } of entries) {
+        const wk = WatermarkKey.fromEntry(entry)
+        const wm = watermarks.get(wk)?.toString() ?? '(none)'
+        const dk = DatasetKey.fromEntry(entry)
+        this.log(`  ${entryLabel(entry)} → ${dk.toString()} (watermark: ${wm})`)
+      }
+      return {
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      }
+    }
+    this.log(`Configured window: ${bounds.toString()}`)
+    this.log('')
     for (const { entry } of entries) {
-      const wk = WatermarkKey.fromEntry(entry)
-      const wm = watermarks.get(wk)?.toString() ?? '(none)'
-      const dk = DatasetKey.fromEntry(entry)
-      this.log(`  ${entryLabel(entry)} → ${dk.toString()} (watermark: ${wm})`)
+      this.renderDryRunEntry(entry, watermarks, bounds)
     }
     return {
       entriesProcessed: 0,
@@ -248,18 +295,124 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     }
   }
 
+  private renderDryRunEntry(
+    entry: ConfigEntry,
+    watermarks: WatermarkStore,
+    bounds: DateBounds
+  ): void {
+    const dk = DatasetKey.fromEntry(entry)
+    this.log(`  ${entryLabel(entry)} → ${dk.toString()}`)
+    if (isCsvEntry(entry)) {
+      this.log('    watermark: n/a (CSV entry — bounds do not apply)')
+      return
+    }
+    const wm = watermarks.get(WatermarkKey.fromEntry(entry))
+    this.log(`    watermark: ${wm?.toString() ?? '(none)'}`)
+    const dateField = isElfEntry(entry) ? 'LogDate' : entry.dateField
+    const lower = bounds.lowerConditionFor(dateField, wm)
+    const upper = bounds.upperConditionFor(dateField)
+    const conds = [lower, upper].filter(Boolean)
+    /* v8 ignore next -- unreachable: this render path is only called from
+       handleDryRun when `!bounds.isEmpty()`, which means SD or ED is set.
+       SD set → lower = `DF >= SD` (defined); ED set → upper = `DF <= ED`
+       (defined). At least one is always present, so conds.length >= 1. */
+    // Stryker disable next-line ConditionalExpression: equivalent mutant —
+    // this branch is structurally unreachable (see v8 ignore rationale above).
+    if (conds.length === 0) return
+    const soql = conds.join(' AND ')
+    const annotation = this.dryRunAnnotation(entry, wm, bounds)
+    this.log(`    effective: ${soql}${annotation}`)
+  }
+
+  // Precondition: `entry` is non-CSV (caller `renderDryRunEntry` returns
+  // early on CSV before reaching here).
+  private dryRunAnnotation(
+    entry: ElfEntry | SObjectEntry,
+    wm: Watermark | undefined,
+    bounds: DateBounds
+  ): string {
+    if (bounds.rewindsBelow(wm)) {
+      return '  (REWIND: SD before WM — watermark may regress)'
+    }
+    if (bounds.leavesHoleAbove(wm)) {
+      return '  (HOLE: SD after WM — records in the gap will never be back-filled)'
+    }
+    if (bounds.matchesWatermark(wm) && entry.operation === 'Append') {
+      return '  (BOUNDARY: SD == WM — boundary record will be re-appended (duplicate))'
+    }
+    if (bounds.endsBeforeWatermark(wm)) {
+      return '  (EMPTY: end-date before watermark — no records will load)'
+    }
+    return ''
+  }
+
+  private emitBoundsWarnings(
+    entries: ResolvedEntry[],
+    watermarks: WatermarkStore,
+    bounds: DateBounds
+  ): void {
+    // Stryker disable next-line ConditionalExpression: equivalent mutant.
+    // Removing this early-return yields observationally identical behavior
+    // when bounds are empty: with no startAt/endAt, all four inner
+    // predicates (rewindsBelow / leavesHoleAbove / matchesWatermark /
+    // endsBeforeWatermark) always return false, and Zod guarantees
+    // `entries.length >= 1` so the `nonCsv.length === 0` branch cannot
+    // falsely fire a "no effect" warning. The early-return is retained
+    // for readability and to short-circuit the no-op hot path.
+    if (bounds.isEmpty()) return
+    const nonCsv = entries.filter(({ entry }) => !isCsvEntry(entry))
+    if (nonCsv.length === 0) {
+      this.warn(
+        '--start-date / --end-date provided but all selected entries are CSV; bounds have no effect. CSV entries are streamed in full.'
+      )
+      return
+    }
+    for (const { entry } of nonCsv) {
+      const wm = watermarks.get(WatermarkKey.fromEntry(entry))
+      const label = entryLabel(entry)
+      if (bounds.rewindsBelow(wm)) {
+        this.warn(
+          `[${label}] REWIND: --start-date is before watermark ${wm}; previously-loaded records will be re-loaded; watermark may regress.`
+        )
+      } else if (bounds.leavesHoleAbove(wm)) {
+        this.warn(
+          `[${label}] HOLE: --start-date is after watermark ${wm}; records between the watermark and --start-date will be skipped this run AND by subsequent incremental runs (watermark will jump past the gap as soon as any in-window record loads).`
+        )
+      } else if (bounds.matchesWatermark(wm) && entry.operation === 'Append') {
+        this.warn(
+          `[${label}] BOUNDARY: --start-date equals watermark ${wm}; under operation Append the boundary record will be appended again (duplicate row). Bump --start-date past the watermark, or use operation Overwrite.`
+        )
+      } else if (bounds.endsBeforeWatermark(wm)) {
+        // Only reachable when SD is absent: `DateBounds.from` enforces
+        // SD <= ED, so when SD is set the SD-branches above always fire
+        // first (covering SD < WM, SD == WM, and SD > WM) or the window
+        // is non-empty (ED >= SD implies ED >= WM when SD >= WM).
+        this.warn(
+          `[${label}] EMPTY: --end-date is before watermark ${wm}; query window is empty — no records will load. To replay this range, use a separate --state-file (see RUN_BOOK).`
+        )
+      }
+    }
+  }
+
   private async handlePipeline(
     entries: ResolvedEntry[],
     sfPorts: Map<string, SalesforcePort>,
     watermarks: WatermarkStore,
     state: StatePort,
-    logger: LoggerPort
+    logger: LoggerPort,
+    bounds: DateBounds
   ): Promise<DatasetLoadResult> {
+    this.emitBoundsWarnings(entries, watermarks, bounds)
     // Two-pass entry build: sync dedupe of readers (avoids Map races under
     // concurrent awaits), then async resolution of providedFields per entry.
     const sharedReaders = new Map<string, ReaderPort>()
     const pass1 = entries.map(resolvedEntry =>
-      this.buildPipelineEntryStatic(resolvedEntry, sfPorts, sharedReaders)
+      this.buildPipelineEntryStatic(
+        resolvedEntry,
+        sfPorts,
+        sharedReaders,
+        bounds
+      )
     )
     const pipelineEntries: PipelineEntry[] = await Promise.all(
       pass1.map(slot => this.resolveAlignment(slot, sfPorts))
@@ -293,7 +446,8 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   private buildPipelineEntryStatic(
     resolvedEntry: ResolvedEntry,
     sfPorts: Map<string, SalesforcePort>,
-    sharedReaders: Map<string, ReaderPort>
+    sharedReaders: Map<string, ReaderPort>,
+    bounds: DateBounds
   ): PipelineEntrySlot {
     const { entry, index, augmentColumns } = resolvedEntry
 
@@ -309,13 +463,14 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     const srcPort = sfPorts.get(entry.sourceOrg)
     if (!srcPort)
       throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
-    const readerKey = this.createReaderKey(entry)
+    const readerKey = this.createReaderKey(entry, bounds)
     const readerCacheKey = readerKey.toString()
     const fetcher = this.getOrCreateReader(
       readerCacheKey,
       sharedReaders,
       entry,
-      srcPort
+      srcPort,
+      bounds
     )
     return { resolvedEntry, index, readerKey, fetcher, augmentColumns }
   }
@@ -419,18 +574,24 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     cacheKey: string,
     cache: Map<string, ReaderPort>,
     entry: ConfigEntry,
-    srcPort: SalesforcePort
+    srcPort: SalesforcePort,
+    bounds: DateBounds
   ): ReaderPort {
     const existing = cache.get(cacheKey)
     if (existing) return existing
-    const reader = this.createFetcher(entry, srcPort)
+    const reader = this.createFetcher(entry, srcPort, bounds)
     cache.set(cacheKey, reader)
     return reader
   }
 
-  private createReaderKey(entry: ConfigEntry): ReaderKey {
+  private createReaderKey(entry: ConfigEntry, bounds: DateBounds): ReaderKey {
     if (isElfEntry(entry)) {
-      return ReaderKey.forElf(entry.sourceOrg, entry.eventLog, entry.interval)
+      return ReaderKey.forElf(
+        entry.sourceOrg,
+        entry.eventLog,
+        entry.interval,
+        bounds
+      )
     }
     if (isCsvEntry(entry)) {
       return ReaderKey.forCsv(entry.csvFile)
@@ -441,19 +602,21 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       entry.fields,
       entry.dateField,
       entry.where,
-      entry.limit
+      entry.limit,
+      bounds
     )
   }
 
   private createFetcher(
     entry: ConfigEntry,
-    sfPort: SalesforcePort
+    sfPort: SalesforcePort,
+    bounds: DateBounds
   ): ReaderPort {
     if (isCsvEntry(entry)) {
       return new CsvReader(entry.csvFile)
     }
     if (isElfEntry(entry)) {
-      return new ElfReader(sfPort, entry.eventLog, entry.interval)
+      return new ElfReader(sfPort, entry.eventLog, entry.interval, bounds)
     }
     return new SObjectReader(sfPort, {
       sobject: entry.sObject,
@@ -461,6 +624,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       dateField: entry.dateField,
       where: entry.where,
       queryLimit: entry.limit,
+      bounds,
     })
   }
 

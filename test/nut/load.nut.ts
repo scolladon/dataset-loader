@@ -1773,4 +1773,564 @@ describe('DatasetLoad NUT', () => {
       expect(readFileSync(out2, 'utf-8')).toContain('Login')
     })
   })
+
+  describe('date bounds (--start-date / --end-date)', () => {
+    function seedState(path: string, watermarks: Record<string, string>): void {
+      writeFileSync(
+        path,
+        JSON.stringify({ watermarks }, null, 2) + '\n',
+        'utf-8'
+      )
+    }
+
+    // Capture log/warn emitted by a run; restores the prototype even on
+    // failure. Avoids the repeated save-patch-restore boilerplate and
+    // guarantees the prototype is never left mutated across tests.
+    async function captureOutput(
+      run: () => Promise<unknown>
+    ): Promise<{ logs: string[]; warns: string[] }> {
+      const logs: string[] = []
+      const warns: string[] = []
+      const originalLog = DatasetLoad.prototype.log
+      const originalWarn = DatasetLoad.prototype.warn
+      DatasetLoad.prototype.log = function (msg: string) {
+        logs.push(msg)
+      }
+      DatasetLoad.prototype.warn = function (msg: string) {
+        warns.push(typeof msg === 'string' ? msg : String(msg))
+        return msg as never
+      }
+      try {
+        await run()
+      } finally {
+        DatasetLoad.prototype.log = originalLog
+        DatasetLoad.prototype.warn = originalWarn
+      }
+      return { logs, warns }
+    }
+
+    it('given malformed --start-date, when running, then exits with error mentioning the flag', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let caught: unknown
+      try {
+        await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--start-date',
+          'not-a-date',
+        ])
+      } catch (err) {
+        caught = err
+      }
+
+      // Assert
+      expect(caught).toBeDefined()
+      expect(String((caught as Error).message)).toContain('--start-date')
+      expect(String((caught as Error).message)).toContain('not-a-date')
+    })
+
+    it('given calendar-invalid --start-date (Feb 30), when running, then exits with calendar error', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let caught: unknown
+      try {
+        await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--start-date',
+          '2026-02-30T00:00:00.000Z',
+        ])
+      } catch (err) {
+        caught = err
+      }
+
+      // Assert
+      expect(caught).toBeDefined()
+      expect(String((caught as Error).message)).toContain(
+        'not a valid calendar date'
+      )
+    })
+
+    it('given --start-date after --end-date, when running, then exits with ordering error', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let caught: unknown
+      try {
+        await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--start-date',
+          '2026-03-01T00:00:00.000Z',
+          '--end-date',
+          '2026-01-01T00:00:00.000Z',
+        ])
+      } catch (err) {
+        caught = err
+      }
+
+      // Assert
+      expect(caught).toBeDefined()
+      expect(String((caught as Error).message)).toContain('must be <=')
+    })
+
+    it('given dry-run with no bounds, when running, then preserves legacy single-line output format and emits no bounds warnings', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert — legacy format: single line per entry with "(watermark: (none))".
+      // No seedState was set, so wm is undefined → `?? '(none)'` fallback
+      // must fire. Asserting the exact literal "(watermark: (none))" kills
+      // the StringLiteral mutation replacing '(none)' with "".
+      expect(logs.filter(l => l.includes('(watermark: (none))')).length).toBe(1)
+      expect(logs.some(l => l.includes('Configured window'))).toBe(false)
+      expect(logs.some(l => l.includes('effective:'))).toBe(false)
+      // Kills `if (bounds.isEmpty()) return` → `true` mutation in
+      // emitBoundsWarnings: no REWIND/HOLE/BOUNDARY/EMPTY warning should
+      // fire when bounds are empty.
+      expect(
+        warns.filter(
+          w =>
+            w.includes('REWIND') ||
+            w.includes('HOLE') ||
+            w.includes('BOUNDARY') ||
+            w.includes('EMPTY')
+        ).length
+      ).toBe(0)
+    })
+
+    it('given dry-run with bounds, when running, then prints full multi-line format with exact header, blank separator, entry line, watermark, effective, and returns zeroed result', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let result: unknown
+      const { logs } = await captureOutput(async () => {
+        result = await runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          '2026-01-01T00:00:00.000Z',
+          '--end-date',
+          '2026-01-31T23:59:59.999Z',
+        ])
+      })
+
+      // Assert — the `logs` array is the ordered sequence of `this.log`
+      // calls. These exact-position / exact-text assertions kill:
+      //   - StringLiteral mutations on each logged line (including the
+      //     blank separator);
+      //   - ObjectLiteral mutation on handleDryRun's return value;
+      //   - MethodExpression mutation removing `.filter(Boolean)` from
+      //     the `[lower, upper]` conds (would inject `undefined` into
+      //     the effective line).
+      const header = 'Dry run — planned entries:'
+      const configured =
+        'Configured window: [2026-01-01T00:00:00.000Z, 2026-01-31T23:59:59.999Z]'
+      const entryLine = '  accounts → org:ana-org:DS2'
+      const watermarkLine = '    watermark: (none)'
+      const effectiveLine =
+        '    effective: LastModifiedDate >= 2026-01-01T00:00:00.000Z AND LastModifiedDate <= 2026-01-31T23:59:59.999Z'
+      expect(logs).toEqual([
+        header,
+        configured,
+        '', // blank separator between configured and first entry
+        entryLine,
+        watermarkLine,
+        effectiveLine,
+      ])
+      // Kills the ObjectLiteral mutation on `handleDryRun`'s return
+      // value: the dry-run must return a zeroed result shape.
+      expect(result).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given dry-run with start-date before existing watermark, when running, then emits exact REWIND warning text and annotation, no "undefined" leak', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          '2026-01-01T00:00:00.000Z',
+        ])
+      )
+
+      // Assert — exact warning text kills StringLiteral mutations on
+      // every substring of the warning template literal.
+      expect(warns).toEqual([
+        '[accounts] REWIND: --start-date is before watermark 2026-02-10T00:00:00.000Z; previously-loaded records will be re-loaded; watermark may regress.',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate >= 2026-01-01T00:00:00.000Z  (REWIND: SD before WM — watermark may regress)'
+        ).length
+      ).toBe(1)
+      // Kills `.filter(Boolean)` removal mutation on `[lower, upper]`:
+      // with SD-only, upper is undefined; without the filter the
+      // effective line would contain "undefined".
+      expect(logs.some(l => l.includes('undefined'))).toBe(false)
+    })
+
+    it('given dry-run with start-date after existing watermark, when running, then emits exact HOLE warning text and annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          '2026-03-01T00:00:00.000Z',
+        ])
+      )
+
+      // Assert — exact text kills warning-string mutations
+      expect(warns).toEqual([
+        '[accounts] HOLE: --start-date is after watermark 2026-02-10T00:00:00.000Z; records between the watermark and --start-date will be skipped this run AND by subsequent incremental runs (watermark will jump past the gap as soon as any in-window record loads).',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate >= 2026-03-01T00:00:00.000Z  (HOLE: SD after WM — records in the gap will never be back-filled)'
+        ).length
+      ).toBe(1)
+      expect(logs.some(l => l.includes('undefined'))).toBe(false)
+    })
+
+    it('given dry-run with end-date before watermark and no start-date, when running, then emits exact EMPTY warning text and annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: '2026-04-01T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--end-date',
+          '2026-01-31T23:59:59.999Z',
+        ])
+      )
+
+      // Assert — exact text kills warning-string mutations
+      expect(warns).toEqual([
+        '[accounts] EMPTY: --end-date is before watermark 2026-04-01T00:00:00.000Z; query window is empty — no records will load. To replay this range, use a separate --state-file (see RUN_BOOK).',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate > 2026-04-01T00:00:00.000Z AND LastModifiedDate <= 2026-01-31T23:59:59.999Z  (EMPTY: end-date before watermark — no records will load)'
+        ).length
+      ).toBe(1)
+    })
+
+    it('given dry-run with start-date == watermark and operation Append, when running, then emits exact BOUNDARY warning text and annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([
+          sobjectEntry({ name: 'accounts', operation: 'Append' }),
+        ])
+      )
+      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          '2026-02-10T00:00:00.000Z',
+        ])
+      )
+
+      // Assert — exact text
+      expect(warns).toEqual([
+        '[accounts] BOUNDARY: --start-date equals watermark 2026-02-10T00:00:00.000Z; under operation Append the boundary record will be appended again (duplicate row). Bump --start-date past the watermark, or use operation Overwrite.',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate >= 2026-02-10T00:00:00.000Z  (BOUNDARY: SD == WM — boundary record will be re-appended (duplicate))'
+        ).length
+      ).toBe(1)
+      expect(logs.some(l => l.includes('undefined'))).toBe(false)
+    })
+
+    it('given dry-run with start-date == watermark and operation Overwrite, when running, then no BOUNDARY warning or annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([
+          sobjectEntry({ name: 'accounts', operation: 'Overwrite' }),
+        ])
+      )
+      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          '2026-02-10T00:00:00.000Z',
+        ])
+      )
+
+      // Assert — Overwrite is silent for boundary case
+      expect(warns.some(w => w.includes('BOUNDARY'))).toBe(false)
+      expect(logs.some(l => l.includes('(BOUNDARY:'))).toBe(false)
+    })
+
+    it('given bounds with only CSV entries, when running dry-run, then emits exactly one "no effect" warning and renders CSV watermark as n/a', async () => {
+      // Arrange
+      const csvPath = join(os.tmpdir(), 'bounds-csv-only.csv')
+      writeFileSync(csvPath, csvContent(['col'], [['a']]))
+      tmp = createTempFiles(
+        makeConfigJson([
+          {
+            targetOrg: 'ana-org',
+            targetDataset: 'DS',
+            csvFile: csvPath,
+            name: 'only-csv',
+          },
+        ])
+      )
+      orgOnlyConnection()
+
+      try {
+        // Act
+        const { logs, warns } = await captureOutput(() =>
+          runCommand([
+            '--config-file',
+            tmp!.configPath,
+            '--state-file',
+            tmp!.statePath,
+            '--dry-run',
+            '--start-date',
+            '2026-01-01T00:00:00.000Z',
+          ])
+        )
+
+        // Assert
+        expect(
+          warns.filter(
+            w =>
+              w.includes('all selected entries are CSV') &&
+              w.includes('no effect')
+          ).length
+        ).toBe(1)
+        // Kills `if (isCsvEntry(entry))` → false mutation in renderDryRunEntry:
+        // CSV entries must render the n/a watermark line, not try to read
+        // dateField from a CSV entry.
+        expect(
+          logs.filter(l =>
+            l.includes('watermark: n/a (CSV entry — bounds do not apply)')
+          ).length
+        ).toBe(1)
+        // Kills `if (conds.length === 0) return` → false mutation: CSV path
+        // returns before conds are built, so no effective line is emitted.
+        expect(logs.some(l => l.includes('effective:'))).toBe(false)
+      } finally {
+        rmSync(csvPath, { force: true })
+      }
+    })
+
+    it('given dry-run with end-date AFTER existing watermark and no start-date, when running, then emits no warning (kills endsBeforeWatermark branch mutation to true)', async () => {
+      // Arrange — bounds are non-empty (ED set), but ED > WM, no SD.
+      // With correct logic, all four warning predicates are false → no
+      // warning. If endsBeforeWatermark is mutated to always-true, the
+      // EMPTY branch would incorrectly fire.
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: '2026-01-01T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--end-date',
+          '2026-12-31T23:59:59.999Z',
+        ])
+      )
+
+      // Assert
+      expect(warns).toEqual([])
+    })
+
+    it('given dry-run with SObject entry and NO bounds, when running, then renders legacy single-line and no multi-line fields', async () => {
+      // Arrange — kills legacy-path mutations that would emit multi-line
+      // format even when bounds.isEmpty() is true.
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: '2026-01-01T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert — legacy single-line entry exists
+      expect(
+        logs.filter(
+          l =>
+            l.includes('accounts') &&
+            l.includes('(watermark: 2026-01-01T00:00:00.000Z)')
+        ).length
+      ).toBe(1)
+      // No multi-line indentation for watermark:/effective: lines
+      expect(logs.some(l => l.startsWith('    watermark:'))).toBe(false)
+      expect(logs.some(l => l.startsWith('    effective:'))).toBe(false)
+    })
+
+    it('given bounds and SObject pipeline run, when running, then SOQL to source org contains the bounds conditions', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      const capturedQueries: string[] = []
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('Account')
+          .calls((_url: string) => {
+            const q = decodeURIComponent(_url).split('q=')[1] ?? ''
+            capturedQueries.push(q)
+            return defaultSObjectQueryResponse([])
+          })
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--start-date',
+        '2026-01-01T00:00:00.000Z',
+        '--end-date',
+        '2026-01-31T23:59:59.999Z',
+      ])
+
+      // Assert
+      const accountQuery = capturedQueries.find(q => q.includes('FROM Account'))
+      expect(accountQuery).toBeDefined()
+      expect(accountQuery).toContain(
+        'LastModifiedDate >= 2026-01-01T00:00:00.000Z'
+      )
+      expect(accountQuery).toContain(
+        'LastModifiedDate <= 2026-01-31T23:59:59.999Z'
+      )
+    })
+  })
 })
