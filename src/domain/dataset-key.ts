@@ -9,7 +9,9 @@ export class DatasetKey {
     targetDataset?: string
     targetFile?: string
   }): DatasetKey {
-    if (entry.targetOrg !== undefined && entry.targetOrg === '') {
+    // `=== ''` already excludes `undefined`; no need for a separate
+    // `!== undefined` guard (would be an equivalent-mutant magnet).
+    if (entry.targetOrg === '') {
       throw new Error('targetOrg must not be empty')
     }
     if (entry.targetOrg) {

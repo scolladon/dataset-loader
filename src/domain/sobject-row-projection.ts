@@ -92,6 +92,7 @@ function lookup(
   name: string
 ): number {
   const idx = datasetIndexByName.get(name.toLowerCase())
+  // Stryker disable next-line ConditionalExpression: unreachable — see v8 ignore
   /* v8 ignore next 3 -- rejectMismatch already guarantees presence; defensive */
   if (idx === undefined) {
     throw new Error(`internal: name '${name}' not in dataset index`)
