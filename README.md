@@ -222,7 +222,7 @@ Load Event Log Files and SObject data into CRM Analytics datasets
 ```
 USAGE
   $ sf dataset load [--json] [--flags-dir <value>] [-c <value>] [-s <value>] [--audit] [--dry-run] [--entry
-    <value>]
+    <value>] [--start-date <iso>] [--end-date <iso>]
 
 FLAGS
   -c, --config-file=<value>  [default: dataset-load.config.json] Path to config JSON
@@ -230,6 +230,10 @@ FLAGS
       --audit                Pre-flight checks only (auth, connectivity, permissions)
       --dry-run              Show plan without executing
       --entry=<value>        Process only the entry with this name
+      --start-date=<iso>     Load only records with dateField/LogDate >= this ISO-8601 datetime
+                             (ignored for CSV entries). SD always overrides the watermark when set.
+      --end-date=<iso>       Load only records with dateField/LogDate <= this ISO-8601 datetime
+                             (ignored for CSV entries).
 
 GLOBAL FLAGS
   --flags-dir=<value>  Import flag values from a directory.
@@ -239,7 +243,31 @@ EXAMPLES
   $ sf dataset load
 
   $ sf dataset load --config-file my-config.json --dry-run
+
+  $ sf dataset load --start-date 2026-01-01T00:00:00.000Z --end-date 2026-01-31T23:59:59.999Z
 ```
+
+### Date bounds (`--start-date` / `--end-date`)
+
+Both flags take strict ISO-8601 datetimes (e.g. `2026-01-15T00:00:00.000Z`). Format is validated via regex; calendar validity is enforced via round-trip UTC-components check (so `2026-02-30T…` is rejected up front).
+
+| Flags                                  | SObject / ELF filter                           |
+|----------------------------------------|-----------------------------------------------|
+| neither                                | `dateField > watermark` (first run loads everything available) |
+| `--start-date SD` only                 | `dateField >= SD` (SD overrides watermark)    |
+| `--end-date ED` only                   | `dateField > watermark AND dateField <= ED`   |
+| `--start-date SD` + `--end-date ED`    | `dateField >= SD AND dateField <= ED`         |
+
+On a first ELF run (no watermark, no `--start-date`), the reader loads every available log file ascending. To cap the initial load, pass `--start-date <recent-iso>` or pre-seed `.dataset-load.state.json` with a recent `LogDate`.
+
+**SD always wins when set.** The command emits warnings when SD interacts non-trivially with the existing watermark:
+
+- **REWIND** — `SD < watermark`: previously-loaded records will be re-loaded; watermark may regress.
+- **HOLE** — `SD > watermark`: records in the gap will be skipped **and never back-filled** by subsequent incremental runs (the watermark jumps past the gap). See `RUN_BOOK.md` for the HOLE recovery pattern.
+- **BOUNDARY** — `SD == watermark` under `operation: Append`: the boundary record gets appended again (duplicate row). Silent under `operation: Overwrite`.
+- **EMPTY** — `ED < watermark` with no `SD`: query window is empty; no records will load.
+
+CSV entries ignore both flags. If the run filters to CSV-only entries, a single "no effect" warning is emitted.
 
 _See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-loader/blob/main/src/commands/dataset/load.ts)_
 <!-- commandsstop -->

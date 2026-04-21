@@ -367,6 +367,81 @@ sf dataset load -c configs/prod.json -s state/prod.state.json
 sf dataset load -c configs/staging.json -s state/staging.state.json
 ```
 
+## Date-Bounded Loads (`--start-date` / `--end-date`)
+
+Run-scoped date bounds via CLI flags. Applies to SObject and ELF
+entries; CSV ignores the flags. SD always overrides the watermark
+when set. See the README's "Date bounds" section for the full
+semantics; this section covers operational recipes.
+
+### Pattern 1 — Backfill a past window (isolated from main state)
+
+Use when: replaying records in a date range without affecting the
+main state file's watermark. Avoids REWIND regression on the
+production run.
+
+```bash
+cp .dataset-load.state.json .dataset-load.backfill.state.json
+sf dataset load \
+    --state-file .dataset-load.backfill.state.json \
+    --start-date 2026-01-01T00:00:00.000Z \
+    --end-date   2026-01-31T23:59:59.999Z
+rm .dataset-load.backfill.state.json
+```
+
+The main state file is untouched; incremental runs resume where
+they were. Do **not** merge the backfill state file back into main.
+
+### Pattern 2 — Fill a HOLE left by a previous `SD > WM` run
+
+Use when: a previous run with `--start-date > watermark` skipped
+records in the gap `(old-WM, SD)` and you want those records
+loaded. The main watermark has jumped past the gap, so a naive
+incremental run will never pick them up.
+
+```bash
+# 1. Identify old-WM and the SD used in the offending run (from the
+#    HOLE warning or prior logs).
+# 2. Copy the main state file.
+cp .dataset-load.state.json .dataset-load.hole-fill.state.json
+# 3. Edit the copy: reset the entry's watermark to old-WM. The
+#    WatermarkKey for SObject is `<sourceOrg>:sobject:<sObject>`,
+#    for ELF it's `<sourceOrg>:elf:<eventLog>:<interval>`, or
+#    the entry's `name` if set.
+# 4. Run with the hole-fill state file, capping at the offending SD.
+sf dataset load \
+    --state-file .dataset-load.hole-fill.state.json \
+    --end-date <SD-used-before>
+# 5. Discard the hole-fill state file.
+rm .dataset-load.hole-fill.state.json
+```
+
+Caveat: the gap records must still exist in the source system. If
+deleted since the offending run, there is no recovery — the HOLE
+warning at the time was the only chance to notice.
+
+### Warning reference
+
+At most one warning per entry when bounds are set:
+
+| Warning  | Condition                              | Consequence |
+|----------|-----------------------------------------|-------------|
+| REWIND   | `--start-date < watermark`              | Previously-loaded records re-loaded; watermark may regress. |
+| HOLE     | `--start-date > watermark`              | Records in the gap skipped; not back-filled by future incremental runs. |
+| BOUNDARY | `--start-date == watermark`, Append     | Boundary record appended a second time (duplicate row). Silent under Overwrite. |
+| EMPTY    | `--end-date < watermark`, no `--start-date` | Query window is empty; no records will load. |
+
+Invalid input (bad ISO format, bad calendar date like `2026-02-30`,
+or `start-date > end-date`) aborts the run before any mode branch —
+surfaces identically under `--audit`, `--dry-run`, or a real run.
+
+### ELF first-run behaviour
+
+On a first ELF run (no watermark, no `--start-date`), the reader
+loads every available log file ascending. To cap initial load size,
+pass `--start-date <recent-iso>` or pre-seed the state file with a
+recent `LogDate`.
+
 ## Reference
 
 ### Exit Codes
