@@ -1245,6 +1245,9 @@ describe('executePipeline (streaming)', () => {
     expect(sut.entriesFailed).toBe(1)
     expect(sut.exitCode).toBe(2)
     expect(writer.abort).toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('init crashed')
+    )
   })
 
   it('given writer.init throws generic error and abort also throws, when executing, then logs debug for abort failure', async () => {
