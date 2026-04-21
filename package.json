@@ -270,7 +270,7 @@
     }
   },
   "dependencies": {
-    "@salesforce/core": "^8.28.1",
+    "@salesforce/core": "^8.28.3",
     "@salesforce/sf-plugins-core": "^12.2.6",
     "cli-progress": "^3.12.0",
     "p-limit": "^7.3.0",
@@ -289,7 +289,7 @@
     "@vitest/coverage-v8": "^4.1.4",
     "husky": "^9.1.7",
     "jscpd": "^4.0.9",
-    "knip": "^6.5.0",
+    "knip": "^6.6.0",
     "oclif": "^4.23.0",
     "shx": "^0.4.0",
     "sinon": "^21.1.2",
