@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SObjectReader } from '../../../src/adapters/readers/sobject-reader.js'
+import { DateBounds } from '../../../src/domain/date-bounds.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { collectLines } from '../../fixtures/collect-lines.js'
 import { makeSfPort } from '../../fixtures/sf-port.js'
@@ -444,6 +445,26 @@ describe('SObjectReader', () => {
     expect(soql).not.toContain('WHERE')
   })
 
+  it('given bounds empty plus watermark, when fetching, then SOQL has no `undefined` text (kills mutations that force-push undefined conditions)', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act — only watermark, no bounds; lower = `DF > WM`, upper = undefined
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+    })
+    await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).not.toContain('undefined')
+  })
+
   it('given no queryLimit, when fetching, then SOQL does not contain LIMIT', async () => {
     // Arrange — kills this.queryLimit ? ... : '' → always-truthy mutation
     const querySpy = vi
@@ -802,5 +823,226 @@ describe('SObjectReader.project', () => {
 
     // Act / Assert
     expect(() => sut.project(layout)).toThrow(/outputIndex length/)
+  })
+
+  it('given bounds start-only and no watermark, when fetching, then SOQL has inclusive geq on dateField', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-01-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch()
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).not.toContain(' > ')
+  })
+
+  it('given bounds end-only and no watermark, when fetching, then SOQL has inclusive leq on dateField', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(undefined, '2026-01-31T23:59:59.999Z'),
+    })
+    await sut.fetch()
+
+    // Assert — scoped to LastModifiedDate to avoid false positives
+    // from unrelated `>=`/`>` elsewhere in the SOQL.
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate <= 2026-01-31T23:59:59.999Z')
+    expect(soql).not.toMatch(/LastModifiedDate >= /)
+    expect(soql).not.toMatch(/LastModifiedDate > /)
+  })
+
+  it('given bounds start and end and no watermark, when fetching, then SOQL has both geq and leq joined with AND', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-31T23:59:59.999Z'
+      ),
+    })
+    await sut.fetch()
+
+    // Assert — positioned `AND` assertions kill mutations on the join
+    // separator ' AND ' → any other string would produce
+    // "…LastModifiedDate…" concatenated without the separator.
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('WHERE LastModifiedDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain(' AND LastModifiedDate <= 2026-01-31T23:59:59.999Z')
+  })
+
+  it('given sd strictly less than watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
+    // Arrange — regression guard: SD always wins; no AND-ing with `DF > WM`
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-01-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+    // Negatively assert NO strict-greater clause on LastModifiedDate at all —
+    // kills a mutation where both SD and WM clauses are AND-ed.
+    expect(soql).not.toMatch(/LastModifiedDate > [0-9]/)
+  })
+
+  it('given sd strictly greater than watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-03-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-03-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given sd equal to watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-02-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-02-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given end-date and watermark but no start-date, when fetching, then SOQL has gt-watermark AND le-end-date', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(undefined, '2026-03-31T23:59:59.999Z'),
+    })
+    await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate > 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain('LastModifiedDate <= 2026-03-31T23:59:59.999Z')
+    expect(soql).toContain(' AND ')
+  })
+
+  it('given sd equal to watermark and end-date set, when fetching, then SOQL has both bounds (SD wins on lower, ED on upper)', async () => {
+    // Arrange — covers the SD==WM + ED combination missed elsewhere
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(
+        '2026-02-01T00:00:00.000Z',
+        '2026-03-01T00:00:00.000Z'
+      ),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-02-01T00:00:00.000Z')
+    expect(soql).toContain('LastModifiedDate <= 2026-03-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given bounds and watermark and where clause, when fetching, then SOQL has all three conditions AND-joined in order', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      where: 'Industry != null',
+      bounds: DateBounds.from(
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-31T23:59:59.999Z'
+      ),
+    })
+    await sut.fetch(Watermark.fromString('2025-12-15T00:00:00.000Z'))
+
+    // Assert — condition order: lower, upper, where
+    const soql = querySpy.mock.calls[0][0]
+    const lowerIdx = soql.indexOf('LastModifiedDate >= 2026-01-01')
+    const upperIdx = soql.indexOf('LastModifiedDate <= 2026-01-31')
+    const whereIdx = soql.indexOf('(Industry != null)')
+    expect(lowerIdx).toBeGreaterThan(-1)
+    expect(upperIdx).toBeGreaterThan(lowerIdx)
+    expect(whereIdx).toBeGreaterThan(upperIdx)
   })
 })

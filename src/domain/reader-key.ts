@@ -1,12 +1,17 @@
+import { type DateBounds } from './date-bounds.js'
+
 export class ReaderKey {
   private constructor(private readonly value: string) {}
 
   static forElf(
     sourceOrg: string,
     eventType: string,
-    interval: string
+    interval: string,
+    bounds: DateBounds
   ): ReaderKey {
-    return new ReaderKey(['elf', sourceOrg, eventType, interval].join('\0'))
+    return new ReaderKey(
+      ['elf', sourceOrg, eventType, interval, bounds.toString()].join('\0')
+    )
   }
 
   static forSObject(
@@ -15,7 +20,8 @@ export class ReaderKey {
     fields: readonly string[],
     dateField: string,
     where: string | undefined,
-    queryLimit: number | undefined
+    queryLimit: number | undefined,
+    bounds: DateBounds
   ): ReaderKey {
     return new ReaderKey(
       [
@@ -26,6 +32,7 @@ export class ReaderKey {
         dateField,
         where ?? '',
         String(queryLimit ?? 0),
+        bounds.toString(),
       ].join('\0')
     )
   }

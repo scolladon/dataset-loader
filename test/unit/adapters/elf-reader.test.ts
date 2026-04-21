@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { ElfReader } from '../../../src/adapters/readers/elf-reader.js'
+import { DateBounds } from '../../../src/domain/date-bounds.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { collectLines } from '../../fixtures/collect-lines.js'
 import { makeSfPort } from '../../fixtures/sf-port.js'
@@ -75,8 +76,10 @@ describe('ElfReader', () => {
     expect(soql).toContain('LogDate > 2026-01-01T00:00:00.000Z')
   })
 
-  it('given no watermark, when fetching, then queries only the latest record', async () => {
-    // Arrange
+  it('given no watermark and no bounds, when fetching, then queries all records ascending without LIMIT (breaking change: old "latest-1" fallback removed)', async () => {
+    // Arrange — regression guard for the ELF first-run fallback removal.
+    // Previously the reader emitted `ORDER BY LogDate DESC LIMIT 1`; now it
+    // always uses `ORDER BY LogDate ASC` with no limit regardless of watermark.
     const querySpy = vi.fn().mockResolvedValue({
       totalSize: 1,
       done: true,
@@ -97,8 +100,19 @@ describe('ElfReader', () => {
 
     // Assert
     const soql: string = querySpy.mock.calls[0][0]
-    expect(soql).toContain('ORDER BY LogDate DESC')
-    expect(soql).toContain('LIMIT 1')
+    expect(soql).toContain(
+      'SELECT Id, LogDate, LogFile FROM EventLogFile WHERE '
+    )
+    expect(soql).toContain('ORDER BY LogDate ASC')
+    expect(soql).not.toContain('DESC')
+    expect(soql).not.toContain('LIMIT')
+    // Kills mutations that unconditionally push undefined `lower`/`upper`
+    // into conds when no bounds/watermark: produces 'AND undefined' in SOQL.
+    expect(soql).not.toContain('undefined')
+    // Exactly one AND — between baseWhere and ORDER BY — i.e., the two
+    // filter clauses `EventType = …` and `Interval = …` are the only
+    // pieces of the WHERE. Kills join-separator mutations.
+    expect(soql.match(/ AND /g)?.length).toBe(1)
   })
 
   it('given watermark, when fetching, then queries all records ascending without limit', async () => {
@@ -818,5 +832,122 @@ describe('ElfReader', () => {
 
     // Assert — stream.destroy() is called in finally block after processing
     expect(destroySpy).toHaveBeenCalled()
+  })
+
+  it('given bounds start-only and no watermark, when fetching, then SOQL has inclusive geq on LogDate ascending', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new ElfReader(
+      sfPort,
+      'Login',
+      'Daily',
+      DateBounds.from('2026-01-01T00:00:00.000Z', undefined)
+    )
+    await sut.fetch()
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LogDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain('ORDER BY LogDate ASC')
+    expect(soql).not.toContain('LIMIT')
+  })
+
+  it('given bounds end-only and no watermark, when fetching, then SOQL has inclusive leq on LogDate ascending', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new ElfReader(
+      sfPort,
+      'Login',
+      'Daily',
+      DateBounds.from(undefined, '2026-01-31T23:59:59.999Z')
+    )
+    await sut.fetch()
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LogDate <= 2026-01-31T23:59:59.999Z')
+    expect(soql).toContain('ORDER BY LogDate ASC')
+    expect(soql).not.toContain('LIMIT')
+    expect(soql).not.toMatch(/LogDate >= /)
+    expect(soql).not.toMatch(/LogDate > /)
+  })
+
+  it('given bounds start and end and no watermark, when fetching, then SOQL has both geq and leq on LogDate joined with AND', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new ElfReader(
+      sfPort,
+      'Login',
+      'Daily',
+      DateBounds.from('2026-01-01T00:00:00.000Z', '2026-01-31T23:59:59.999Z')
+    )
+    await sut.fetch()
+
+    // Assert — positioned ` AND ` assertions kill mutations on the
+    // .join(' AND ') separator: any other separator would concatenate
+    // the conditions without space + AND between them.
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain(' AND LogDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain(' AND LogDate <= 2026-01-31T23:59:59.999Z')
+  })
+
+  it('given bounds start and watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
+    // Arrange — regression guard: SD always wins; no AND-ing with `LogDate > WM`
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new ElfReader(
+      sfPort,
+      'Login',
+      'Daily',
+      DateBounds.from('2026-01-01T00:00:00.000Z', undefined)
+    )
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LogDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).not.toContain('LogDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given bounds end and watermark but no start, when fetching, then SOQL has gt-watermark AND le-end', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new ElfReader(
+      sfPort,
+      'Login',
+      'Daily',
+      DateBounds.from(undefined, '2026-03-31T23:59:59.999Z')
+    )
+    await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LogDate > 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain('LogDate <= 2026-03-31T23:59:59.999Z')
+    expect(soql).toContain(' AND ')
   })
 })

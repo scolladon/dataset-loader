@@ -1,4 +1,5 @@
 import { csvQuote } from '../../domain/csv-quote.js'
+import { DateBounds } from '../../domain/date-bounds.js'
 import { Watermark } from '../../domain/watermark.js'
 import {
   type FetchResult,
@@ -16,6 +17,7 @@ interface SObjectReaderConfig {
   readonly dateField: string
   readonly where?: string
   readonly queryLimit?: number
+  readonly bounds?: DateBounds
 }
 
 type FieldAccessor = (record: Record<string, unknown>) => unknown
@@ -55,6 +57,7 @@ export class SObjectReader implements ReaderPort {
   private readonly dateField: string
   private readonly where?: string
   private readonly queryLimit?: number
+  private readonly bounds: DateBounds
   private layout?: ProjectionLayout
 
   constructor(
@@ -78,6 +81,7 @@ export class SObjectReader implements ReaderPort {
     this.dateField = config.dateField
     this.where = config.where
     this.queryLimit = config.queryLimit
+    this.bounds = config.bounds ?? DateBounds.none()
     this.queryFields = config.fields.includes(config.dateField)
       ? config.fields
       : [...config.fields, config.dateField]
@@ -101,8 +105,10 @@ export class SObjectReader implements ReaderPort {
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {
     const conditions: string[] = []
-    if (watermark)
-      conditions.push(`${this.dateField} > ${watermark.toSoqlLiteral()}`)
+    const lower = this.bounds.lowerConditionFor(this.dateField, watermark)
+    if (lower) conditions.push(lower)
+    const upper = this.bounds.upperConditionFor(this.dateField)
+    if (upper) conditions.push(upper)
     if (this.where) conditions.push(`(${this.where})`)
 
     const whereClause =

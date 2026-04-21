@@ -1,4 +1,5 @@
 import { StringDecoder } from 'node:string_decoder'
+import { DateBounds } from '../../domain/date-bounds.js'
 import { Watermark } from '../../domain/watermark.js'
 import {
   type FetchResult,
@@ -23,7 +24,8 @@ export class ElfReader implements ReaderPort {
   constructor(
     private readonly sfPort: SalesforcePort,
     private readonly eventType: string,
-    private readonly interval: string
+    private readonly interval: string,
+    private readonly bounds: DateBounds = DateBounds.none()
   ) {
     if (!SF_IDENTIFIER_PATTERN.test(eventType)) {
       throw new Error(`Invalid eventType: '${eventType}'`)
@@ -39,9 +41,12 @@ export class ElfReader implements ReaderPort {
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {
     const baseWhere = `EventType = '${this.eventType}' AND Interval = '${this.interval}'`
-    const soql = watermark
-      ? `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE ${baseWhere} AND LogDate > ${watermark.toSoqlLiteral()} ORDER BY LogDate ASC`
-      : `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE ${baseWhere} ORDER BY LogDate DESC LIMIT 1`
+    const conds: string[] = [baseWhere]
+    const lower = this.bounds.lowerConditionFor('LogDate', watermark)
+    if (lower) conds.push(lower)
+    const upper = this.bounds.upperConditionFor('LogDate')
+    if (upper) conds.push(upper)
+    const soql = `SELECT Id, LogDate, LogFile FROM EventLogFile WHERE ${conds.join(' AND ')} ORDER BY LogDate ASC`
 
     const firstPage: QueryResult<EventLogFileRecord> =
       await this.sfPort.query(soql)
