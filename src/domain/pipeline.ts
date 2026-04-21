@@ -246,6 +246,9 @@ export async function executePipeline(
           watermarks: [],
         })
       } else {
+        input.logger.warn(
+          `Writer init failed for '${group.datasetKey.name}': ${formatErrorMessage(error)}`
+        )
         await writer
           .abort()
           .catch((e: unknown) =>
