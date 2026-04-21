@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.2.3](https://github.com/scolladon/dataset-loader/compare/v1.2.2...v1.2.3) (2026-04-21)
+
+
+### Bug Fixes
+
+* **pipeline:** surface writer-init errors instead of silently swallowing them ([#31](https://github.com/scolladon/dataset-loader/issues/31)) ([c6154bc](https://github.com/scolladon/dataset-loader/commit/c6154bc3203236898c33f087b1ff8b5ad990c907))
+
 ## [1.2.2](https://github.com/scolladon/dataset-loader/compare/v1.2.1...v1.2.2) (2026-04-20)
 
 

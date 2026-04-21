@@ -1,6 +1,6 @@
 {
   "name": "dataset-loader",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "SF CLI plugin to load Event Log Files and SObject data into CRM Analytics datasets",
   "type": "module",
   "main": "lib/index.js",
