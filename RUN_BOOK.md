@@ -1,6 +1,19 @@
 <!-- markdownlint-disable MD013 -- operational run-book uses long single-line commands and log excerpts -->
 # Run Book: Dataset Loader
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Prerequisites & Setup](#prerequisites--setup)
+- [Scheduling with Cron](#scheduling-with-cron)
+- [Running Manually](#running-manually)
+- [Date-Bounded Loads (`--start-date` / `--end-date`)](#date-bounded-loads---start-date----end-date)
+- [Monitoring](#monitoring)
+- [Troubleshooting](#troubleshooting)
+- [Disaster Recovery](#disaster-recovery)
+- [Multi-Environment Setup](#multi-environment-setup)
+- [Reference](#reference)
+
 ## Overview
 
 The Dataset Loader is an SF CLI plugin that extracts Salesforce Event Log Files (ELF) and SObject data from source orgs and writes them either into CRM Analytics datasets (CRM Analytics target) or to local CSV files (file target). It runs outside the Salesforce platform to avoid governor limits, uses a streaming pipeline for memory-bounded processing, supports parallel fetching with gzip compression for CRM Analytics uploads, and tracks ingestion progress through a JSON-based watermark system. See the [README](README.md) for full command usage and config format.
@@ -312,7 +325,7 @@ To re-fetch from scratch:
 2. Delete the key for the target entry (or delete the entire file for a full reset)
 3. Re-run `sf dataset load`
 
-Note: ELF entries without a watermark fetch only the latest record (bootstrap mode). SObject entries without a watermark fetch all matching records — use the `limit` config field to cap initial loads.
+Note: ELF entries without a watermark fetch every available log file ascending — use `--start-date` or pre-seed the state file to cap initial loads. SObject entries without a watermark fetch all matching records — use the `limit` config field or `--start-date` on the CLI to cap.
 
 To re-ingest from a specific point, set the watermark to an ISO 8601 date before the desired start (both `Z` and `+0000` offsets are accepted):
 
