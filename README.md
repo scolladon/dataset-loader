@@ -16,6 +16,8 @@ SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesfor
 - [Quick Start](#quick-start)
 - [Config Reference](#config-reference)
 - [Command Reference](#sf-dataset-load)
+- [Advanced Usage](#advanced-usage)
+- [Troubleshooting](#troubleshooting)
 - [Development](#development)
 
 ## Prerequisites
@@ -206,9 +208,9 @@ Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{s
 
 > Set `name` on an entry to use it as the watermark key instead of the auto-generated one. This lets you rename source orgs or change event types without losing watermark history.
 
-- **First ELF run** (no watermark): fetches only the latest record (bootstrap mode)
-- **First SObject run** (no watermark): fetches all matching records (use `limit` to cap)
-- **Subsequent runs**: fetch incrementally from the stored watermark
+- **First ELF run** (no watermark): fetches every available log file ascending. Pass `--start-date` to cap the initial pull — see [Advanced Usage](#advanced-usage).
+- **First SObject run** (no watermark): fetches all matching records. Use `limit` in the config or `--start-date` on the CLI to cap.
+- **Subsequent runs**: fetch incrementally from the stored watermark.
 
 </details>
 
@@ -250,9 +252,9 @@ EXAMPLES
 _See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-loader/blob/main/src/commands/dataset/load.ts)_
 <!-- commandsstop -->
 
-## Advanced usage: `--start-date` / `--end-date`
+## Advanced Usage
 
-Two CLI flags let you override or narrow the default incremental window. Both take ISO-8601 datetimes (e.g. `2026-01-15T00:00:00.000Z`), both are **inclusive**, and both are **ignored for CSV entries**.
+Everything about `--start-date` and `--end-date` — the flags that let you override or narrow the default incremental window. Both take ISO-8601 datetimes (e.g. `2026-01-15T00:00:00.000Z`), both are **inclusive**, and both are **ignored for CSV entries**.
 
 The baseline is still incremental: the loader tracks a per-entry watermark in the state file and, by default, pulls rows strictly greater than it. The flags below are escape hatches.
 
@@ -371,6 +373,10 @@ Dedicated state file + `targetFile` = zero impact on main state and no CRM Analy
 | **HOLE** | `--start-date` is after the watermark | Records in the gap won't be back-filled by subsequent incremental runs. See [RUN_BOOK.md](RUN_BOOK.md) for the recovery recipe. |
 | **BOUNDARY** | `--start-date` equals the watermark, operation `Append` | Bump `--start-date` by 1 ms. |
 | **EMPTY** | `--end-date` is before the watermark (no `--start-date`) | Window is empty; drop `--end-date` or advance it. |
+
+## Troubleshooting
+
+See [RUN_BOOK.md](RUN_BOOK.md) for operational recipes: scheduling with cron, recovery from bad state, pattern for filling a past-window backfill without disturbing main state, and pattern for recovering from a `HOLE` warning.
 
 <details>
 <summary>Exit Codes</summary>
