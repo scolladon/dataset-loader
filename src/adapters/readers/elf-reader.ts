@@ -40,8 +40,10 @@ export class ElfReader implements ReaderPort {
   }
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {
-    const baseWhere = `EventType = '${this.eventType}' AND Interval = '${this.interval}'`
-    const conds: string[] = [baseWhere]
+    const conds: string[] = [
+      `EventType = '${this.eventType}'`,
+      `Interval = '${this.interval}'`,
+    ]
     const lower = this.bounds.lowerConditionFor('LogDate', watermark)
     if (lower) conds.push(lower)
     const upper = this.bounds.upperConditionFor('LogDate')

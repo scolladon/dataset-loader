@@ -906,8 +906,8 @@ describe('ElfReader', () => {
     expect(soql).toContain(' AND LogDate <= 2026-01-31T23:59:59.999Z')
   })
 
-  it('given bounds start and watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
-    // Arrange — regression guard: SD always wins; no AND-ing with `LogDate > WM`
+  it('given bounds start and watermark, when fetching, then SOQL has only geq (start wins)', async () => {
+    // Arrange — regression guard: --start-date always wins; no AND-ing with `LogDate > watermark`
     const querySpy = vi
       .fn()
       .mockResolvedValue({ totalSize: 0, done: true, records: [] })

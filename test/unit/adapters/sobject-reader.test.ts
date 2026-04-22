@@ -472,7 +472,7 @@ describe('SObjectReader', () => {
       .mockResolvedValue({ totalSize: 0, done: true, records: [] })
     const sfPort = makeSfPort({ query: querySpy })
 
-    // Act — only watermark, no bounds; lower = `DF > WM`, upper = undefined
+    // Act — only watermark, no bounds; lower = `dateField > watermark`, upper = undefined
     const sut = new SObjectReader(sfPort, {
       sobject: 'Account',
       fields: ['Id'],
@@ -933,8 +933,8 @@ describe('SObjectReader.project', () => {
     expect(soql).toContain(' AND LastModifiedDate <= 2026-01-31T23:59:59.999Z')
   })
 
-  it('given sd strictly less than watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
-    // Arrange — regression guard: SD always wins; no AND-ing with `DF > WM`
+  it('given start strictly less than watermark, when fetching, then SOQL has only geq (start wins)', async () => {
+    // Arrange — regression guard: --start-date always wins; no AND-ing with `dateField > watermark`
     const querySpy = vi
       .fn()
       .mockResolvedValue({ totalSize: 0, done: true, records: [] })
@@ -954,11 +954,11 @@ describe('SObjectReader.project', () => {
     expect(soql).toContain('LastModifiedDate >= 2026-01-01T00:00:00.000Z')
     expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
     // Negatively assert NO strict-greater clause on LastModifiedDate at all —
-    // kills a mutation where both SD and WM clauses are AND-ed.
+    // kills a mutation where both start and watermark clauses are AND-ed.
     expect(soql).not.toMatch(/LastModifiedDate > [0-9]/)
   })
 
-  it('given sd strictly greater than watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
+  it('given start strictly greater than watermark, when fetching, then SOQL has only geq (start wins)', async () => {
     // Arrange
     const querySpy = vi
       .fn()
@@ -980,7 +980,7 @@ describe('SObjectReader.project', () => {
     expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
   })
 
-  it('given sd equal to watermark, when fetching, then SOQL has only geq (SD wins)', async () => {
+  it('given start equal to watermark, when fetching, then SOQL has only geq (start wins)', async () => {
     // Arrange
     const querySpy = vi
       .fn()
@@ -1025,8 +1025,8 @@ describe('SObjectReader.project', () => {
     expect(soql).toContain(' AND ')
   })
 
-  it('given sd equal to watermark and end-date set, when fetching, then SOQL has both bounds (SD wins on lower, ED on upper)', async () => {
-    // Arrange — covers the SD==WM + ED combination missed elsewhere
+  it('given start equal to watermark and end-date set, when fetching, then SOQL has both bounds (start wins on lower, end on upper)', async () => {
+    // Arrange — covers the start==watermark + end-date combination missed elsewhere
     const querySpy = vi
       .fn()
       .mockResolvedValue({ totalSize: 0, done: true, records: [] })

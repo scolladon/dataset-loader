@@ -2040,8 +2040,8 @@ describe('DatasetLoad NUT', () => {
         ).length
       ).toBe(1)
       // Kills `.filter(Boolean)` removal mutation on `[lower, upper]`:
-      // with SD-only, upper is undefined; without the filter the
-      // effective line would contain "undefined".
+      // with only --start-date set, upper is undefined; without the filter
+      // the effective line would contain "undefined".
       expect(logs.some(l => l.includes('undefined'))).toBe(false)
     })
 
@@ -2234,7 +2234,8 @@ describe('DatasetLoad NUT', () => {
     })
 
     it('given dry-run with end-date AFTER existing watermark and no start-date, when running, then emits no warning (kills endsBeforeWatermark branch mutation to true)', async () => {
-      // Arrange — bounds are non-empty (ED set), but ED > WM, no SD.
+      // Arrange — bounds are non-empty (--end-date set), but end > watermark,
+      // no --start-date.
       // With correct logic, all four warning predicates are false → no
       // warning. If endsBeforeWatermark is mutated to always-true, the
       // EMPTY branch would incorrectly fire.
@@ -2317,7 +2318,7 @@ describe('DatasetLoad NUT', () => {
     })
 
     it('given fresh state with ELF entry and --start-date set, when dry-running, then no FIRST_RUN_ELF warning', async () => {
-      // Arrange — SD caps the pull, so the warning must be suppressed
+      // Arrange — --start-date caps the pull, so the warning must be suppressed
       tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
       orgOnlyConnection()
 
@@ -2388,7 +2389,8 @@ describe('DatasetLoad NUT', () => {
     })
 
     it('given fresh state with --start-date and --end-date, when dry-running, then neither FIRST_RUN_ELF nor FRESH_END_ONLY fires', async () => {
-      // Arrange — SD is present, which caps the first-run volume and makes the window explicit
+      // Arrange — --start-date is present, which caps the first-run volume
+      // and makes the window explicit
       tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
       orgOnlyConnection()
 

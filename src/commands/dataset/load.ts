@@ -316,9 +316,10 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     const upper = bounds.upperConditionFor(dateField)
     const conds = [lower, upper].filter(Boolean)
     /* v8 ignore next -- unreachable: this render path is only called from
-       handleDryRun when `!bounds.isEmpty()`, which means SD or ED is set.
-       SD set → lower = `DF >= SD` (defined); ED set → upper = `DF <= ED`
-       (defined). At least one is always present, so conds.length >= 1. */
+       handleDryRun when `!bounds.isEmpty()`, which means --start-date or
+       --end-date is set. --start-date set → lower = `dateField >= start`
+       (defined); --end-date set → upper = `dateField <= end` (defined).
+       At least one is always present, so conds.length >= 1. */
     // Stryker disable next-line ConditionalExpression: equivalent mutant —
     // this branch is structurally unreachable (see v8 ignore rationale above).
     if (conds.length === 0) return
@@ -359,7 +360,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   //      record seen within the window, but subsequent incremental runs
   //      silently skip records created after --end-date until the flag
   //      is removed and rerun. No existing warning covers this shape.
-  // Both warnings are suppressed when --start-date is set (SD caps the
+  // Both warnings are suppressed when --start-date is set (it caps the
   // pull) or when a watermark already exists for the entry (not fresh).
   private emitFirstRunWarnings(
     entries: ResolvedEntry[],
@@ -420,10 +421,12 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
           `[${label}] BOUNDARY: --start-date equals watermark ${wm}; under operation Append the boundary record will be appended again (duplicate row). Bump --start-date past the watermark, or use operation Overwrite.`
         )
       } else if (bounds.endsBeforeWatermark(wm)) {
-        // Only reachable when SD is absent: `DateBounds.from` enforces
-        // SD <= ED, so when SD is set the SD-branches above always fire
-        // first (covering SD < WM, SD == WM, and SD > WM) or the window
-        // is non-empty (ED >= SD implies ED >= WM when SD >= WM).
+        // Only reachable when --start-date is absent: `DateBounds.from`
+        // enforces --start-date <= --end-date, so when --start-date is
+        // set the start-date branches above always fire first (covering
+        // start < watermark, start == watermark, and start > watermark)
+        // or the window is non-empty (end >= start implies end >=
+        // watermark when start >= watermark).
         this.warn(
           `[${label}] EMPTY: --end-date is before watermark ${wm}; query window is empty — no records will load. To replay this range, use a separate --state-file (see RUN_BOOK).`
         )
