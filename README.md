@@ -79,6 +79,8 @@ sf dataset load --dry-run
 sf dataset load
 ```
 
+`--dry-run` prints a multi-line plan: one header line, one block per entry (`  label → dataset-key` + `    watermark: <iso|(none)|n/a for CSV>`), and when bounds are set a `Configured window: [...]` line plus an `    effective: <SOQL>` line per non-CSV entry (carrying any `REWIND` / `HOLE` / `BOUNDARY` / `EMPTY` annotation). No data is transferred.
+
 > ⚠️ **First-run volume** — on a fresh state file (no prior watermark), each entry pulls *every* matching record. For ELF this means *every log file ever emitted* by the source org — on busy orgs, thousands of blobs. Cap the first run with `--start-date 2026-01-01T00:00:00.000Z` (or similar) and let subsequent cron runs tail incrementally. See [Advanced Usage](#advanced-usage).
 
 > **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.

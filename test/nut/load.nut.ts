@@ -1911,7 +1911,7 @@ describe('DatasetLoad NUT', () => {
       expect(String((caught as Error).message)).toContain('must be <=')
     })
 
-    it('given dry-run with no bounds, when running, then preserves legacy single-line output format and emits no bounds warnings', async () => {
+    it('given dry-run with no bounds, when running, then emits unified multi-line entry block with no Configured window / effective lines and no bounds warnings', async () => {
       // Arrange
       tmp = createTempFiles(
         makeConfigJson([sobjectEntry({ name: 'accounts' })])
@@ -1929,16 +1929,17 @@ describe('DatasetLoad NUT', () => {
         ])
       )
 
-      // Assert — legacy format: single line per entry with "(watermark: (none))".
-      // No seedState was set, so wm is undefined → `?? '(none)'` fallback
-      // must fire. Asserting the exact literal "(watermark: (none))" kills
-      // the StringLiteral mutation replacing '(none)' with "".
-      expect(logs.filter(l => l.includes('(watermark: (none))')).length).toBe(1)
+      // Assert — unified format: label line on its own, watermark on its own
+      // line ("(none)" fallback when there is no stored watermark). Exact-line
+      // matches kill StringLiteral mutations on both templates.
+      expect(logs.some(l => l === '  accounts → org:ana-org:DS2')).toBe(true)
+      expect(logs.some(l => l === '    watermark: (none)')).toBe(true)
+      // No inline combined "(watermark: …)" fragment in the unified format.
+      expect(logs.some(l => l.includes('(watermark:'))).toBe(false)
       expect(logs.some(l => l.includes('Configured window'))).toBe(false)
       expect(logs.some(l => l.includes('effective:'))).toBe(false)
-      // Kills `if (bounds.isEmpty()) return` → `true` mutation in
-      // emitBoundsWarnings: no REWIND/HOLE/BOUNDARY/EMPTY warning should
-      // fire when bounds are empty.
+      // Kills `if (bounds.isEmpty()) return` → `true` mutation in the warnings
+      // module: no REWIND/HOLE/BOUNDARY/EMPTY warning fires when bounds empty.
       expect(
         warns.filter(
           w =>
@@ -2222,7 +2223,7 @@ describe('DatasetLoad NUT', () => {
         // dateField from a CSV entry.
         expect(
           logs.filter(l =>
-            l.includes('watermark: n/a (CSV entry — bounds do not apply)')
+            l.includes('watermark: n/a (CSV entry — watermarks do not apply)')
           ).length
         ).toBe(1)
         // Kills `if (conds.length === 0) return` → false mutation: CSV path
@@ -2262,9 +2263,8 @@ describe('DatasetLoad NUT', () => {
       expect(warns).toEqual([])
     })
 
-    it('given dry-run with SObject entry and NO bounds, when running, then renders legacy single-line and no multi-line fields', async () => {
-      // Arrange — kills legacy-path mutations that would emit multi-line
-      // format even when bounds.isEmpty() is true.
+    it('given dry-run with seeded watermark and no bounds, when running, then emits unified multi-line with watermark on its own line and no effective line', async () => {
+      // Arrange
       tmp = createTempFiles(
         makeConfigJson([sobjectEntry({ name: 'accounts' })])
       )
@@ -2282,16 +2282,11 @@ describe('DatasetLoad NUT', () => {
         ])
       )
 
-      // Assert — legacy single-line entry exists
-      expect(
-        logs.filter(
-          l =>
-            l.includes('accounts') &&
-            l.includes('(watermark: 2026-01-01T00:00:00.000Z)')
-        ).length
-      ).toBe(1)
-      // No multi-line indentation for watermark:/effective: lines
-      expect(logs.some(l => l.startsWith('    watermark:'))).toBe(false)
+      // Assert — label line + watermark line on own lines, no inline combo.
+      expect(logs.some(l => l === '  accounts → org:ana-org:DS2')).toBe(true)
+      expect(logs.some(l => l === `    watermark: ${ISO_JAN_01}`)).toBe(true)
+      expect(logs.some(l => l.includes('(watermark:'))).toBe(false)
+      // No `effective:` line when bounds are empty.
       expect(logs.some(l => l.startsWith('    effective:'))).toBe(false)
     })
 

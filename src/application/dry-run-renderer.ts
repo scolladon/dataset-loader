@@ -13,15 +13,18 @@ import { type LoggerPort } from '../ports/types.js'
 import { type DatasetLoadResult, EMPTY_RESULT } from './load-inputs.js'
 import { computeWarnings, dryRunAnnotation } from './warnings.js'
 
-// Renders the `--dry-run` dispatch output. Two output shapes live here:
-//   - Legacy (bounds empty): one line per entry with the stored watermark
-//     inline.
-//   - Bounded (non-empty bounds): a header, configured-window line, blank
-//     separator, then one entry block of 3 lines each (label, watermark,
-//     effective SOQL with warning annotation).
-// Warnings are emitted via the injected LoggerPort before the entry plan is
-// printed, so operators see them in the same terminal flow. Returns a zeroed
-// result — dry-run never processes data.
+// Renders the `--dry-run` dispatch output. Single render shape for every
+// entry — two indented lines (label/key + watermark), plus a third
+// `effective:` line when bounds are non-empty. `Configured window:` +
+// blank separator fire only when bounds are non-empty.
+//
+// CSV entries always show `watermark: n/a (CSV entry — watermarks do not
+// apply)` regardless of bounds: CSVs have no watermark concept, so the
+// phrasing is about why the column is n/a, not about bounds.
+//
+// Warnings are emitted through the injected LoggerPort before the plan
+// header so operators see them in the same terminal flow. Returns a
+// zeroed result — dry-run never processes data.
 export class DryRunRenderer {
   constructor(private readonly logger: LoggerPort) {}
 
@@ -34,33 +37,17 @@ export class DryRunRenderer {
       this.logger.warn(msg)
     }
     this.logger.info('Dry run — planned entries:')
-    if (bounds.isEmpty()) {
-      this.renderLegacy(entries, watermarks)
-      return EMPTY_RESULT
+    if (!bounds.isEmpty()) {
+      this.logger.info(`Configured window: ${bounds.toString()}`)
+      this.logger.info('')
     }
-    this.logger.info(`Configured window: ${bounds.toString()}`)
-    this.logger.info('')
     for (const { entry } of entries) {
-      this.renderBoundedEntry(entry, watermarks, bounds)
+      this.renderEntry(entry, watermarks, bounds)
     }
     return EMPTY_RESULT
   }
 
-  private renderLegacy(
-    entries: readonly ResolvedEntry[],
-    watermarks: WatermarkStore
-  ): void {
-    for (const { entry } of entries) {
-      const wk = WatermarkKey.fromEntry(entry)
-      const wm = watermarks.get(wk)?.toString() ?? '(none)'
-      const dk = DatasetKey.fromEntry(entry)
-      this.logger.info(
-        `  ${entryLabel(entry)} → ${dk.toString()} (watermark: ${wm})`
-      )
-    }
-  }
-
-  private renderBoundedEntry(
+  private renderEntry(
     entry: ConfigEntry,
     watermarks: WatermarkStore,
     bounds: DateBounds
@@ -68,18 +55,20 @@ export class DryRunRenderer {
     const dk = DatasetKey.fromEntry(entry)
     this.logger.info(`  ${entryLabel(entry)} → ${dk.toString()}`)
     if (isCsvEntry(entry)) {
-      this.logger.info('    watermark: n/a (CSV entry — bounds do not apply)')
+      this.logger.info(
+        '    watermark: n/a (CSV entry — watermarks do not apply)'
+      )
       return
     }
     const wm = watermarks.get(WatermarkKey.fromEntry(entry))
     this.logger.info(`    watermark: ${wm?.toString() ?? '(none)'}`)
+    if (bounds.isEmpty()) return
     const dateField = isElfEntry(entry) ? 'LogDate' : entry.dateField
-    // Precondition: bounds are non-empty here (the caller guards on
-    // `bounds.isEmpty()`), so at least one of lower/upper is defined.
     const lower = bounds.lowerConditionFor(dateField, wm)
     const upper = bounds.upperConditionFor(dateField)
     const soql = [lower, upper].filter(Boolean).join(' AND ')
-    const annotation = dryRunAnnotation(entry, wm, bounds)
-    this.logger.info(`    effective: ${soql}${annotation}`)
+    this.logger.info(
+      `    effective: ${soql}${dryRunAnnotation(entry, wm, bounds)}`
+    )
   }
 }
