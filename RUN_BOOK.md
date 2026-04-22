@@ -370,7 +370,7 @@ sf dataset load -c configs/staging.json -s state/staging.state.json
 ## Date-Bounded Loads (`--start-date` / `--end-date`)
 
 Run-scoped date bounds via CLI flags. Applies to SObject and ELF
-entries; CSV ignores the flags. SD always overrides the watermark
+entries; CSV ignores the flags. `--start-date` always overrides the watermark
 when set. See the README's "Date bounds" section for the full
 semantics; this section covers operational recipes.
 
@@ -392,26 +392,28 @@ rm .dataset-load.backfill.state.json
 The main state file is untouched; incremental runs resume where
 they were. Do **not** merge the backfill state file back into main.
 
-### Pattern 2 — Fill a HOLE left by a previous `SD > WM` run
+### Pattern 2 — Fill a HOLE left by a previous `--start-date` after watermark run
 
 Use when: a previous run with `--start-date > watermark` skipped
-records in the gap `(old-WM, SD)` and you want those records
-loaded. The main watermark has jumped past the gap, so a naive
-incremental run will never pick them up.
+records in the gap `(previous-watermark, previous-start-date)` and
+you want those records loaded. The main watermark has jumped past
+the gap, so a naive incremental run will never pick them up.
 
 ```bash
-# 1. Identify old-WM and the SD used in the offending run (from the
-#    HOLE warning or prior logs).
+# 1. Identify the previous watermark and the --start-date used in the
+#    offending run (from the HOLE warning or prior logs).
 # 2. Copy the main state file.
 cp .dataset-load.state.json .dataset-load.hole-fill.state.json
-# 3. Edit the copy: reset the entry's watermark to old-WM. The
-#    WatermarkKey for SObject is `<sourceOrg>:sobject:<sObject>`,
-#    for ELF it's `<sourceOrg>:elf:<eventLog>:<interval>`, or
-#    the entry's `name` if set.
-# 4. Run with the hole-fill state file, capping at the offending SD.
+# 3. Edit the copy: reset the entry's watermark to the previous
+#    watermark. The WatermarkKey for SObject is
+#    `<sourceOrg>:sobject:<sObject>`, for ELF it's
+#    `<sourceOrg>:elf:<eventLog>:<interval>`, or the entry's `name`
+#    if set.
+# 4. Run with the hole-fill state file, capping at the offending
+#    --start-date value.
 sf dataset load \
     --state-file .dataset-load.hole-fill.state.json \
-    --end-date <SD-used-before>
+    --end-date <previous-start-date>
 # 5. Discard the hole-fill state file.
 rm .dataset-load.hole-fill.state.json
 ```
