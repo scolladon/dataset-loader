@@ -79,11 +79,11 @@ sf dataset load --dry-run
 sf dataset load
 ```
 
-> **Note:**
->
-> - **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
-> - **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
-> - **Column alignment** — CRM Analytics ingests rows by position. `--audit` verifies that your source columns (SObject config `fields`, ELF `LogFileFieldNames`, or CSV header) match the dataset's metadata column set (and order for ELF/CSV) before any upload runs. SObject entries are automatically reordered at runtime to match the dataset's column order; ELF/CSV source order must already match the dataset and is enforced at audit time.
+> **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
+
+> **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
+
+> **Column alignment** — CRM Analytics ingests rows by position. `--audit` verifies your source columns match the dataset's metadata before any upload runs. SObject entries are auto-reordered at runtime; ELF/CSV source order must already match the dataset.
 
 ## Config Reference
 
@@ -190,10 +190,9 @@ All entries in a group must use the same `operation`.
 
 </details>
 
-<details>
-<summary>State File & Watermarks</summary>
+### State File & Watermarks
 
-Watermarks are stored in a separate state file (`.dataset-load.state.json`) to keep config declarative:
+Watermarks are stored in a separate state file (`.dataset-load.state.json` by default; override with `--state-file`) to keep config declarative:
 
 ```json
 {
@@ -204,15 +203,13 @@ Watermarks are stored in a separate state file (`.dataset-load.state.json`) to k
 }
 ```
 
-Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{sObject}`, or `csv:{csvFile}`.
+Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{sObject}`, or `csv:{csvFile}`. Set `name` on an entry to use it as the key instead — lets you rename source orgs or change event types without losing watermark history.
 
-> Set `name` on an entry to use it as the watermark key instead of the auto-generated one. This lets you rename source orgs or change event types without losing watermark history.
+First-run behaviour (no watermark yet):
 
-- **First ELF run** (no watermark): fetches every available log file ascending. Pass `--start-date` to cap the initial pull — see [Advanced Usage](#advanced-usage).
-- **First SObject run** (no watermark): fetches all matching records. Use `limit` in the config or `--start-date` on the CLI to cap.
-- **Subsequent runs**: fetch incrementally from the stored watermark.
-
-</details>
+- **ELF** — fetches every available log file ascending. Pass `--start-date` to cap the initial pull (see [Advanced Usage](#advanced-usage)).
+- **SObject** — fetches all matching records. Use `limit` in the config or `--start-date` on the CLI to cap.
+- **Subsequent runs** — fetch incrementally from the stored watermark.
 
 <!-- commands -->
 * [`sf dataset load`](#sf-dataset-load)
@@ -358,21 +355,18 @@ sf dataset load \
 
 Dedicated state file + `targetFile` = zero impact on main state and no CRM Analytics write.
 
-### Append vs Overwrite
+### Warnings & gotchas
 
-| Scenario | Append | Overwrite |
-|---|---|---|
-| Bounded past-window run against the main dataset | Creates duplicates for records already loaded in that window. **Use the state-file copy pattern above.** | Replaces the *entire* dataset with just the window — usually not what you want. |
-| `--start-date` equal to the current watermark | **BOUNDARY** warning: one duplicate boundary row. Bump `--start-date` by 1 ms. | Silent — wholesale replace is idempotent. |
+The command prints at most one warning per entry before running. Each tells you about a non-obvious consequence of the flag combination:
 
-### Warnings reference
+| Warning | Trigger | What it means | What to do |
+|---|---|---|---|
+| **REWIND** | `--start-date` < watermark | Previously-loaded records will be re-loaded; watermark may regress. | If deliberate, expected. To preserve the main watermark, use the **Safe past-window backfill** pattern above. Under `Append`, records in the window are duplicated. |
+| **HOLE** | `--start-date` > watermark | Records with dateField in the gap will be skipped this run AND by subsequent incremental runs (the watermark jumps past the gap). | See [RUN_BOOK.md](RUN_BOOK.md) for the HOLE recovery recipe. |
+| **BOUNDARY** | `--start-date` == watermark, `Append` | One boundary record gets appended again (duplicate row). | Bump `--start-date` by 1 ms. Silent under `Overwrite` (wholesale replace is idempotent). |
+| **EMPTY** | `--end-date` < watermark (no `--start-date`) | Query window is empty; no records will load. | Drop `--end-date` or advance it. |
 
-| Warning | Trigger | What to do |
-|---|---|---|
-| **REWIND** | `--start-date` is before the watermark | Expected when you're deliberately rewinding. Use the state-file copy pattern if you don't want the main watermark to regress. |
-| **HOLE** | `--start-date` is after the watermark | Records in the gap won't be back-filled by subsequent incremental runs. See [RUN_BOOK.md](RUN_BOOK.md) for the recovery recipe. |
-| **BOUNDARY** | `--start-date` equals the watermark, operation `Append` | Bump `--start-date` by 1 ms. |
-| **EMPTY** | `--end-date` is before the watermark (no `--start-date`) | Window is empty; drop `--end-date` or advance it. |
+The `Append` vs `Overwrite` distinction matters most for **bounded past-window runs on the main dataset**: `Append` creates duplicates for any records already loaded in that window; `Overwrite` replaces the *entire* dataset with just the window (usually not what you want). Use the **Safe past-window backfill** pattern in either case.
 
 ## Troubleshooting
 
