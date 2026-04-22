@@ -97,7 +97,7 @@ describe('DateBounds', () => {
       expect(sut.toString()).toBe(`[${ISO_JAN}, ${ISO_JAN}]`)
     })
 
-    it('given start in Z and end in offset representing valid chronological order, when creating, then accepts (epoch-ms comparison)', () => {
+    it('given start in Z and end in offset representing valid chronological order, when creating, then accepts and retains both bounds verbatim (epoch-ms comparison, no normalization)', () => {
       // Arrange
       const startInZ = '2026-01-01T00:00:00.000Z' // instant: 2026-01-01T00:00:00Z
       const endInOffset = '2026-01-01T10:00:00.000+02:00' // instant: 2026-01-01T08:00:00Z — chronologically after
@@ -105,8 +105,11 @@ describe('DateBounds', () => {
       // Act
       const sut = DateBounds.from(startInZ, endInOffset)
 
-      // Assert — epoch-ms comparison accepts; lex would order start > end incorrectly
+      // Assert — epoch-ms comparison accepts; lex would order start > end incorrectly.
+      // Also kills a mutation that drops `endAt`: both conditions must surface.
       expect(sut.isEmpty()).toBe(false)
+      expect(sut.lowerConditionFor('DF', undefined)).toBe(`DF >= ${startInZ}`)
+      expect(sut.upperConditionFor('DF')).toBe(`DF <= ${endInOffset}`)
     })
   })
 
@@ -168,6 +171,15 @@ describe('DateBounds', () => {
       // Assert
       expect(sut.lowerConditionFor('DF', wm(ISO_FEB))).toBe(`DF >= ${ISO_MAR}`)
     })
+
+    it('given only ed with wm, when asking for lower, then watermark wins with strict gt (SD absent)', () => {
+      // Arrange — covers the `!startAt && watermark` branch at the unit level;
+      // otherwise this path is only exercised through SObjectReader integration.
+      const sut = DateBounds.from(undefined, ISO_MAR)
+
+      // Assert
+      expect(sut.lowerConditionFor('DF', wm(ISO_FEB))).toBe(`DF > ${ISO_FEB}`)
+    })
   })
 
   describe('upperConditionFor', () => {
@@ -182,6 +194,14 @@ describe('DateBounds', () => {
     it('given ed, when asking for upper, then returns inclusive leq clause', () => {
       // Arrange
       const sut = DateBounds.from(undefined, ISO_MAR)
+
+      // Assert
+      expect(sut.upperConditionFor('DF')).toBe(`DF <= ${ISO_MAR}`)
+    })
+
+    it('given sd and ed, when asking for upper, then returns leq on ed (SD does not mask ED)', () => {
+      // Arrange — kills a mutation that short-circuits upperConditionFor when SD is set.
+      const sut = DateBounds.from(ISO_JAN, ISO_MAR)
 
       // Assert
       expect(sut.upperConditionFor('DF')).toBe(`DF <= ${ISO_MAR}`)

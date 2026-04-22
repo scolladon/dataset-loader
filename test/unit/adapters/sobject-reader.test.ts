@@ -36,13 +36,14 @@ describe('SObjectReader', () => {
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
 
-    // Assert
-    expect(lines).toHaveLength(2)
-    expect(lines[0]).toContain('001A')
-    expect(lines[0]).toContain('Acme')
-    expect(lines[1]).toContain('001B')
-    expect(lines[1]).toContain('Globex')
-    expect(lines.join('\n')).not.toMatch(/^"Id"/)
+    // Assert — exact-line assertions (instead of `toContain` substrings) kill
+    // mutations to field ordering, separator, or quoting. They also catch any
+    // stray leaked header line via the full-content check below.
+    expect(lines).toEqual([
+      '"001A","Acme","2026-03-01T00:00:00.000Z"',
+      '"001B","Globex","2026-03-02T00:00:00.000Z"',
+    ])
+    expect(lines.every(l => !l.startsWith('"Id"'))).toBe(true)
     expect(result.watermark()?.toString()).toBe('2026-03-02T00:00:00.000Z')
     expect(result.fileCount()).toBe(1)
   })
@@ -863,12 +864,12 @@ describe('SObjectReader.project', () => {
     })
     await sut.fetch()
 
-    // Assert — scoped to LastModifiedDate to avoid false positives
-    // from unrelated `>=`/`>` elsewhere in the SOQL.
+    // Assert — scoped to LastModifiedDate to avoid false positives from
+    // unrelated `>=`/`>` elsewhere in the SOQL. The single `>` regex below
+    // covers both `>` and `>=`, so a separate `>= ` check is redundant.
     const soql = querySpy.mock.calls[0][0]
     expect(soql).toContain('LastModifiedDate <= 2026-01-31T23:59:59.999Z')
-    expect(soql).not.toMatch(/LastModifiedDate >= /)
-    expect(soql).not.toMatch(/LastModifiedDate > /)
+    expect(soql).not.toMatch(/LastModifiedDate >/)
   })
 
   it('given bounds start and end and no watermark, when fetching, then SOQL has both geq and leq joined with AND', async () => {

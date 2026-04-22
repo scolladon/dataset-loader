@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   existsSync,
   mkdtempSync,
@@ -1775,6 +1776,14 @@ describe('DatasetLoad NUT', () => {
   })
 
   describe('date bounds (--start-date / --end-date)', () => {
+    // Shared literals reused as CLI inputs or seeded watermarks within this
+    // block. Warning strings keep inline ISOs on purpose — they are exact
+    // mutation-kill fixtures, so we do NOT template-interpolate them.
+    const ISO_JAN_01 = '2026-01-01T00:00:00.000Z'
+    const ISO_JAN_31 = '2026-01-31T23:59:59.999Z'
+    const ISO_FEB_10 = '2026-02-10T00:00:00.000Z'
+    const ISO_MAR_01 = '2026-03-01T00:00:00.000Z'
+
     function seedState(path: string, watermarks: Record<string, string>): void {
       writeFileSync(
         path,
@@ -1786,6 +1795,13 @@ describe('DatasetLoad NUT', () => {
     // Capture log/warn emitted by a run; restores the prototype even on
     // failure. Avoids the repeated save-patch-restore boilerplate and
     // guarantees the prototype is never left mutated across tests.
+    //
+    // Coupling note: patches `DatasetLoad.prototype.log` / `.warn` — the
+    // SfCommand inherited methods. If logging is ever routed through a
+    // different seam (e.g. `this.ux.log`, an injected logger port, or a
+    // stdout stream), these tests will silently stop observing output
+    // (no failure — they will just see empty arrays). Update this helper
+    // in lockstep with any such refactor.
     async function captureOutput(
       run: () => Promise<unknown>
     ): Promise<{ logs: string[]; warns: string[] }> {
@@ -1882,9 +1898,9 @@ describe('DatasetLoad NUT', () => {
           '--state-file',
           tmp.statePath,
           '--start-date',
-          '2026-03-01T00:00:00.000Z',
+          ISO_MAR_01,
           '--end-date',
-          '2026-01-01T00:00:00.000Z',
+          ISO_JAN_01,
         ])
       } catch (err) {
         caught = err
@@ -1951,9 +1967,9 @@ describe('DatasetLoad NUT', () => {
           tmp!.statePath,
           '--dry-run',
           '--start-date',
-          '2026-01-01T00:00:00.000Z',
+          ISO_JAN_01,
           '--end-date',
-          '2026-01-31T23:59:59.999Z',
+          ISO_JAN_31,
         ])
       })
 
@@ -1995,7 +2011,7 @@ describe('DatasetLoad NUT', () => {
       tmp = createTempFiles(
         makeConfigJson([sobjectEntry({ name: 'accounts' })])
       )
-      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
       orgOnlyConnection()
 
       // Act
@@ -2007,7 +2023,7 @@ describe('DatasetLoad NUT', () => {
           tmp!.statePath,
           '--dry-run',
           '--start-date',
-          '2026-01-01T00:00:00.000Z',
+          ISO_JAN_01,
         ])
       )
 
@@ -2034,7 +2050,7 @@ describe('DatasetLoad NUT', () => {
       tmp = createTempFiles(
         makeConfigJson([sobjectEntry({ name: 'accounts' })])
       )
-      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
       orgOnlyConnection()
 
       // Act
@@ -2046,7 +2062,7 @@ describe('DatasetLoad NUT', () => {
           tmp!.statePath,
           '--dry-run',
           '--start-date',
-          '2026-03-01T00:00:00.000Z',
+          ISO_MAR_01,
         ])
       )
 
@@ -2081,7 +2097,7 @@ describe('DatasetLoad NUT', () => {
           tmp!.statePath,
           '--dry-run',
           '--end-date',
-          '2026-01-31T23:59:59.999Z',
+          ISO_JAN_31,
         ])
       )
 
@@ -2105,7 +2121,7 @@ describe('DatasetLoad NUT', () => {
           sobjectEntry({ name: 'accounts', operation: 'Append' }),
         ])
       )
-      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
       orgOnlyConnection()
 
       // Act
@@ -2117,7 +2133,7 @@ describe('DatasetLoad NUT', () => {
           tmp!.statePath,
           '--dry-run',
           '--start-date',
-          '2026-02-10T00:00:00.000Z',
+          ISO_FEB_10,
         ])
       )
 
@@ -2142,7 +2158,7 @@ describe('DatasetLoad NUT', () => {
           sobjectEntry({ name: 'accounts', operation: 'Overwrite' }),
         ])
       )
-      seedState(tmp.statePath, { accounts: '2026-02-10T00:00:00.000Z' })
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
       orgOnlyConnection()
 
       // Act
@@ -2154,7 +2170,7 @@ describe('DatasetLoad NUT', () => {
           tmp!.statePath,
           '--dry-run',
           '--start-date',
-          '2026-02-10T00:00:00.000Z',
+          ISO_FEB_10,
         ])
       )
 
@@ -2165,7 +2181,7 @@ describe('DatasetLoad NUT', () => {
 
     it('given bounds with only CSV entries, when running dry-run, then emits exactly one "no effect" warning and renders CSV watermark as n/a', async () => {
       // Arrange
-      const csvPath = join(os.tmpdir(), 'bounds-csv-only.csv')
+      const csvPath = join(os.tmpdir(), `bounds-csv-only-${randomUUID()}.csv`)
       writeFileSync(csvPath, csvContent(['col'], [['a']]))
       tmp = createTempFiles(
         makeConfigJson([
@@ -2189,7 +2205,7 @@ describe('DatasetLoad NUT', () => {
             tmp!.statePath,
             '--dry-run',
             '--start-date',
-            '2026-01-01T00:00:00.000Z',
+            ISO_JAN_01,
           ])
         )
 
@@ -2225,7 +2241,7 @@ describe('DatasetLoad NUT', () => {
       tmp = createTempFiles(
         makeConfigJson([sobjectEntry({ name: 'accounts' })])
       )
-      seedState(tmp.statePath, { accounts: '2026-01-01T00:00:00.000Z' })
+      seedState(tmp.statePath, { accounts: ISO_JAN_01 })
       orgOnlyConnection()
 
       // Act
@@ -2251,7 +2267,7 @@ describe('DatasetLoad NUT', () => {
       tmp = createTempFiles(
         makeConfigJson([sobjectEntry({ name: 'accounts' })])
       )
-      seedState(tmp.statePath, { accounts: '2026-01-01T00:00:00.000Z' })
+      seedState(tmp.statePath, { accounts: ISO_JAN_01 })
       orgOnlyConnection()
 
       // Act
@@ -2317,9 +2333,9 @@ describe('DatasetLoad NUT', () => {
         '--state-file',
         tmp.statePath,
         '--start-date',
-        '2026-01-01T00:00:00.000Z',
+        ISO_JAN_01,
         '--end-date',
-        '2026-01-31T23:59:59.999Z',
+        ISO_JAN_31,
       ])
 
       // Assert
