@@ -2294,6 +2294,161 @@ describe('DatasetLoad NUT', () => {
       expect(logs.some(l => l.startsWith('    effective:'))).toBe(false)
     })
 
+    it('given fresh state with ELF entry and no --start-date, when dry-running, then emits exact FIRST_RUN_ELF warning', async () => {
+      // Arrange — fresh state, no bounds, no watermark for the ELF entry.
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert — exact text kills StringLiteral mutations on the warning template
+      expect(warns.filter(w => w.includes('FIRST_RUN_ELF'))).toEqual([
+        '[logins] FIRST_RUN_ELF: no watermark and no --start-date; every log file ever emitted for this event type will be downloaded. On busy orgs this is thousands of blobs. Pass --start-date (e.g. --start-date 2026-01-01T00:00:00.000Z) to cap the initial pull. See README Advanced Usage.',
+      ])
+    })
+
+    it('given fresh state with ELF entry and --start-date set, when dry-running, then no FIRST_RUN_ELF warning', async () => {
+      // Arrange — SD caps the pull, so the warning must be suppressed
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_JAN_01,
+        ])
+      )
+
+      // Assert
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+    })
+
+    it('given seeded-watermark ELF entry and no --start-date, when dry-running, then no FIRST_RUN_ELF warning', async () => {
+      // Arrange — watermark already exists → not a first run
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      seedState(tmp.statePath, { logins: ISO_JAN_01 })
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+    })
+
+    it('given fresh state with SObject entry and --end-date only, when dry-running, then emits exact FRESH_END_ONLY warning', async () => {
+      // Arrange — non-CSV, no watermark, only --end-date set.
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--end-date',
+          ISO_JAN_31,
+        ])
+      )
+
+      // Assert — exact text kills StringLiteral mutations
+      expect(warns.filter(w => w.includes('FRESH_END_ONLY'))).toEqual([
+        "[accounts] FRESH_END_ONLY: no watermark yet and --end-date provided without --start-date; the watermark will advance to this run's max dateField (at or before --end-date), so records created after --end-date will be skipped until --end-date is dropped. Pass --start-date on the first run to make the window explicit.",
+      ])
+      // FIRST_RUN_ELF must NOT also fire (SObject entry, not ELF)
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+    })
+
+    it('given fresh state with --start-date and --end-date, when dry-running, then neither FIRST_RUN_ELF nor FRESH_END_ONLY fires', async () => {
+      // Arrange — SD is present, which caps the first-run volume and makes the window explicit
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_JAN_01,
+          '--end-date',
+          ISO_JAN_31,
+        ])
+      )
+
+      // Assert
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+      expect(warns.some(w => w.includes('FRESH_END_ONLY'))).toBe(false)
+    })
+
+    it('given fresh state CSV-only entries and --end-date, when dry-running, then no FRESH_END_ONLY (CSV excluded)', async () => {
+      // Arrange — CSV entries are explicitly skipped by emitFirstRunWarnings
+      const csvPath = join(os.tmpdir(), `bounds-csv-fresh-${randomUUID()}.csv`)
+      writeFileSync(csvPath, csvContent(['col'], [['a']]))
+      tmp = createTempFiles(
+        makeConfigJson([
+          {
+            targetOrg: 'ana-org',
+            targetDataset: 'DS',
+            csvFile: csvPath,
+            name: 'only-csv',
+          },
+        ])
+      )
+      orgOnlyConnection()
+
+      try {
+        // Act
+        const { warns } = await captureOutput(() =>
+          runCommand([
+            '--config-file',
+            tmp!.configPath,
+            '--state-file',
+            tmp!.statePath,
+            '--dry-run',
+            '--end-date',
+            ISO_JAN_31,
+          ])
+        )
+
+        // Assert
+        expect(warns.some(w => w.includes('FRESH_END_ONLY'))).toBe(false)
+      } finally {
+        rmSync(csvPath, { force: true })
+      }
+    })
+
     it('given bounds and SObject pipeline run, when running, then SOQL to source org contains the bounds conditions', async () => {
       // Arrange
       tmp = createTempFiles(

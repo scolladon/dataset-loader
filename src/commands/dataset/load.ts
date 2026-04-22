@@ -268,6 +268,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     watermarks: WatermarkStore,
     bounds: DateBounds
   ): DatasetLoadResult {
+    this.emitFirstRunWarnings(entries, watermarks, bounds)
     this.emitBoundsWarnings(entries, watermarks, bounds)
     this.log('Dry run — planned entries:')
     if (bounds.isEmpty()) {
@@ -348,6 +349,40 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     return ''
   }
 
+  // Surfaces two first-run footguns that operators otherwise only discover
+  // after the fact:
+  //   1. FIRST_RUN_ELF — fresh state + any ELF entry + no --start-date:
+  //      every log file ever emitted gets downloaded. Easy to miss on a
+  //      "just works" first run against a busy org.
+  //   2. FRESH_END_ONLY — fresh state (any non-CSV entry) + --end-date
+  //      without --start-date: the run sets the watermark to the max
+  //      record seen within the window, but subsequent incremental runs
+  //      silently skip records created after --end-date until the flag
+  //      is removed and rerun. No existing warning covers this shape.
+  // Both warnings are suppressed when --start-date is set (SD caps the
+  // pull) or when a watermark already exists for the entry (not fresh).
+  private emitFirstRunWarnings(
+    entries: ResolvedEntry[],
+    watermarks: WatermarkStore,
+    bounds: DateBounds
+  ): void {
+    if (bounds.hasStart()) return
+    for (const { entry } of entries) {
+      if (isCsvEntry(entry)) continue
+      if (watermarks.get(WatermarkKey.fromEntry(entry))) continue
+      const label = entryLabel(entry)
+      if (bounds.hasEnd()) {
+        this.warn(
+          `[${label}] FRESH_END_ONLY: no watermark yet and --end-date provided without --start-date; the watermark will advance to this run's max dateField (at or before --end-date), so records created after --end-date will be skipped until --end-date is dropped. Pass --start-date on the first run to make the window explicit.`
+        )
+      } else if (isElfEntry(entry)) {
+        this.warn(
+          `[${label}] FIRST_RUN_ELF: no watermark and no --start-date; every log file ever emitted for this event type will be downloaded. On busy orgs this is thousands of blobs. Pass --start-date (e.g. --start-date 2026-01-01T00:00:00.000Z) to cap the initial pull. See README Advanced Usage.`
+        )
+      }
+    }
+  }
+
   private emitBoundsWarnings(
     entries: ResolvedEntry[],
     watermarks: WatermarkStore,
@@ -404,6 +439,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     logger: LoggerPort,
     bounds: DateBounds
   ): Promise<DatasetLoadResult> {
+    this.emitFirstRunWarnings(entries, watermarks, bounds)
     this.emitBoundsWarnings(entries, watermarks, bounds)
     // Two-pass entry build: sync dedupe of readers (avoids Map races under
     // concurrent awaits), then async resolution of providedFields per entry.

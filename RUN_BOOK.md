@@ -437,7 +437,11 @@ warning at the time was the only chance to notice.
 
 ### Warning reference
 
-See the canonical table in [README.md → Warnings & gotchas](README.md#warnings--gotchas) for the full REWIND / HOLE / BOUNDARY / EMPTY taxonomy. Invalid input (bad ISO format, bad calendar date like `2026-02-30`, or `--start-date > --end-date`) aborts the run before any mode branch — surfaces identically under `--audit`, `--dry-run`, or a real run.
+See the canonical table in [README.md → Warnings & gotchas](README.md#warnings--gotchas) for the full FIRST_RUN_ELF / FRESH_END_ONLY / REWIND / HOLE / BOUNDARY / EMPTY taxonomy. Invalid input (bad ISO format, bad calendar date like `2026-02-30`, or `--start-date > --end-date`) aborts the run before any mode branch — surfaces identically under `--audit`, `--dry-run`, or a real run.
+
+**FIRST_RUN_ELF recovery.** If you ignored the warning and the ELF pull already started, `Ctrl-C` is safe — the state file is only written after a group succeeds, so killing mid-run leaves the prior watermark intact. Restart with `--start-date`.
+
+**FRESH_END_ONLY recovery.** If the warning fired and you let the run complete, the watermark is now at (or before) your `--end-date`. To pick up records created after `--end-date`: drop the flag and run normally (`sf dataset load`) — the next run will tail from the stored watermark onward.
 
 ## Reference
 

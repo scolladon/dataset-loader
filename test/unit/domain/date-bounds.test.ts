@@ -123,6 +123,44 @@ describe('DateBounds', () => {
     })
   })
 
+  describe('hasStart / hasEnd', () => {
+    it('given none, when checking flags, then both false', () => {
+      // Arrange / Act
+      const sut = DateBounds.none()
+
+      // Assert
+      expect(sut.hasStart()).toBe(false)
+      expect(sut.hasEnd()).toBe(false)
+    })
+
+    it('given only start, when checking flags, then hasStart is true and hasEnd is false', () => {
+      // Arrange / Act
+      const sut = DateBounds.from(ISO_JAN, undefined)
+
+      // Assert
+      expect(sut.hasStart()).toBe(true)
+      expect(sut.hasEnd()).toBe(false)
+    })
+
+    it('given only end, when checking flags, then hasStart is false and hasEnd is true', () => {
+      // Arrange / Act
+      const sut = DateBounds.from(undefined, ISO_MAR)
+
+      // Assert
+      expect(sut.hasStart()).toBe(false)
+      expect(sut.hasEnd()).toBe(true)
+    })
+
+    it('given both, when checking flags, then both true', () => {
+      // Arrange / Act
+      const sut = DateBounds.from(ISO_JAN, ISO_MAR)
+
+      // Assert
+      expect(sut.hasStart()).toBe(true)
+      expect(sut.hasEnd()).toBe(true)
+    })
+  })
+
   describe('lowerConditionFor', () => {
     it('given no sd and no wm, when asking for lower, then returns undefined', () => {
       // Arrange

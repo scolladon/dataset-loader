@@ -79,6 +79,8 @@ sf dataset load --dry-run
 sf dataset load
 ```
 
+> ⚠️ **First-run volume** — on a fresh state file (no prior watermark), each entry pulls *every* matching record. For ELF this means *every log file ever emitted* by the source org — on busy orgs, thousands of blobs. Cap the first run with `--start-date 2026-01-01T00:00:00.000Z` (or similar) and let subsequent cron runs tail incrementally. See [Advanced Usage](#advanced-usage).
+
 > **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
 
 > **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
@@ -361,6 +363,8 @@ The command prints at most one warning per entry before running. Each tells you 
 
 | Warning | Trigger | What it means | What to do |
 |---|---|---|---|
+| **FIRST_RUN_ELF** | fresh state + ELF entry + no `--start-date` | Every log file ever emitted for the event type will be downloaded — thousands of blobs on busy orgs. | Pass `--start-date` to cap the initial pull, or pre-seed a watermark in the state file. |
+| **FRESH_END_ONLY** | fresh state (non-CSV) + `--end-date` without `--start-date` | The watermark advances to the run's max dateField; records created after `--end-date` are skipped by subsequent incremental runs until `--end-date` is dropped. | Pass `--start-date` on the first run to make the window explicit, or drop `--end-date` to let the run tail. |
 | **REWIND** | `--start-date` < watermark | Previously-loaded records will be re-loaded; watermark may regress. | If deliberate, expected. To preserve the main watermark, use the **Safe past-window backfill** pattern above. Under `Append`, records in the window are duplicated. |
 | **HOLE** | `--start-date` > watermark | Records with dateField in the gap will be skipped this run AND by subsequent incremental runs (the watermark jumps past the gap). | See [RUN_BOOK.md](RUN_BOOK.md) for the HOLE recovery recipe. |
 | **BOUNDARY** | `--start-date` == watermark, `Append` | One boundary record gets appended again (duplicate row). | Bump `--start-date` by 1 ms. Silent under `Overwrite` (wholesale replace is idempotent). |

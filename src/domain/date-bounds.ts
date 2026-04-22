@@ -56,6 +56,14 @@ export class DateBounds {
     return !this.startAt && !this.endAt
   }
 
+  hasStart(): boolean {
+    return this.startAt !== undefined
+  }
+
+  hasEnd(): boolean {
+    return this.endAt !== undefined
+  }
+
   lowerConditionFor(
     dateField: string,
     watermark: Watermark | undefined
