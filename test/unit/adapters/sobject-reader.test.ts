@@ -785,7 +785,7 @@ describe('SObjectReader', () => {
 
     // Assert — field is wrapped in quotes AND prefixed with a TAB (with
     // any embedded " doubled per CSV escaping)
-    const expected = `"\t${payload.replaceAll('"', '""')}"`
+    const expected = `"\t${payload.split('"').join('""')}"`
     expect(lines[0]).toContain(expected)
   })
 })

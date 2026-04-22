@@ -172,7 +172,7 @@ describe('DatasetLoad NUT', () => {
     username: 'ana2-org',
   })
 
-  let savedExitCode: number | undefined
+  let savedExitCode: typeof process.exitCode
   let tmp: TempFiles | undefined
 
   beforeEach(async () => {
@@ -278,8 +278,8 @@ describe('DatasetLoad NUT', () => {
       const method = ensureString(reqMap.method ?? 'GET')
       const body = reqMap.body as string | undefined
       const value = handler(url, method, body)
-      return Promise.resolve(value) as Promise<
-        ReturnType<typeof $$.fakeConnectionRequest>
+      return Promise.resolve(value) as ReturnType<
+        typeof $$.fakeConnectionRequest
       >
     }
     // Mock fetch for getBlobStream (true HTTP streaming bypasses jsforce)
