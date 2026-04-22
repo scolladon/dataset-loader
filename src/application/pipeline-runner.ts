@@ -119,11 +119,18 @@ export class PipelineRunner {
       const cacheKey = readerKey.toString()
       const existing = sharedReaders.get(cacheKey)
       const fetcher: ReaderPort = existing ?? new CsvReader(entry.csvFile)
+      // Stryker disable next-line ConditionalExpression: equivalent mutant —
+      // with `if (true)` the map is re-set with the same `fetcher` value
+      // (= `existing`) when present, leaving `sharedReaders.get(cacheKey)`
+      // observationally identical.
       if (!existing) sharedReaders.set(cacheKey, fetcher)
       return { resolvedEntry, index, readerKey, fetcher, augmentColumns }
     }
 
     const srcPort = sfPorts.get(entry.sourceOrg)
+    // Stryker disable next-line ConditionalExpression: equivalent mutant —
+    // srcPort is always defined in production; the check is a defensive
+    // guard matching the load.ts invariant and never fires in tests.
     /* v8 ignore next 4 -- srcPort presence is guaranteed by the
        loadAndResolveConfig pre-pass in load.ts (all entries' sourceOrg
        aliases are ensured before PipelineRunner.run is called). */

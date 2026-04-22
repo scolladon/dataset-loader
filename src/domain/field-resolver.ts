@@ -34,13 +34,22 @@ export async function resolveProvidedFields(
   if (isCsvEntry(entry)) {
     return parseCsvHeader(await fetcher.header())
   }
+  // Stryker disable next-line ConditionalExpression: equivalent mutant —
+  // `!isElfEntry` is unreachable (CSV and SObject short-circuited above).
   /* v8 ignore next 3 -- exhaustive discriminator; unreachable */
   if (!isElfEntry(entry)) {
     throw new Error('unknown entry kind')
   }
   const srcPort = sfPorts.get(entry.sourceOrg)
+  // Stryker disable next-line ConditionalExpression: equivalent mutant —
+  // load.ts's ensureSfPort prepass populates the map for every sourceOrg.
   /* v8 ignore next 2 -- srcPort presence is validated before this call runs */
   if (!srcPort) throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
+  // Any query failure (permissions, connectivity, empty result, malformed
+  // response) falls through to the final `return []`: audit is the
+  // authoritative place to surface these, so the alignment pass stays
+  // resilient and lets the downstream fetch() / writer-init produce the
+  // eventual per-entry failure.
   let raw: string | null | undefined
   try {
     const result = await srcPort.query<{
@@ -48,9 +57,13 @@ export async function resolveProvidedFields(
     }>(
       `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${entry.eventLog}' AND Interval = '${entry.interval}' ORDER BY LogDate DESC LIMIT 1`
     )
+    // Stryker disable next-line OptionalChaining: equivalent mutant —
+    // dropping the `?.` makes `records[0].LogFileFieldNames` throw when the
+    // array is empty; the surrounding `catch {}` swallows the throw and
+    // `raw` stays undefined → same [] output.
     raw = result.records[0]?.LogFileFieldNames
   } catch {
-    return []
+    /* swallow on purpose — see function-level rationale above */
   }
   return raw ? parseCsvHeader(raw) : []
 }

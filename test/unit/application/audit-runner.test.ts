@@ -83,10 +83,11 @@ describe('AuditRunner', () => {
     expect(auditEntries[2].readerKind).toBe('csv')
   })
 
-  it('given CSV-only entries, when running, then audit entries contain only csv kind', async () => {
+  it('given CSV-only entries, when running, then audit entries contain only csv kind with sourceOrg sentinel', async () => {
     // Arrange — M4 gap: the CSV branch of buildAuditEntry was exercised in
     // the mixed test above, but isolating it catches a mutation that swaps
-    // the csv / sobject / elf dispatch order.
+    // the csv / sobject / elf dispatch order. Assert the `<csv>` sentinel
+    // explicitly so a StringLiteral mutation on that value is caught.
     vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
     const { logger } = makeLogger()
     const sut = new AuditRunner(logger)
@@ -98,6 +99,7 @@ describe('AuditRunner', () => {
     const auditEntries = vi.mocked(buildAuditChecks).mock.calls[0][0]
     expect(auditEntries).toHaveLength(1)
     expect(auditEntries[0].readerKind).toBe('csv')
+    expect(auditEntries[0].sourceOrg).toBe('<csv>')
   })
 
   it('given empty entries, when running, then runAudit is still invoked with an empty list and result reports no failures', async () => {
