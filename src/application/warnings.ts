@@ -4,11 +4,11 @@ import {
   isCsvEntry,
   isElfEntry,
   type ResolvedEntry,
-} from '../../adapters/config-loader.js'
-import { type DateBounds } from '../../domain/date-bounds.js'
-import { type Watermark } from '../../domain/watermark.js'
-import { WatermarkKey } from '../../domain/watermark-key.js'
-import { type WatermarkStore } from '../../domain/watermark-store.js'
+} from '../adapters/config-loader.js'
+import { type DateBounds } from '../domain/date-bounds.js'
+import { type Watermark } from '../domain/watermark.js'
+import { WatermarkKey } from '../domain/watermark-key.js'
+import { type WatermarkStore } from '../domain/watermark-store.js'
 
 // Pure functions that compute the warning messages emitted before every
 // non-audit run (dry-run or real pipeline). Kept free of I/O so the 6-way

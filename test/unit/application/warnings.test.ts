@@ -11,7 +11,7 @@ import {
   computeWarnings,
   dryRunAnnotation,
   firstRunMessages,
-} from '../../../src/commands/dataset/warnings.js'
+} from '../../../src/application/warnings.js'
 import { DateBounds } from '../../../src/domain/date-bounds.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { WatermarkKey } from '../../../src/domain/watermark-key.js'
