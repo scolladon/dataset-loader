@@ -46,9 +46,20 @@ export interface CsvEntry extends CsvShape {
 
 export type ConfigEntry = ElfEntry | SObjectEntry | CsvEntry
 
-export const isElfEntry = isElf<ConfigEntry>
-export const isSObjectEntry = isSObject<ConfigEntry>
-export const isCsvEntry = isCsv<ConfigEntry>
+// Narrow to the full discriminated type (not just the shape-only mixin) so
+// callers can access kind-specific fields like `SObjectEntry.fields` or
+// `ElfEntry.interval` without casts. The shape helpers (`isElf`, `isSObject`,
+// `isCsv`) check the structural discriminator; combining that with the known
+// ConfigEntry union lets us assert the full member type.
+export function isElfEntry(entry: ConfigEntry): entry is ElfEntry {
+  return isElf(entry)
+}
+export function isSObjectEntry(entry: ConfigEntry): entry is SObjectEntry {
+  return isSObject(entry)
+}
+export function isCsvEntry(entry: ConfigEntry): entry is CsvEntry {
+  return isCsv(entry)
+}
 
 interface Config {
   entries: ConfigEntry[]
@@ -506,3 +517,12 @@ export function entryLabel(entry: ConfigEntry): string {
   throw new Error(`Unknown entry shape`)
 }
 /* v8 ignore stop */
+
+// Single source of truth for the `ReaderKind` discriminator. Callers that
+// need the string tag (audit-entry construction, alignment spec) should
+// delegate here rather than re-implementing the three-way guard chain.
+export function entryKind(entry: ConfigEntry): 'csv' | 'elf' | 'sobject' {
+  if (isCsvEntry(entry)) return 'csv'
+  if (isElfEntry(entry)) return 'elf'
+  return 'sobject'
+}

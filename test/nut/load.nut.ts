@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   existsSync,
   mkdtempSync,
@@ -171,7 +172,7 @@ describe('DatasetLoad NUT', () => {
     username: 'ana2-org',
   })
 
-  let savedExitCode: number | undefined
+  let savedExitCode: typeof process.exitCode
   let tmp: TempFiles | undefined
 
   beforeEach(async () => {
@@ -277,8 +278,8 @@ describe('DatasetLoad NUT', () => {
       const method = ensureString(reqMap.method ?? 'GET')
       const body = reqMap.body as string | undefined
       const value = handler(url, method, body)
-      return Promise.resolve(value) as Promise<
-        ReturnType<typeof $$.fakeConnectionRequest>
+      return Promise.resolve(value) as ReturnType<
+        typeof $$.fakeConnectionRequest
       >
     }
     // Mock fetch for getBlobStream (true HTTP streaming bypasses jsforce)
@@ -1771,6 +1772,733 @@ describe('DatasetLoad NUT', () => {
       })
       expect(readFileSync(out1, 'utf-8')).toContain('Login')
       expect(readFileSync(out2, 'utf-8')).toContain('Login')
+    })
+  })
+
+  describe('date bounds (--start-date / --end-date)', () => {
+    // Shared literals reused as CLI inputs or seeded watermarks within this
+    // block. Warning strings keep inline ISOs on purpose — they are exact
+    // mutation-kill fixtures, so we do NOT template-interpolate them.
+    const ISO_JAN_01 = '2026-01-01T00:00:00.000Z'
+    const ISO_JAN_31 = '2026-01-31T23:59:59.999Z'
+    const ISO_FEB_10 = '2026-02-10T00:00:00.000Z'
+    const ISO_MAR_01 = '2026-03-01T00:00:00.000Z'
+
+    function seedState(path: string, watermarks: Record<string, string>): void {
+      writeFileSync(
+        path,
+        JSON.stringify({ watermarks }, null, 2) + '\n',
+        'utf-8'
+      )
+    }
+
+    // Capture log/warn emitted by a run; restores the prototype even on
+    // failure. Avoids the repeated save-patch-restore boilerplate and
+    // guarantees the prototype is never left mutated across tests.
+    //
+    // Coupling note: patches `DatasetLoad.prototype.log` / `.warn` — the
+    // SfCommand inherited methods. If logging is ever routed through a
+    // different seam (e.g. `this.ux.log`, an injected logger port, or a
+    // stdout stream), these tests will silently stop observing output
+    // (no failure — they will just see empty arrays). Update this helper
+    // in lockstep with any such refactor.
+    async function captureOutput(
+      run: () => Promise<unknown>
+    ): Promise<{ logs: string[]; warns: string[] }> {
+      const logs: string[] = []
+      const warns: string[] = []
+      const originalLog = DatasetLoad.prototype.log
+      const originalWarn = DatasetLoad.prototype.warn
+      DatasetLoad.prototype.log = function (msg: string) {
+        logs.push(msg)
+      }
+      DatasetLoad.prototype.warn = function (msg: string) {
+        warns.push(typeof msg === 'string' ? msg : String(msg))
+        return msg as never
+      }
+      try {
+        await run()
+      } finally {
+        DatasetLoad.prototype.log = originalLog
+        DatasetLoad.prototype.warn = originalWarn
+      }
+      return { logs, warns }
+    }
+
+    it('given malformed --start-date, when running, then exits with error mentioning the flag', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let caught: unknown
+      try {
+        await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--start-date',
+          'not-a-date',
+        ])
+      } catch (err) {
+        caught = err
+      }
+
+      // Assert
+      expect(caught).toBeDefined()
+      expect(String((caught as Error).message)).toContain('--start-date')
+      expect(String((caught as Error).message)).toContain('not-a-date')
+    })
+
+    it('given calendar-invalid --start-date (Feb 30), when running, then exits with calendar error', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let caught: unknown
+      try {
+        await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--start-date',
+          '2026-02-30T00:00:00.000Z',
+        ])
+      } catch (err) {
+        caught = err
+      }
+
+      // Assert
+      expect(caught).toBeDefined()
+      expect(String((caught as Error).message)).toContain(
+        'not a valid calendar date'
+      )
+    })
+
+    it('given --start-date after --end-date, when running, then exits with ordering error', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let caught: unknown
+      try {
+        await runCommand([
+          '--config-file',
+          tmp.configPath,
+          '--state-file',
+          tmp.statePath,
+          '--start-date',
+          ISO_MAR_01,
+          '--end-date',
+          ISO_JAN_01,
+        ])
+      } catch (err) {
+        caught = err
+      }
+
+      // Assert
+      expect(caught).toBeDefined()
+      expect(String((caught as Error).message)).toContain('must be <=')
+    })
+
+    it('given dry-run with no bounds, when running, then emits unified multi-line entry block with no Configured window / effective lines and no bounds warnings', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert — unified format: label line on its own, watermark on its own
+      // line ("(none)" fallback when there is no stored watermark). Exact-line
+      // matches kill StringLiteral mutations on both templates.
+      expect(logs.some(l => l === '  accounts → org:ana-org:DS2')).toBe(true)
+      expect(logs.some(l => l === '    watermark: (none)')).toBe(true)
+      // No inline combined "(watermark: …)" fragment in the unified format.
+      expect(logs.some(l => l.includes('(watermark:'))).toBe(false)
+      expect(logs.some(l => l.includes('Configured window'))).toBe(false)
+      expect(logs.some(l => l.includes('effective:'))).toBe(false)
+      // Kills `if (bounds.isEmpty()) return` → `true` mutation in the warnings
+      // module: no REWIND/HOLE/BOUNDARY/EMPTY warning fires when bounds empty.
+      expect(
+        warns.filter(
+          w =>
+            w.includes('REWIND') ||
+            w.includes('HOLE') ||
+            w.includes('BOUNDARY') ||
+            w.includes('EMPTY')
+        ).length
+      ).toBe(0)
+    })
+
+    it('given dry-run with bounds, when running, then prints full multi-line format with exact header, blank separator, entry line, watermark, effective, and returns zeroed result', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      let result: unknown
+      const { logs } = await captureOutput(async () => {
+        result = await runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_JAN_01,
+          '--end-date',
+          ISO_JAN_31,
+        ])
+      })
+
+      // Assert — the `logs` array is the ordered sequence of `this.log`
+      // calls. These exact-position / exact-text assertions kill:
+      //   - StringLiteral mutations on each logged line (including the
+      //     blank separator);
+      //   - ObjectLiteral mutation on handleDryRun's return value;
+      //   - MethodExpression mutation removing `.filter(Boolean)` from
+      //     the `[lower, upper]` conds (would inject `undefined` into
+      //     the effective line).
+      const header = 'Dry run — planned entries:'
+      const configured =
+        'Configured window: [2026-01-01T00:00:00.000Z, 2026-01-31T23:59:59.999Z]'
+      const entryLine = '  accounts → org:ana-org:DS2'
+      const watermarkLine = '    watermark: (none)'
+      const effectiveLine =
+        '    effective: LastModifiedDate >= 2026-01-01T00:00:00.000Z AND LastModifiedDate <= 2026-01-31T23:59:59.999Z'
+      expect(logs).toEqual([
+        header,
+        configured,
+        '', // blank separator between configured and first entry
+        entryLine,
+        watermarkLine,
+        effectiveLine,
+      ])
+      // Kills the ObjectLiteral mutation on `handleDryRun`'s return
+      // value: the dry-run must return a zeroed result shape.
+      expect(result).toEqual({
+        entriesProcessed: 0,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 0,
+      })
+    })
+
+    it('given dry-run with start-date before existing watermark, when running, then emits exact REWIND warning text and annotation, no "undefined" leak', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_JAN_01,
+        ])
+      )
+
+      // Assert — exact warning text kills StringLiteral mutations on
+      // every substring of the warning template literal.
+      expect(warns).toEqual([
+        '[accounts] REWIND: --start-date is before watermark 2026-02-10T00:00:00.000Z; previously-loaded records will be re-loaded; watermark may regress.',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate >= 2026-01-01T00:00:00.000Z  (REWIND: --start-date before watermark — watermark may regress)'
+        ).length
+      ).toBe(1)
+      // Kills `.filter(Boolean)` removal mutation on `[lower, upper]`:
+      // with only --start-date set, upper is undefined; without the filter
+      // the effective line would contain "undefined".
+      expect(logs.some(l => l.includes('undefined'))).toBe(false)
+    })
+
+    it('given dry-run with start-date after existing watermark, when running, then emits exact HOLE warning text and annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_MAR_01,
+        ])
+      )
+
+      // Assert — exact text kills warning-string mutations
+      expect(warns).toEqual([
+        '[accounts] HOLE: --start-date is after watermark 2026-02-10T00:00:00.000Z; records between the watermark and --start-date will be skipped this run AND by subsequent incremental runs (watermark will jump past the gap as soon as any in-window record loads).',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate >= 2026-03-01T00:00:00.000Z  (HOLE: --start-date after watermark — records in the gap will never be back-filled)'
+        ).length
+      ).toBe(1)
+      expect(logs.some(l => l.includes('undefined'))).toBe(false)
+    })
+
+    it('given dry-run with end-date before watermark and no start-date, when running, then emits exact EMPTY warning text and annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: '2026-04-01T00:00:00.000Z' })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--end-date',
+          ISO_JAN_31,
+        ])
+      )
+
+      // Assert — exact text kills warning-string mutations
+      expect(warns).toEqual([
+        '[accounts] EMPTY: --end-date is before watermark 2026-04-01T00:00:00.000Z; query window is empty — no records will load. To replay this range, use a separate --state-file (see RUN_BOOK).',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate > 2026-04-01T00:00:00.000Z AND LastModifiedDate <= 2026-01-31T23:59:59.999Z  (EMPTY: end-date before watermark — no records will load)'
+        ).length
+      ).toBe(1)
+    })
+
+    it('given dry-run with start-date == watermark and operation Append, when running, then emits exact BOUNDARY warning text and annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([
+          sobjectEntry({ name: 'accounts', operation: 'Append' }),
+        ])
+      )
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_FEB_10,
+        ])
+      )
+
+      // Assert — exact text
+      expect(warns).toEqual([
+        '[accounts] BOUNDARY: --start-date equals watermark 2026-02-10T00:00:00.000Z; under operation Append the boundary record will be appended again (duplicate row). Bump --start-date past the watermark, or use operation Overwrite.',
+      ])
+      expect(
+        logs.filter(
+          l =>
+            l ===
+            '    effective: LastModifiedDate >= 2026-02-10T00:00:00.000Z  (BOUNDARY: --start-date equals watermark — boundary record will be re-appended (duplicate))'
+        ).length
+      ).toBe(1)
+      expect(logs.some(l => l.includes('undefined'))).toBe(false)
+    })
+
+    it('given dry-run with start-date == watermark and operation Overwrite, when running, then no BOUNDARY warning or annotation', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([
+          sobjectEntry({ name: 'accounts', operation: 'Overwrite' }),
+        ])
+      )
+      seedState(tmp.statePath, { accounts: ISO_FEB_10 })
+      orgOnlyConnection()
+
+      // Act
+      const { logs, warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_FEB_10,
+        ])
+      )
+
+      // Assert — Overwrite is silent for boundary case
+      expect(warns.some(w => w.includes('BOUNDARY'))).toBe(false)
+      expect(logs.some(l => l.includes('(BOUNDARY:'))).toBe(false)
+    })
+
+    it('given bounds with only CSV entries, when running dry-run, then emits exactly one "no effect" warning and renders CSV watermark as n/a', async () => {
+      // Arrange
+      const csvPath = join(os.tmpdir(), `bounds-csv-only-${randomUUID()}.csv`)
+      writeFileSync(csvPath, csvContent(['col'], [['a']]))
+      tmp = createTempFiles(
+        makeConfigJson([
+          {
+            targetOrg: 'ana-org',
+            targetDataset: 'DS',
+            csvFile: csvPath,
+            name: 'only-csv',
+          },
+        ])
+      )
+      orgOnlyConnection()
+
+      try {
+        // Act
+        const { logs, warns } = await captureOutput(() =>
+          runCommand([
+            '--config-file',
+            tmp!.configPath,
+            '--state-file',
+            tmp!.statePath,
+            '--dry-run',
+            '--start-date',
+            ISO_JAN_01,
+          ])
+        )
+
+        // Assert
+        expect(
+          warns.filter(
+            w =>
+              w.includes('all selected entries are CSV') &&
+              w.includes('no effect')
+          ).length
+        ).toBe(1)
+        // Kills `if (isCsvEntry(entry))` → false mutation in renderDryRunEntry:
+        // CSV entries must render the n/a watermark line, not try to read
+        // dateField from a CSV entry.
+        expect(
+          logs.filter(l =>
+            l.includes('watermark: n/a (CSV entry — watermarks do not apply)')
+          ).length
+        ).toBe(1)
+        // Kills `if (conds.length === 0) return` → false mutation: CSV path
+        // returns before conds are built, so no effective line is emitted.
+        expect(logs.some(l => l.includes('effective:'))).toBe(false)
+      } finally {
+        rmSync(csvPath, { force: true })
+      }
+    })
+
+    it('given dry-run with end-date AFTER existing watermark and no start-date, when running, then emits no warning (kills endsBeforeWatermark branch mutation to true)', async () => {
+      // Arrange — bounds are non-empty (--end-date set), but end > watermark,
+      // no --start-date.
+      // With correct logic, all four warning predicates are false → no
+      // warning. If endsBeforeWatermark is mutated to always-true, the
+      // EMPTY branch would incorrectly fire.
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: ISO_JAN_01 })
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--end-date',
+          '2026-12-31T23:59:59.999Z',
+        ])
+      )
+
+      // Assert
+      expect(warns).toEqual([])
+    })
+
+    it('given dry-run with seeded watermark and no bounds, when running, then emits unified multi-line with watermark on its own line and no effective line', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      seedState(tmp.statePath, { accounts: ISO_JAN_01 })
+      orgOnlyConnection()
+
+      // Act
+      const { logs } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert — label line + watermark line on own lines, no inline combo.
+      expect(logs.some(l => l === '  accounts → org:ana-org:DS2')).toBe(true)
+      expect(logs.some(l => l === `    watermark: ${ISO_JAN_01}`)).toBe(true)
+      expect(logs.some(l => l.includes('(watermark:'))).toBe(false)
+      // No `effective:` line when bounds are empty.
+      expect(logs.some(l => l.startsWith('    effective:'))).toBe(false)
+    })
+
+    it('given fresh state with ELF entry and no --start-date, when dry-running, then emits exact FIRST_RUN_ELF warning', async () => {
+      // Arrange — fresh state, no bounds, no watermark for the ELF entry.
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert — exact text kills StringLiteral mutations on the warning template
+      expect(warns.filter(w => w.includes('FIRST_RUN_ELF'))).toEqual([
+        '[logins] FIRST_RUN_ELF: no watermark and no --start-date; every log file ever emitted for this event type will be downloaded. On busy orgs this is thousands of blobs. Pass --start-date (e.g. --start-date 2026-01-01T00:00:00.000Z) to cap the initial pull. See README Advanced Usage.',
+      ])
+    })
+
+    it('given fresh state with ELF entry and --start-date set, when dry-running, then no FIRST_RUN_ELF warning', async () => {
+      // Arrange — --start-date caps the pull, so the warning must be suppressed
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_JAN_01,
+        ])
+      )
+
+      // Assert
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+    })
+
+    it('given seeded-watermark ELF entry and no --start-date, when dry-running, then no FIRST_RUN_ELF warning', async () => {
+      // Arrange — watermark already exists → not a first run
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      seedState(tmp.statePath, { logins: ISO_JAN_01 })
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+        ])
+      )
+
+      // Assert
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+    })
+
+    it('given fresh state with SObject entry and --end-date only, when dry-running, then emits exact FRESH_END_ONLY warning', async () => {
+      // Arrange — non-CSV, no watermark, only --end-date set.
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--end-date',
+          ISO_JAN_31,
+        ])
+      )
+
+      // Assert — exact text kills StringLiteral mutations
+      expect(warns.filter(w => w.includes('FRESH_END_ONLY'))).toEqual([
+        "[accounts] FRESH_END_ONLY: no watermark yet and --end-date provided without --start-date; the watermark will advance to this run's max dateField (at or before --end-date), so records created after --end-date will be skipped until --end-date is dropped. Pass --start-date on the first run to make the window explicit.",
+      ])
+      // FIRST_RUN_ELF must NOT also fire (SObject entry, not ELF)
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+    })
+
+    it('given fresh state with --start-date and --end-date, when dry-running, then neither FIRST_RUN_ELF nor FRESH_END_ONLY fires', async () => {
+      // Arrange — --start-date is present, which caps the first-run volume
+      // and makes the window explicit
+      tmp = createTempFiles(makeConfigJson([elfEntry({ name: 'logins' })]))
+      orgOnlyConnection()
+
+      // Act
+      const { warns } = await captureOutput(() =>
+        runCommand([
+          '--config-file',
+          tmp!.configPath,
+          '--state-file',
+          tmp!.statePath,
+          '--dry-run',
+          '--start-date',
+          ISO_JAN_01,
+          '--end-date',
+          ISO_JAN_31,
+        ])
+      )
+
+      // Assert
+      expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(false)
+      expect(warns.some(w => w.includes('FRESH_END_ONLY'))).toBe(false)
+    })
+
+    it('given fresh state CSV-only entries and --end-date, when dry-running, then no FRESH_END_ONLY (CSV excluded)', async () => {
+      // Arrange — CSV entries are explicitly skipped by emitFirstRunWarnings
+      const csvPath = join(os.tmpdir(), `bounds-csv-fresh-${randomUUID()}.csv`)
+      writeFileSync(csvPath, csvContent(['col'], [['a']]))
+      tmp = createTempFiles(
+        makeConfigJson([
+          {
+            targetOrg: 'ana-org',
+            targetDataset: 'DS',
+            csvFile: csvPath,
+            name: 'only-csv',
+          },
+        ])
+      )
+      orgOnlyConnection()
+
+      try {
+        // Act
+        const { warns } = await captureOutput(() =>
+          runCommand([
+            '--config-file',
+            tmp!.configPath,
+            '--state-file',
+            tmp!.statePath,
+            '--dry-run',
+            '--end-date',
+            ISO_JAN_31,
+          ])
+        )
+
+        // Assert
+        expect(warns.some(w => w.includes('FRESH_END_ONLY'))).toBe(false)
+      } finally {
+        rmSync(csvPath, { force: true })
+      }
+    })
+
+    it('given bounds and SObject pipeline run, when running, then SOQL to source org contains the bounds conditions', async () => {
+      // Arrange
+      tmp = createTempFiles(
+        makeConfigJson([sobjectEntry({ name: 'accounts' })])
+      )
+      const capturedQueries: string[] = []
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('Account')
+          .calls((_url: string) => {
+            const q = decodeURIComponent(_url).split('q=')[1] ?? ''
+            capturedQueries.push(q)
+            return defaultSObjectQueryResponse([])
+          })
+          .onQuery('InsightsExternalData')
+          .including('MetadataJson')
+          .returns(defaultMetadataQueryResponse())
+          .onGet(METADATA_BLOB_URL)
+          .returns(DEFAULT_METADATA_JSON)
+          .onQuery('InsightsExternalData')
+          .including('EdgemartAlias')
+          .returns(defaultInsightsQueryResponse())
+          .onPost('InsightsExternalData')
+          .excluding('Part')
+          .returns(defaultCreateResponse(INSIGHTS_DATA_PREFIX))
+          .onPatch('InsightsExternalData')
+          .returns({ success: true })
+          .build()
+      )
+
+      // Act
+      await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+        '--start-date',
+        ISO_JAN_01,
+        '--end-date',
+        ISO_JAN_31,
+      ])
+
+      // Assert
+      const accountQuery = capturedQueries.find(q => q.includes('FROM Account'))
+      expect(accountQuery).toBeDefined()
+      expect(accountQuery).toContain(
+        'LastModifiedDate >= 2026-01-01T00:00:00.000Z'
+      )
+      expect(accountQuery).toContain(
+        'LastModifiedDate <= 2026-01-31T23:59:59.999Z'
+      )
     })
   })
 })

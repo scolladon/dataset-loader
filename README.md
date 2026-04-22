@@ -16,6 +16,8 @@ SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesfor
 - [Quick Start](#quick-start)
 - [Config Reference](#config-reference)
 - [Command Reference](#sf-dataset-load)
+- [Advanced Usage](#advanced-usage)
+- [Troubleshooting](#troubleshooting)
 - [Development](#development)
 
 ## Prerequisites
@@ -77,11 +79,15 @@ sf dataset load --dry-run
 sf dataset load
 ```
 
-> **Note:**
->
-> - **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
-> - **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
-> - **Column alignment** — CRM Analytics ingests rows by position. `--audit` verifies that your source columns (SObject config `fields`, ELF `LogFileFieldNames`, or CSV header) match the dataset's metadata column set (and order for ELF/CSV) before any upload runs. SObject entries are automatically reordered at runtime to match the dataset's column order; ELF/CSV source order must already match the dataset and is enforced at audit time.
+`--dry-run` prints a multi-line plan: one header line, one block per entry (`  label → dataset-key` + `    watermark: <iso|(none)|n/a for CSV>`), and when bounds are set a `Configured window: [...]` line plus an `    effective: <SOQL>` line per non-CSV entry (carrying any `REWIND` / `HOLE` / `BOUNDARY` / `EMPTY` annotation). No data is transferred.
+
+> ⚠️ **First-run volume** — on a fresh state file (no prior watermark), each entry pulls *every* matching record. For ELF this means *every log file ever emitted* by the source org — on busy orgs, thousands of blobs. Cap the first run with `--start-date 2026-01-01T00:00:00.000Z` (or similar) and let subsequent cron runs tail incrementally. See [Advanced Usage](#advanced-usage).
+
+> **CRM Analytics targets** — the dataset must already exist with at least one prior completed upload. Create it via the CRM Analytics UI or a one-time dataflow before the first load.
+
+> **File targets** — omit `targetOrg` and set `targetFile` to a local file path. The file is created automatically.
+
+> **Column alignment** — CRM Analytics ingests rows by position. `--audit` verifies your source columns match the dataset's metadata before any upload runs. SObject entries are auto-reordered at runtime; ELF/CSV source order must already match the dataset.
 
 ## Config Reference
 
@@ -188,10 +194,9 @@ All entries in a group must use the same `operation`.
 
 </details>
 
-<details>
-<summary>State File & Watermarks</summary>
+### State File & Watermarks
 
-Watermarks are stored in a separate state file (`.dataset-load.state.json`) to keep config declarative:
+Watermarks are stored in a separate state file (`.dataset-load.state.json` by default; override with `--state-file`) to keep config declarative:
 
 ```json
 {
@@ -202,15 +207,13 @@ Watermarks are stored in a separate state file (`.dataset-load.state.json`) to k
 }
 ```
 
-Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{sObject}`, or `csv:{csvFile}`.
+Watermark keys: `{sourceOrg}:elf:{eventLog}:{interval}`, `{sourceOrg}:sobject:{sObject}`, or `csv:{csvFile}`. Set `name` on an entry to use it as the key instead — lets you rename source orgs or change event types without losing watermark history.
 
-> Set `name` on an entry to use it as the watermark key instead of the auto-generated one. This lets you rename source orgs or change event types without losing watermark history.
+First-run behaviour (no watermark yet):
 
-- **First ELF run** (no watermark): fetches only the latest record (bootstrap mode)
-- **First SObject run** (no watermark): fetches all matching records (use `limit` to cap)
-- **Subsequent runs**: fetch incrementally from the stored watermark
-
-</details>
+- **ELF** — fetches every available log file ascending. Pass `--start-date` to cap the initial pull (see [Advanced Usage](#advanced-usage)).
+- **SObject** — fetches all matching records. Use `limit` in the config or `--start-date` on the CLI to cap.
+- **Subsequent runs** — fetch incrementally from the stored watermark.
 
 <!-- commands -->
 * [`sf dataset load`](#sf-dataset-load)
@@ -222,14 +225,18 @@ Load Event Log Files and SObject data into CRM Analytics datasets
 ```
 USAGE
   $ sf dataset load [--json] [--flags-dir <value>] [-c <value>] [-s <value>] [--audit] [--dry-run] [--entry
-    <value>]
+    <value>] [--start-date <value>] [--end-date <value>]
 
 FLAGS
   -c, --config-file=<value>  [default: dataset-load.config.json] Path to config JSON
   -s, --state-file=<value>   [default: .dataset-load.state.json] Path to watermark state file
       --audit                Pre-flight checks only (auth, connectivity, permissions)
       --dry-run              Show plan without executing
+      --end-date=<value>     Load only records with dateField/LogDate <= this ISO-8601 datetime (ignored for CSV
+                             entries)
       --entry=<value>        Process only the entry with this name
+      --start-date=<value>   Load only records with dateField/LogDate >= this ISO-8601 datetime (ignored for CSV
+                             entries)
 
 GLOBAL FLAGS
   --flags-dir=<value>  Import flag values from a directory.
@@ -239,10 +246,137 @@ EXAMPLES
   $ sf dataset load
 
   $ sf dataset load --config-file my-config.json --dry-run
+
+  $ sf dataset load --start-date 2026-01-01T00:00:00.000Z --end-date 2026-01-31T23:59:59.999Z
 ```
 
 _See code: [src/commands/dataset/load.ts](https://github.com/scolladon/dataset-loader/blob/main/src/commands/dataset/load.ts)_
 <!-- commandsstop -->
+
+## Advanced Usage
+
+Everything about `--start-date` and `--end-date` — the flags that let you override or narrow the default incremental window. Both take ISO-8601 datetimes (e.g. `2026-01-15T00:00:00.000Z`), both are **inclusive**, and both are **ignored for CSV entries**.
+
+The baseline is still incremental: the loader tracks a per-entry watermark in the state file and, by default, pulls rows strictly greater than it. The flags below are escape hatches.
+
+### No flags — normal incremental
+
+```bash
+sf dataset load
+```
+
+Produces `WHERE dateField > <watermark>` (or no filter on the very first run for that entry). This is what you run in cron.
+
+> ⚠️ **First-run volumes.** On a brand-new entry (no watermark yet, no `--start-date`), every row available in the source is pulled. For high-history orgs this can be a lot — especially for ELF, where it means *every log file ever*. Use **"Load from a cutoff"** below on the first run if that's a concern.
+
+### Load from a cutoff — `--start-date` only
+
+"Start loading from this date onward; skip older history."
+
+```bash
+sf dataset load --start-date 2026-01-01T00:00:00.000Z
+```
+
+```json
+// .dataset-load.state.json — either missing or empty
+{ "watermarks": {} }
+```
+
+Emits `WHERE dateField >= 2026-01-01T00:00:00.000Z`. After the run, the watermark advances to the last record's dateField and subsequent incremental runs work normally from there.
+
+Typical use: onboarding a new entry without dragging in years of history; capping the initial ELF pull.
+
+### Load up to a date — `--end-date` only
+
+"Cap the load at this date."
+
+```bash
+sf dataset load --end-date 2026-03-31T23:59:59.999Z
+```
+
+Emits `WHERE dateField > <watermark> AND dateField <= 2026-03-31T23:59:59.999Z`. Useful for end-of-quarter archive runs. **The current watermark must be before `--end-date`** — otherwise the window is empty and you'll see an **EMPTY** warning.
+
+### Load a specific window — both flags
+
+"Load just the dates in this window."
+
+```bash
+sf dataset load \
+  --start-date 2026-01-01T00:00:00.000Z \
+  --end-date   2026-01-31T23:59:59.999Z
+```
+
+Emits `WHERE dateField >= 2026-01-01T00:00:00.000Z AND dateField <= 2026-01-31T23:59:59.999Z` — the watermark is overridden on the lower side.
+
+This is the general "backfill / replay" shape. If the window is in the past of your current watermark, use the pattern below to avoid regressing the main watermark.
+
+### Safe past-window backfill
+
+Use when: redoing a range in the past without disturbing the production watermark. Pattern: isolate with a throwaway state file.
+
+```bash
+# 1. Copy the main state file.
+cp .dataset-load.state.json .dataset-load.backfill.state.json
+
+# 2. Run the backfill against the copy.
+sf dataset load \
+  --state-file .dataset-load.backfill.state.json \
+  --start-date 2026-01-01T00:00:00.000Z \
+  --end-date   2026-01-31T23:59:59.999Z
+
+# 3. Discard the copy.
+rm .dataset-load.backfill.state.json
+```
+
+Main state file is untouched; the next scheduled run resumes where it was. See [RUN_BOOK.md](RUN_BOOK.md) for the full recovery runbook.
+
+### Ad-hoc export to a local CSV (forensics / compliance)
+
+Pull a specific date range to a local file without touching CRM Analytics or the main state.
+
+```bash
+sf dataset load \
+  --config-file forensic.config.json \
+  --state-file /tmp/forensic.state.json \
+  --start-date 2026-03-15T13:00:00.000Z \
+  --end-date   2026-03-15T16:00:00.000Z
+```
+
+```json
+// forensic.config.json — `targetFile` instead of `targetOrg` = write to local CSV
+{
+  "entries": [
+    {
+      "name": "accounts-incident",
+      "sourceOrg": "prod",
+      "targetFile": "/tmp/accounts-around-incident.csv",
+      "sObject": "Account",
+      "fields": ["Id", "Name", "LastModifiedDate"]
+    }
+  ]
+}
+```
+
+Dedicated state file + `targetFile` = zero impact on main state and no CRM Analytics write.
+
+### Warnings & gotchas
+
+The command prints at most one warning per entry before running. Each tells you about a non-obvious consequence of the flag combination:
+
+| Warning | Trigger | What it means | What to do |
+|---|---|---|---|
+| **FIRST_RUN_ELF** | fresh state + ELF entry + no `--start-date` | Every log file ever emitted for the event type will be downloaded — thousands of blobs on busy orgs. | Pass `--start-date` to cap the initial pull, or pre-seed a watermark in the state file. |
+| **FRESH_END_ONLY** | fresh state (non-CSV) + `--end-date` without `--start-date` | The watermark advances to the run's max dateField; records created after `--end-date` are skipped by subsequent incremental runs until `--end-date` is dropped. | Pass `--start-date` on the first run to make the window explicit, or drop `--end-date` to let the run tail. |
+| **REWIND** | `--start-date` < watermark | Previously-loaded records will be re-loaded; watermark may regress. | If deliberate, expected. To preserve the main watermark, use the **Safe past-window backfill** pattern above. Under `Append`, records in the window are duplicated. |
+| **HOLE** | `--start-date` > watermark | Records with dateField in the gap will be skipped this run AND by subsequent incremental runs (the watermark jumps past the gap). | See [RUN_BOOK.md](RUN_BOOK.md) for the HOLE recovery recipe. |
+| **BOUNDARY** | `--start-date` == watermark, `Append` | One boundary record gets appended again (duplicate row). | Bump `--start-date` by 1 ms. Silent under `Overwrite` (wholesale replace is idempotent). |
+| **EMPTY** | `--end-date` < watermark (no `--start-date`) | Query window is empty; no records will load. | Drop `--end-date` or advance it. |
+
+The `Append` vs `Overwrite` distinction matters most for **bounded past-window runs on the main dataset**: `Append` creates duplicates for any records already loaded in that window; `Overwrite` replaces the *entire* dataset with just the window (usually not what you want). Use the **Safe past-window backfill** pattern in either case.
+
+## Troubleshooting
+
+See [RUN_BOOK.md](RUN_BOOK.md) for operational recipes: scheduling with cron, recovery from bad state, pattern for filling a past-window backfill without disturbing main state, and pattern for recovering from a `HOLE` warning.
 
 <details>
 <summary>Exit Codes</summary>

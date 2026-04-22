@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SObjectReader } from '../../../src/adapters/readers/sobject-reader.js'
+import { DateBounds } from '../../../src/domain/date-bounds.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { collectLines } from '../../fixtures/collect-lines.js'
 import { makeSfPort } from '../../fixtures/sf-port.js'
@@ -31,17 +32,19 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
 
-    // Assert
-    expect(lines).toHaveLength(2)
-    expect(lines[0]).toContain('001A')
-    expect(lines[0]).toContain('Acme')
-    expect(lines[1]).toContain('001B')
-    expect(lines[1]).toContain('Globex')
-    expect(lines.join('\n')).not.toMatch(/^"Id"/)
+    // Assert — exact-line assertions (instead of `toContain` substrings) kill
+    // mutations to field ordering, separator, or quoting. They also catch any
+    // stray leaked header line via the full-content check below.
+    expect(lines).toEqual([
+      '"001A","Acme","2026-03-01T00:00:00.000Z"',
+      '"001B","Globex","2026-03-02T00:00:00.000Z"',
+    ])
+    expect(lines.every(l => !l.startsWith('"Id"'))).toBe(true)
     expect(result.watermark()?.toString()).toBe('2026-03-02T00:00:00.000Z')
     expect(result.fileCount()).toBe(1)
   })
@@ -59,6 +62,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -93,6 +97,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -118,6 +123,7 @@ describe('SObjectReader', () => {
       fields: ['Id'],
       dateField: 'LastModifiedDate',
       where: 'Industry != null',
+      bounds: DateBounds.none(),
     })
     await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
 
@@ -143,6 +149,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -167,6 +174,7 @@ describe('SObjectReader', () => {
       fields: ['Id'],
       dateField: 'LastModifiedDate',
       queryLimit: 50,
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -196,6 +204,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -227,6 +236,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -245,6 +255,7 @@ describe('SObjectReader', () => {
           sobject: 'Contact',
           fields: ['Id', 'Owner.Name'],
           dateField: 'LastModifiedDate',
+          bounds: DateBounds.none(),
         })
     ).not.toThrow()
   })
@@ -270,6 +281,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -301,6 +313,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -319,6 +332,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
 
     // Assert
@@ -333,6 +347,7 @@ describe('SObjectReader', () => {
         sobject: 'bad name!',
         fields: ['Id'],
         dateField: 'LastModifiedDate',
+        bounds: DateBounds.none(),
       })
 
     // Act & Assert
@@ -347,6 +362,7 @@ describe('SObjectReader', () => {
         sobject: 'Account',
         fields: ['bad field!'],
         dateField: 'LastModifiedDate',
+        bounds: DateBounds.none(),
       })
 
     // Act & Assert
@@ -361,6 +377,7 @@ describe('SObjectReader', () => {
         sobject: 'Account',
         fields: ['Id'],
         dateField: 'bad date!',
+        bounds: DateBounds.none(),
       })
 
     // Act & Assert
@@ -386,6 +403,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     await collectLines(result.lines)
@@ -403,6 +421,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name', 'CreatedDate'],
       dateField: 'CreatedDate',
+      bounds: DateBounds.none(),
     })
 
     // Assert
@@ -418,6 +437,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'CreatedDate',
+      bounds: DateBounds.none(),
     })
 
     // Assert — no fetch() called: header is derived from config
@@ -436,12 +456,34 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
     // Assert
     const soql: string = querySpy.mock.calls[0][0]
     expect(soql).not.toContain('WHERE')
+  })
+
+  it('given bounds empty plus watermark, when fetching, then SOQL has no `undefined` text (kills mutations that force-push undefined conditions)', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act — only watermark, no bounds; lower = `dateField > watermark`, upper = undefined
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
+    })
+    await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).not.toContain('undefined')
   })
 
   it('given no queryLimit, when fetching, then SOQL does not contain LIMIT', async () => {
@@ -456,6 +498,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -476,6 +519,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -498,6 +542,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -529,6 +574,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -561,6 +607,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -589,6 +636,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     await collectLines(result.lines)
@@ -610,6 +658,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -631,6 +680,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -655,6 +705,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -686,6 +737,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -718,6 +770,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'NumField'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
 
     // Act
@@ -755,6 +808,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
 
     // Act
@@ -763,7 +817,7 @@ describe('SObjectReader', () => {
 
     // Assert — field is wrapped in quotes AND prefixed with a TAB (with
     // any embedded " doubled per CSV escaping)
-    const expected = `"\t${payload.replaceAll('"', '""')}"`
+    const expected = `"\t${payload.split('"').join('""')}"`
     expect(lines[0]).toContain(expected)
   })
 })
@@ -775,6 +829,7 @@ describe('SObjectReader.project', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const layout = {
       targetSize: 2,
@@ -793,6 +848,7 @@ describe('SObjectReader.project', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const layout = {
       targetSize: 3,
@@ -802,5 +858,226 @@ describe('SObjectReader.project', () => {
 
     // Act / Assert
     expect(() => sut.project(layout)).toThrow(/outputIndex length/)
+  })
+
+  it('given bounds start-only and no watermark, when fetching, then SOQL has inclusive geq on dateField', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-01-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch()
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).not.toContain(' > ')
+  })
+
+  it('given bounds end-only and no watermark, when fetching, then SOQL has inclusive leq on dateField', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(undefined, '2026-01-31T23:59:59.999Z'),
+    })
+    await sut.fetch()
+
+    // Assert — scoped to LastModifiedDate to avoid false positives from
+    // unrelated `>=`/`>` elsewhere in the SOQL. The single `>` regex below
+    // covers both `>` and `>=`, so a separate `>= ` check is redundant.
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate <= 2026-01-31T23:59:59.999Z')
+    expect(soql).not.toMatch(/LastModifiedDate >/)
+  })
+
+  it('given bounds start and end and no watermark, when fetching, then SOQL has both geq and leq joined with AND', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-31T23:59:59.999Z'
+      ),
+    })
+    await sut.fetch()
+
+    // Assert — positioned `AND` assertions kill mutations on the join
+    // separator ' AND ' → any other string would produce
+    // "…LastModifiedDate…" concatenated without the separator.
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('WHERE LastModifiedDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain(' AND LastModifiedDate <= 2026-01-31T23:59:59.999Z')
+  })
+
+  it('given start strictly less than watermark, when fetching, then SOQL has only geq (start wins)', async () => {
+    // Arrange — regression guard: --start-date always wins; no AND-ing with `dateField > watermark`
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-01-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-01-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+    // Negatively assert NO strict-greater clause on LastModifiedDate at all —
+    // kills a mutation where both start and watermark clauses are AND-ed.
+    expect(soql).not.toMatch(/LastModifiedDate > [0-9]/)
+  })
+
+  it('given start strictly greater than watermark, when fetching, then SOQL has only geq (start wins)', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-03-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-03-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given start equal to watermark, when fetching, then SOQL has only geq (start wins)', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from('2026-02-01T00:00:00.000Z', undefined),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-02-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given end-date and watermark but no start-date, when fetching, then SOQL has gt-watermark AND le-end-date', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(undefined, '2026-03-31T23:59:59.999Z'),
+    })
+    await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate > 2026-01-01T00:00:00.000Z')
+    expect(soql).toContain('LastModifiedDate <= 2026-03-31T23:59:59.999Z')
+    expect(soql).toContain(' AND ')
+  })
+
+  it('given start equal to watermark and end-date set, when fetching, then SOQL has both bounds (start wins on lower, end on upper)', async () => {
+    // Arrange — covers the start==watermark + end-date combination missed elsewhere
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.from(
+        '2026-02-01T00:00:00.000Z',
+        '2026-03-01T00:00:00.000Z'
+      ),
+    })
+    await sut.fetch(Watermark.fromString('2026-02-01T00:00:00.000Z'))
+
+    // Assert
+    const soql = querySpy.mock.calls[0][0]
+    expect(soql).toContain('LastModifiedDate >= 2026-02-01T00:00:00.000Z')
+    expect(soql).toContain('LastModifiedDate <= 2026-03-01T00:00:00.000Z')
+    expect(soql).not.toContain('LastModifiedDate > 2026-02-01T00:00:00.000Z')
+  })
+
+  it('given bounds and watermark and where clause, when fetching, then SOQL has all three conditions AND-joined in order', async () => {
+    // Arrange
+    const querySpy = vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+    const sfPort = makeSfPort({ query: querySpy })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      where: 'Industry != null',
+      bounds: DateBounds.from(
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-31T23:59:59.999Z'
+      ),
+    })
+    await sut.fetch(Watermark.fromString('2025-12-15T00:00:00.000Z'))
+
+    // Assert — condition order: lower, upper, where
+    const soql = querySpy.mock.calls[0][0]
+    const lowerIdx = soql.indexOf('LastModifiedDate >= 2026-01-01')
+    const upperIdx = soql.indexOf('LastModifiedDate <= 2026-01-31')
+    const whereIdx = soql.indexOf('(Industry != null)')
+    expect(lowerIdx).toBeGreaterThan(-1)
+    expect(upperIdx).toBeGreaterThan(lowerIdx)
+    expect(whereIdx).toBeGreaterThan(upperIdx)
   })
 })

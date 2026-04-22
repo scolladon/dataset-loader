@@ -1,6 +1,19 @@
 <!-- markdownlint-disable MD013 -- operational run-book uses long single-line commands and log excerpts -->
 # Run Book: Dataset Loader
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Prerequisites & Setup](#prerequisites--setup)
+- [Scheduling with Cron](#scheduling-with-cron)
+- [Running Manually](#running-manually)
+- [Date-Bounded Loads (`--start-date` / `--end-date`)](#date-bounded-loads---start-date----end-date)
+- [Monitoring](#monitoring)
+- [Troubleshooting](#troubleshooting)
+- [Disaster Recovery](#disaster-recovery)
+- [Multi-Environment Setup](#multi-environment-setup)
+- [Reference](#reference)
+
 ## Overview
 
 The Dataset Loader is an SF CLI plugin that extracts Salesforce Event Log Files (ELF) and SObject data from source orgs and writes them either into CRM Analytics datasets (CRM Analytics target) or to local CSV files (file target). It runs outside the Salesforce platform to avoid governor limits, uses a streaming pipeline for memory-bounded processing, supports parallel fetching with gzip compression for CRM Analytics uploads, and tracks ingestion progress through a JSON-based watermark system. See the [README](README.md) for full command usage and config format.
@@ -312,7 +325,7 @@ To re-fetch from scratch:
 2. Delete the key for the target entry (or delete the entire file for a full reset)
 3. Re-run `sf dataset load`
 
-Note: ELF entries without a watermark fetch only the latest record (bootstrap mode). SObject entries without a watermark fetch all matching records — use the `limit` config field to cap initial loads.
+Note: ELF entries without a watermark fetch every available log file ascending — use `--start-date` or pre-seed the state file to cap initial loads. SObject entries without a watermark fetch all matching records — use the `limit` config field or `--start-date` on the CLI to cap.
 
 To re-ingest from a specific point, set the watermark to an ISO 8601 date before the desired start (both `Z` and `+0000` offsets are accepted):
 
@@ -366,6 +379,69 @@ Use separate config and state files per environment:
 sf dataset load -c configs/prod.json -s state/prod.state.json
 sf dataset load -c configs/staging.json -s state/staging.state.json
 ```
+
+## Date-Bounded Loads (`--start-date` / `--end-date`)
+
+Run-scoped date bounds via CLI flags. Applies to SObject and ELF
+entries; CSV ignores the flags. `--start-date` always overrides the watermark
+when set. See the README's "Date bounds" section for the full
+semantics; this section covers operational recipes.
+
+### Pattern 1 — Backfill a past window (isolated from main state)
+
+Use when: replaying records in a date range without affecting the
+main state file's watermark. Avoids REWIND regression on the
+production run.
+
+```bash
+cp .dataset-load.state.json .dataset-load.backfill.state.json
+sf dataset load \
+    --state-file .dataset-load.backfill.state.json \
+    --start-date 2026-01-01T00:00:00.000Z \
+    --end-date   2026-01-31T23:59:59.999Z
+rm .dataset-load.backfill.state.json
+```
+
+The main state file is untouched; incremental runs resume where
+they were. Do **not** merge the backfill state file back into main.
+
+### Pattern 2 — Fill a HOLE left by a previous `--start-date` after watermark run
+
+Use when: a previous run with `--start-date > watermark` skipped
+records in the gap `(previous-watermark, previous-start-date)` and
+you want those records loaded. The main watermark has jumped past
+the gap, so a naive incremental run will never pick them up.
+
+```bash
+# 1. Identify the previous watermark and the --start-date used in the
+#    offending run (from the HOLE warning or prior logs).
+# 2. Copy the main state file.
+cp .dataset-load.state.json .dataset-load.hole-fill.state.json
+# 3. Edit the copy: reset the entry's watermark to the previous
+#    watermark. The WatermarkKey for SObject is
+#    `<sourceOrg>:sobject:<sObject>`, for ELF it's
+#    `<sourceOrg>:elf:<eventLog>:<interval>`, or the entry's `name`
+#    if set.
+# 4. Run with the hole-fill state file, capping at the offending
+#    --start-date value.
+sf dataset load \
+    --state-file .dataset-load.hole-fill.state.json \
+    --end-date <previous-start-date>
+# 5. Discard the hole-fill state file.
+rm .dataset-load.hole-fill.state.json
+```
+
+Caveat: the gap records must still exist in the source system. If
+deleted since the offending run, there is no recovery — the HOLE
+warning at the time was the only chance to notice.
+
+### Warning reference
+
+See the canonical table in [README.md → Warnings & gotchas](README.md#warnings--gotchas) for the full FIRST_RUN_ELF / FRESH_END_ONLY / REWIND / HOLE / BOUNDARY / EMPTY taxonomy. Invalid input (bad ISO format, bad calendar date like `2026-02-30`, or `--start-date > --end-date`) aborts the run before any mode branch — surfaces identically under `--audit`, `--dry-run`, or a real run.
+
+**FIRST_RUN_ELF recovery.** If you ignored the warning and the ELF pull already started, `Ctrl-C` is safe — the state file is only written after a group succeeds, so killing mid-run leaves the prior watermark intact. Restart with `--start-date`.
+
+**FRESH_END_ONLY recovery.** If the warning fired and you let the run complete, the watermark is now at (or before) your `--end-date`. To pick up records created after `--end-date`: drop the flag and run normally (`sf dataset load`) — the next run will tail from the stored watermark onward.
 
 ## Reference
 

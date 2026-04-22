@@ -1,6 +1,7 @@
 import { PassThrough, type Writable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
+import { DateBounds } from '../../../src/domain/date-bounds.js'
 import {
   createHeaderProvider,
   DatasetGroup,
@@ -129,7 +130,7 @@ function createEntry(
   return {
     index: 0,
     label: 'elf:Login',
-    readerKey: ReaderKey.forElf('src', 'Login', 'Daily'),
+    readerKey: ReaderKey.forElf('src', 'Login', 'Daily', DateBounds.none()),
     watermarkKey: WatermarkKey.fromEntry({
       sourceOrg: 'src',
       eventLog: 'Login',
@@ -518,7 +519,7 @@ describe('executePipeline (streaming)', () => {
       fetcher: badFetcher,
       index: 1,
       label: 'bad',
-      readerKey: ReaderKey.forElf('src', 'Logout', 'Daily'),
+      readerKey: ReaderKey.forElf('src', 'Logout', 'Daily', DateBounds.none()),
       datasetKey: DatasetKey.fromEntry({
         targetOrg: 'ana',
         targetDataset: 'DS2',
@@ -864,7 +865,7 @@ describe('executePipeline (streaming)', () => {
       fetcher: fetcher2,
       index: 1,
       label: 'elf:Logout',
-      readerKey: ReaderKey.forElf('src', 'Logout', 'Daily'),
+      readerKey: ReaderKey.forElf('src', 'Logout', 'Daily', DateBounds.none()),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
         eventLog: 'Logout',
@@ -913,7 +914,7 @@ describe('executePipeline (streaming)', () => {
       fetcher: badFetcher,
       index: 1,
       label: 'elf:Logout',
-      readerKey: ReaderKey.forElf('src', 'Logout', 'Daily'),
+      readerKey: ReaderKey.forElf('src', 'Logout', 'Daily', DateBounds.none()),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
         eventLog: 'Logout',
@@ -940,7 +941,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given two entries sharing readerKey and watermark, when pipeline executes, then fetch called once and both writers receive data', async () => {
     // Arrange
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -995,7 +1001,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given two entries sharing readerKey, when source stream errors, then both entries counted as failed', async () => {
     // Arrange
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1049,7 +1060,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given two entries sharing readerKey, when fetcher.fetch() rejects, then both entries counted as failed and writers abort', async () => {
     // Arrange
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1102,7 +1118,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given two entries sharing readerKey where one sink write fails, when pipeline executes, then logs fan-out channel write error', async () => {
     // Arrange
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1170,7 +1191,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given two entries with same readerKey but different watermarks, when pipeline executes, then fetch called twice', async () => {
     // Arrange
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey1 = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1343,7 +1369,7 @@ describe('executePipeline (streaming)', () => {
     })
     const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const entry1 = createEntryWithReader(
-      ReaderKey.forElf('src', 'Login', 'Daily'),
+      ReaderKey.forElf('src', 'Login', 'Daily', DateBounds.none()),
       {
         index: 0,
         label: 'elf:Login',
@@ -1358,7 +1384,7 @@ describe('executePipeline (streaming)', () => {
       }
     )
     const entry2 = createEntryWithReader(
-      ReaderKey.forElf('src', 'Logout', 'Daily'),
+      ReaderKey.forElf('src', 'Logout', 'Daily', DateBounds.none()),
       {
         index: 1,
         label: 'elf:Logout',
@@ -1397,7 +1423,7 @@ describe('executePipeline (streaming)', () => {
       targetDataset: 'DS',
     })
     const entry1 = createEntryWithReader(
-      ReaderKey.forElf('src', 'Login', 'Daily'),
+      ReaderKey.forElf('src', 'Login', 'Daily', DateBounds.none()),
       {
         index: 0,
         label: 'elf:Login',
@@ -1414,7 +1440,7 @@ describe('executePipeline (streaming)', () => {
       }
     )
     const entry2 = createEntryWithReader(
-      ReaderKey.forElf('src', 'Logout', 'Daily'),
+      ReaderKey.forElf('src', 'Logout', 'Daily', DateBounds.none()),
       {
         index: 1,
         label: 'elf:Logout',
@@ -1448,7 +1474,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given two entries sharing readerKey where first sink write fails, when pipeline executes, then logs first entry label in fan-out error', async () => {
     // Arrange — kills L308: idx >= 0 → idx > 0 (index 0 never logged with mutation)
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1673,7 +1704,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given shared-reader entries with source stream error, when executing, then warns Fan-out source failed', async () => {
     // Arrange — kills L316 StringLiteral: 'Fan-out source failed: ...' → ''
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1731,7 +1767,12 @@ describe('executePipeline (streaming)', () => {
 
   it('given shared-reader entries where one sink fails, when executing, then warns with entry-specific failure message', async () => {
     // Arrange — kills L334 StringLiteral: "Entry '...' failed: ..." → ''
-    const readerKey = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1842,7 +1883,7 @@ describe('executePipeline (streaming)', () => {
 describe('groupByReader', () => {
   it('given two entries with same readerKey and same watermark, when grouping, then one bundle', () => {
     // Arrange
-    const key = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const key = ReaderKey.forElf('prod', 'Login', 'Daily', DateBounds.none())
     const wmKey = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1871,7 +1912,7 @@ describe('groupByReader', () => {
 
   it('given two entries with same readerKey but different watermarks, when grouping, then two bundles', () => {
     // Arrange
-    const key = ReaderKey.forElf('prod', 'Login', 'Daily')
+    const key = ReaderKey.forElf('prod', 'Login', 'Daily', DateBounds.none())
     const wmKey1 = WatermarkKey.fromEntry({
       sourceOrg: 'prod',
       eventLog: 'Login',
@@ -1906,13 +1947,13 @@ describe('groupByReader', () => {
   it('given two entries with different readerKeys, when grouping, then two bundles', () => {
     // Arrange
     const e1 = createEntryWithReader(
-      ReaderKey.forElf('prod', 'Login', 'Daily'),
+      ReaderKey.forElf('prod', 'Login', 'Daily', DateBounds.none()),
       {
         fetcher: mockFetcher(async () => createFetchResult([])),
       }
     )
     const e2 = createEntryWithReader(
-      ReaderKey.forElf('prod', 'Login', 'Hourly'),
+      ReaderKey.forElf('prod', 'Login', 'Hourly', DateBounds.none()),
       {
         fetcher: mockFetcher(async () => createFetchResult([])),
         datasetKey: DatasetKey.fromEntry({ targetFile: './out.csv' }),
@@ -2112,7 +2153,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       ['A', 'B'],
       'LastModifiedDate',
       undefined,
-      undefined
+      undefined,
+      DateBounds.none()
     )
     const projectFn = vi.fn()
     const fetcher: ReaderPort = {
@@ -2216,7 +2258,8 @@ describe('executePipeline — fan-out constraint regression', () => {
         ['COL'],
         'LastModifiedDate',
         undefined,
-        undefined
+        undefined,
+        DateBounds.none()
       ),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
@@ -2266,7 +2309,7 @@ describe('executePipeline — fan-out constraint regression', () => {
     const entry: PipelineEntry = {
       index: 0,
       label: 'elf:Login',
-      readerKey: ReaderKey.forElf('src', 'Login', 'Daily'),
+      readerKey: ReaderKey.forElf('src', 'Login', 'Daily', DateBounds.none()),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
         eventLog: 'Login',
@@ -2324,7 +2367,8 @@ describe('executePipeline — fan-out constraint regression', () => {
         ['A', 'B'],
         'LastModifiedDate',
         undefined,
-        undefined
+        undefined,
+        DateBounds.none()
       ),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
@@ -2377,7 +2421,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       ['A', 'B'],
       'LastModifiedDate',
       undefined,
-      undefined
+      undefined,
+      DateBounds.none()
     )
     const fetcher: ReaderPort = {
       fetch: vi.fn(async () => createFetchResult(['"v1","v2"'])),
@@ -2463,7 +2508,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       ['A', 'B'],
       'LastModifiedDate',
       undefined,
-      undefined
+      undefined,
+      DateBounds.none()
     )
     const projectFn = vi.fn()
     const fetcher: ReaderPort = {

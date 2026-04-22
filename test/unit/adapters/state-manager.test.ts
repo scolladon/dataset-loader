@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -102,6 +102,21 @@ describe('FileStateManager', () => {
       expect(raw.watermarks['org:elf:Login:Daily']).toBe(
         '2026-03-01T00:00:00.000Z'
       )
+    })
+
+    it('given a WatermarkStore, when writing, then file permissions are 0o600 (owner-only)', async () => {
+      // Arrange — kills the ObjectLiteral { encoding, mode } mutation
+      // and the `mode: 0o600` security invariant at state-manager.ts:40.
+      const path = join(testDir, 'state.json')
+      const store = WatermarkStore.empty()
+      const sut = new FileStateManager(path)
+
+      // Act
+      await sut.write(store)
+
+      // Assert — mask off file-type bits, compare only permission bits
+      const st = await stat(path)
+      expect(st.mode & 0o777).toBe(0o600)
     })
 
     it('given a WatermarkStore, when writing, then file ends with a newline', async () => {

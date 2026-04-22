@@ -20,6 +20,10 @@ export class FileStateManager implements StatePort {
   // watermarks on first run after upgrade — full initial load will occur for all org-target entries.
   async read(): Promise<WatermarkStore> {
     try {
+      // Stryker disable next-line StringLiteral: equivalent mutant —
+      // `readFile(path, '')` returns a Buffer; JSON.parse coerces via
+      // Buffer.prototype.toString() which defaults to utf-8 for
+      // well-formed JSON content. Observable behavior is identical.
       const raw = await readFile(this.path, 'utf-8')
       const parsed = stateFileSchema.parse(JSON.parse(raw))
       return WatermarkStore.fromRecord(parsed.watermarks)

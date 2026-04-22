@@ -16,27 +16,38 @@ npm install
 src/
 ├── commands/dataset/
 │   └── load.ts              # SF CLI command (composition root)
-├── domain/                   # Pure business logic, value objects
-│   ├── pipeline.ts          # Core orchestration engine
-│   ├── auditor.ts           # Pre-flight permission checks
-│   ├── watermark.ts         # Value object: ISO 8601 timestamp
-│   ├── watermark-key.ts     # Value object: entry identifier
-│   ├── watermark-store.ts   # Immutable watermark map
-│   └── dataset-key.ts       # Value object: (targetOrg, targetDataset/targetFile)
+├── domain/                     # Pure business logic, value objects
+│   ├── pipeline.ts             # Core orchestration engine
+│   ├── auditor.ts              # Pre-flight permission checks
+│   ├── schema-check.ts         # Dataset-metadata alignment check
+│   ├── sobject-row-projection.ts # Row reorder to canonical dataset columns
+│   ├── column-name.ts          # Column-name normalization
+│   ├── csv-quote.ts            # CSV quoting / formula-defusing
+│   ├── watermark.ts            # Value object: ISO 8601 timestamp
+│   ├── watermark-key.ts        # Value object: entry identifier
+│   ├── watermark-store.ts      # Immutable watermark map
+│   ├── dataset-key.ts          # Value object: (targetOrg, dataset/file)
+│   ├── reader-key.ts           # Value object: reader de-duplication key
+│   └── date-bounds.ts          # Value object: --start-date / --end-date
 ├── ports/
-│   └── types.ts             # All port interfaces
-└── adapters/                 # Infrastructure implementations
-    ├── sf-client.ts          # Salesforce REST client (concurrency + retry)
-    ├── elf-reader.ts         # EventLogFile reader (yields CSV lines)
-    ├── sobject-reader.ts     # SObject query reader (yields CSV lines)
-    ├── augment-transform.ts  # Appends extra columns to CSV lines
-    ├── fan-out-transform.ts  # Tees a stream to multiple writable channels
-    ├── row-counter.ts        # PassThrough that counts rows for progress
-    ├── dataset-writer.ts     # CRM Analytics upload lifecycle
-    ├── file-writer.ts        # Local file writer (CSV output)
-    ├── config-loader.ts      # Config parsing & validation (Zod)
-    ├── state-manager.ts      # Atomic watermark state file
-    └── progress-reporter.ts  # CLI progress bar
+│   └── types.ts                # All port interfaces
+└── adapters/                   # Infrastructure implementations
+    ├── sf-client.ts            # Salesforce REST client (concurrency + retry)
+    ├── config-loader.ts        # Config parsing & validation (Zod)
+    ├── state-manager.ts        # Atomic watermark state file
+    ├── progress-reporter.ts    # CLI progress bar
+    ├── readers/
+    │   ├── elf-reader.ts       # EventLogFile reader (yields CSV lines)
+    │   ├── sobject-reader.ts   # SObject query reader (yields CSV lines)
+    │   └── csv-reader.ts       # Local CSV file reader
+    ├── writers/
+    │   ├── dataset-writer.ts   # CRM Analytics upload lifecycle
+    │   └── file-writer.ts      # Local file writer (CSV output)
+    └── pipeline/
+        ├── async-channel.ts    # In-memory async channel
+        ├── augment-transform.ts # Appends extra columns to CSV lines
+        ├── fan-in-stream.ts    # Merges multiple sources into one stream
+        └── fan-out-transform.ts # Tees a stream to multiple writable channels
 
 test/
 ├── unit/
@@ -137,14 +148,14 @@ See [DESIGN.md](DESIGN.md) for the full architecture documentation.
 
 1. Define or extend port interfaces in `ports/types.ts` if new I/O is needed
 2. Add domain logic in `domain/` with tests (TDD: red → green → refactor)
-3. Implement adapter in `adapters/` with tests
+3. Implement adapter under the right `adapters/` subdirectory (`readers/`, `writers/`, or `pipeline/`) with tests
 4. Wire in `commands/dataset/load.ts`
 5. Add NUT test for CLI integration
 6. Update manual test scenarios if applicable
 
 ## Adding a New Reader Type
 
-1. Create a new class implementing `ReaderPort` in `adapters/`
+1. Create a new class implementing `ReaderPort` in `adapters/readers/`
 2. Add the config entry type to the Zod schema in `config-loader.ts`
 3. Add a discriminated union branch for the new type
 4. Handle the new type in `load.ts` when building `PipelineEntry` objects
