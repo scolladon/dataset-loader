@@ -30,6 +30,9 @@ export class AuditRunner {
     const checks = buildAuditChecks(auditEntries, sfPorts)
     const auditResult = await runAudit(checks, this.logger)
     if (!auditResult.passed) process.exitCode = 2
+    // `runAudit` returns a pass/fail boolean rather than a per-entry count,
+    // so `entriesFailed` here is a 0/1 presence flag rather than the real
+    // number of failing entries. Preserved as the command's existing shape.
     return {
       ...EMPTY_RESULT,
       entriesFailed: auditResult.passed ? 0 : 1,
@@ -38,7 +41,7 @@ export class AuditRunner {
 
   private buildAuditEntry(
     entry: ConfigEntry,
-    augmentColumns: Record<string, string>
+    augmentColumns: Readonly<Record<string, string>>
   ): AuditEntry {
     if (isCsvEntry(entry)) {
       return {

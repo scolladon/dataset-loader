@@ -20,7 +20,7 @@ export function computeWarnings(
   entries: readonly ResolvedEntry[],
   watermarks: WatermarkStore,
   bounds: DateBounds
-): string[] {
+): readonly string[] {
   const messages: string[] = []
   messages.push(...firstRunMessages(entries, watermarks, bounds))
   messages.push(...boundsMessages(entries, watermarks, bounds))
@@ -32,7 +32,7 @@ export function firstRunMessages(
   entries: readonly ResolvedEntry[],
   watermarks: WatermarkStore,
   bounds: DateBounds
-): string[] {
+): readonly string[] {
   if (bounds.hasStart()) return []
   const out: string[] = []
   for (const { entry } of entries) {
@@ -52,7 +52,7 @@ export function boundsMessages(
   entries: readonly ResolvedEntry[],
   watermarks: WatermarkStore,
   bounds: DateBounds
-): string[] {
+): readonly string[] {
   // Stryker disable next-line ConditionalExpression: equivalent mutant.
   // With empty bounds all four inner predicates return false, and Zod
   // guarantees entries.length >= 1 — the early-return is a hot-path

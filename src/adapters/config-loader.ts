@@ -517,3 +517,12 @@ export function entryLabel(entry: ConfigEntry): string {
   throw new Error(`Unknown entry shape`)
 }
 /* v8 ignore stop */
+
+// Single source of truth for the `ReaderKind` discriminator. Callers that
+// need the string tag (audit-entry construction, alignment spec) should
+// delegate here rather than re-implementing the three-way guard chain.
+export function entryKind(entry: ConfigEntry): 'csv' | 'elf' | 'sobject' {
+  if (isCsvEntry(entry)) return 'csv'
+  if (isElfEntry(entry)) return 'elf'
+  return 'sobject'
+}

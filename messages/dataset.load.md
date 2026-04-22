@@ -57,7 +57,3 @@ No SF connection for org '%s'
 # errors.no-target-port
 
 No authenticated connection for target org '%s'
-
-# errors.unknown-entry-kind
-
-unknown entry kind

@@ -28,7 +28,6 @@ export type ErrorKey =
   | 'entry-not-found.hint-missing-names'
   | 'no-source-port'
   | 'no-target-port'
-  | 'unknown-entry-kind'
 
 // Resolve the dataset-loader messages bundle. The caller is expected to have
 // already invoked `Messages.importMessagesDirectoryFromMetaUrl(import.meta.url)`

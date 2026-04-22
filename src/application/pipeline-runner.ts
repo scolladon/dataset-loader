@@ -1,5 +1,6 @@
 import {
   type ElfEntry,
+  entryKind,
   entryLabel,
   isCsvEntry,
   isElfEntry,
@@ -152,14 +153,9 @@ export class PipelineRunner {
     const { resolvedEntry, index, readerKey, fetcher, augmentColumns } = slot
     const { entry } = resolvedEntry
     const providedFields = await resolveProvidedFields(entry, fetcher, sfPorts)
-    const readerKind = isCsvEntry(entry)
-      ? ('csv' as const)
-      : isElfEntry(entry)
-        ? ('elf' as const)
-        : ('sobject' as const)
     const label = entryLabel(entry)
     const alignment: AlignmentSpec = {
-      readerKind,
+      readerKind: entryKind(entry),
       entryLabel: label,
       providedFields,
       augmentColumns,

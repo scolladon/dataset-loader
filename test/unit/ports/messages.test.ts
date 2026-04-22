@@ -57,7 +57,6 @@ describe('MessagesPort (SfMessages adapter)', () => {
     ['entry-not-found.hint-missing-names', [], ['"name" field']],
     ['no-source-port', ['prod'], ["'prod'", 'No SF connection']],
     ['no-target-port', ['analytic'], ["'analytic'", 'target org']],
-    ['unknown-entry-kind', [], ['unknown entry kind']],
   ])('given error key %s, when getError, then renders the template with substitutions', (key, subs, markers) => {
     const sut = loadDatasetLoadMessages()
     const msg = sut.getError(key, ...subs)
