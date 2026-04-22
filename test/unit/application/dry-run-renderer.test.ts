@@ -1,69 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import {
-  type CsvEntry,
-  type ElfEntry,
-  type ResolvedEntry,
-  type SObjectEntry,
-} from '../../../src/adapters/config-loader.js'
 import { DryRunRenderer } from '../../../src/application/dry-run-renderer.js'
 import { DateBounds } from '../../../src/domain/date-bounds.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { WatermarkKey } from '../../../src/domain/watermark-key.js'
 import { WatermarkStore } from '../../../src/domain/watermark-store.js'
-import { type LoggerPort } from '../../../src/ports/types.js'
+import {
+  csvEntry as csv,
+  elfEntry as elf,
+  makeCaptureLogger as makeLogger,
+  resolvedOf as resolved,
+  sobjectEntry as sobject,
+} from '../../fixtures/application.js'
 
 const ISO_JAN = '2026-01-01T00:00:00.000Z'
 const ISO_FEB = '2026-02-01T00:00:00.000Z'
 const ISO_MAR = '2026-03-01T00:00:00.000Z'
-
-const sobject: SObjectEntry = {
-  sourceOrg: 'src',
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  sObject: 'Account',
-  fields: ['Id'],
-  dateField: 'LastModifiedDate',
-  name: 'accounts',
-}
-
-const elf: ElfEntry = {
-  sourceOrg: 'src',
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  eventLog: 'Login',
-  interval: 'Daily',
-  name: 'logins',
-}
-
-const csv: CsvEntry = {
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  csvFile: './fake.csv',
-  name: 'csv-only',
-}
-
-function resolved(
-  entry: SObjectEntry | ElfEntry | CsvEntry,
-  index = 0
-): ResolvedEntry {
-  return { entry, index, augmentColumns: {} }
-}
-
-function makeLogger() {
-  const logs: string[] = []
-  const warns: string[] = []
-  const logger: LoggerPort = {
-    info: (m: string) => logs.push(m),
-    warn: (m: string) => warns.push(m),
-    debug: (_m: string) => {
-      /* no-op */
-    },
-  }
-  return { logger, logs, warns }
-}
 
 describe('DryRunRenderer', () => {
   it('given empty bounds, when rendering, then emits the legacy single-line format and no warnings', () => {
@@ -157,5 +108,43 @@ describe('DryRunRenderer', () => {
     // Assert
     expect(warns.some(w => w.includes('FIRST_RUN_ELF'))).toBe(true)
     expect(logs[0]).toBe('Dry run — planned entries:')
+  })
+
+  it('given ELF entry with bounds, when rendering, then effective line uses LogDate as the date field', () => {
+    // Arrange — M3 gap: the `isElfEntry(entry) ? 'LogDate' : entry.dateField`
+    // ternary had no ELF-branch coverage at this layer. With both bounds
+    // set and no seeded watermark, FIRST_RUN_ELF is suppressed (hasStart),
+    // FRESH_END_ONLY is suppressed (hasStart), and no bounds-vs-watermark
+    // annotation fires (all four predicates take `undefined` watermark).
+    const { logger, logs } = makeLogger()
+    const sut = new DryRunRenderer(logger)
+
+    // Act
+    sut.render(
+      [resolved(elf)],
+      WatermarkStore.empty(),
+      DateBounds.from(ISO_JAN, ISO_MAR)
+    )
+
+    // Assert — exact effective line forces the ternary to pick 'LogDate'
+    expect(logs).toContain(
+      `    effective: LogDate >= ${ISO_JAN} AND LogDate <= ${ISO_MAR}`
+    )
+  })
+
+  it('given multiple entries with empty bounds, when rendering legacy format, then each entry gets its own line', () => {
+    // M3/M4 gap — the loop in the legacy path was only exercised with one entry.
+    const { logger, logs } = makeLogger()
+    const sut = new DryRunRenderer(logger)
+    const store = WatermarkStore.empty()
+      .set(WatermarkKey.fromEntry(sobject), Watermark.fromString(ISO_FEB))
+      .set(WatermarkKey.fromEntry(elf), Watermark.fromString(ISO_JAN))
+
+    // Act
+    sut.render([resolved(sobject), resolved(elf)], store, DateBounds.none())
+
+    // Assert — one legacy line per non-CSV entry (in declaration order)
+    expect(logs).toContain(`  accounts → org:ana:DS (watermark: ${ISO_FEB})`)
+    expect(logs).toContain(`  logins → org:ana:DS (watermark: ${ISO_JAN})`)
   })
 })

@@ -1,15 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
-import {
-  type CsvEntry,
-  type ElfEntry,
-  type ResolvedEntry,
-  type SObjectEntry,
-} from '../../../src/adapters/config-loader.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuditRunner } from '../../../src/application/audit-runner.js'
+import { type SalesforcePort } from '../../../src/ports/types.js'
 import {
-  type LoggerPort,
-  type SalesforcePort,
-} from '../../../src/ports/types.js'
+  csvEntry as csv,
+  elfEntry as elf,
+  makeCaptureLogger as makeLogger,
+  resolvedOf as resolved,
+  sobjectEntry as sobject,
+} from '../../fixtures/application.js'
 import { makeSfPort } from '../../fixtures/sf-port.js'
 
 vi.mock('../../../src/domain/auditor.js', () => ({
@@ -19,56 +17,22 @@ vi.mock('../../../src/domain/auditor.js', () => ({
 
 import { buildAuditChecks, runAudit } from '../../../src/domain/auditor.js'
 
-const sobject: SObjectEntry = {
-  sourceOrg: 'src',
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  sObject: 'Account',
-  fields: ['Id', 'Name'],
-  dateField: 'LastModifiedDate',
-}
-
-const elf: ElfEntry = {
-  sourceOrg: 'src',
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  eventLog: 'Login',
-  interval: 'Daily',
-}
-
-const csv: CsvEntry = {
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  csvFile: './fake.csv',
-}
-
-function resolved(
-  entry: SObjectEntry | ElfEntry | CsvEntry,
-  index = 0
-): ResolvedEntry {
-  return { entry, index, augmentColumns: {} }
-}
-
-function makeLogger() {
-  const logs: string[] = []
-  const warns: string[] = []
-  const logger: LoggerPort = {
-    info: (m: string) => logs.push(m),
-    warn: (m: string) => warns.push(m),
-    debug: (_m: string) => {
-      /* no-op */
-    },
-  }
-  return { logger, logs, warns }
-}
-
 describe('AuditRunner', () => {
+  // `process.exitCode` is module-global; saving/restoring around each test
+  // prevents cross-file ordering leaks. `clearAllMocks` resets call history
+  // so `buildAuditChecks.mock.calls[0]` in each test is the test's own call.
+  let savedExitCode: typeof process.exitCode
+  beforeEach(() => {
+    savedExitCode = process.exitCode
+    process.exitCode = undefined
+    vi.clearAllMocks()
+  })
+  afterEach(() => {
+    process.exitCode = savedExitCode
+  })
+
   it('given passing audit, when running, then returns zero failures and does not set exit code', async () => {
     // Arrange
-    process.exitCode = undefined
     vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
     const { logger, logs } = makeLogger()
     const sut = new AuditRunner(logger)
@@ -90,27 +54,20 @@ describe('AuditRunner', () => {
 
   it('given failing audit, when running, then returns one failure and sets exit code 2', async () => {
     // Arrange
-    process.exitCode = undefined
     vi.mocked(runAudit).mockResolvedValueOnce({ passed: false })
     const { logger } = makeLogger()
     const sut = new AuditRunner(logger)
 
-    try {
-      // Act
-      const result = await sut.run([resolved(sobject)], new Map())
+    // Act
+    const result = await sut.run([resolved(sobject)], new Map())
 
-      // Assert
-      expect(result.entriesFailed).toBe(1)
-      expect(process.exitCode).toBe(2)
-    } finally {
-      process.exitCode = undefined
-    }
+    // Assert
+    expect(result.entriesFailed).toBe(1)
+    expect(process.exitCode).toBe(2)
   })
 
   it('given mixed entries, when building audit entries, then each kind gets the correct readerKind', async () => {
     // Arrange — regression guard on the SObject / ELF / CSV discrimination
-    const buildSpy = vi.mocked(buildAuditChecks)
-    buildSpy.mockClear()
     vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
     const { logger } = makeLogger()
     const sut = new AuditRunner(logger)
@@ -119,10 +76,44 @@ describe('AuditRunner', () => {
     await sut.run([resolved(sobject), resolved(elf), resolved(csv)], new Map())
 
     // Assert
-    const auditEntries = buildSpy.mock.calls[0][0]
+    const auditEntries = vi.mocked(buildAuditChecks).mock.calls[0][0]
     expect(auditEntries).toHaveLength(3)
     expect(auditEntries[0].readerKind).toBe('sobject')
     expect(auditEntries[1].readerKind).toBe('elf')
     expect(auditEntries[2].readerKind).toBe('csv')
+  })
+
+  it('given CSV-only entries, when running, then audit entries contain only csv kind', async () => {
+    // Arrange — M4 gap: the CSV branch of buildAuditEntry was exercised in
+    // the mixed test above, but isolating it catches a mutation that swaps
+    // the csv / sobject / elf dispatch order.
+    vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
+    const { logger } = makeLogger()
+    const sut = new AuditRunner(logger)
+
+    // Act
+    await sut.run([resolved(csv)], new Map())
+
+    // Assert
+    const auditEntries = vi.mocked(buildAuditChecks).mock.calls[0][0]
+    expect(auditEntries).toHaveLength(1)
+    expect(auditEntries[0].readerKind).toBe('csv')
+  })
+
+  it('given empty entries, when running, then runAudit is still invoked with an empty list and result reports no failures', async () => {
+    // Arrange — Zod guarantees entries.length >= 1 at the command layer,
+    // but AuditRunner itself must behave sanely if fed an empty slice
+    // (e.g. a future dispatch that filters all entries out).
+    vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
+    const { logger } = makeLogger()
+    const sut = new AuditRunner(logger)
+
+    // Act
+    const result = await sut.run([], new Map())
+
+    // Assert
+    expect(vi.mocked(buildAuditChecks).mock.calls[0][0]).toEqual([])
+    expect(result.entriesFailed).toBe(0)
+    expect(process.exitCode).toBeUndefined()
   })
 })

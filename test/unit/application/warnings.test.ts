@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  type ConfigEntry,
-  type CsvEntry,
-  type ElfEntry,
-  type ResolvedEntry,
-  type SObjectEntry,
-} from '../../../src/adapters/config-loader.js'
+import { type ConfigEntry } from '../../../src/adapters/config-loader.js'
 import {
   boundsMessages,
   computeWarnings,
@@ -16,42 +10,17 @@ import { DateBounds } from '../../../src/domain/date-bounds.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { WatermarkKey } from '../../../src/domain/watermark-key.js'
 import { WatermarkStore } from '../../../src/domain/watermark-store.js'
+import {
+  csvEntry as csv,
+  elfEntry as elf,
+  resolvedOf as resolved,
+  sobjectEntry as sobject,
+  sobjectEntryOverwrite as sobjectOverwrite,
+} from '../../fixtures/application.js'
 
 const ISO_JAN = '2026-01-01T00:00:00.000Z'
 const ISO_FEB = '2026-02-01T00:00:00.000Z'
 const ISO_MAR = '2026-03-01T00:00:00.000Z'
-
-const elf: ElfEntry = {
-  sourceOrg: 'src',
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  eventLog: 'Login',
-  interval: 'Daily',
-}
-
-const sobject: SObjectEntry = {
-  sourceOrg: 'src',
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  sObject: 'Account',
-  fields: ['Id'],
-  dateField: 'LastModifiedDate',
-}
-
-const sobjectOverwrite: SObjectEntry = { ...sobject, operation: 'Overwrite' }
-
-const csv: CsvEntry = {
-  targetOrg: 'ana',
-  targetDataset: 'DS',
-  operation: 'Append',
-  csvFile: './fake.csv',
-}
-
-function resolved(entry: ConfigEntry, index = 0): ResolvedEntry {
-  return { entry, index, augmentColumns: {} }
-}
 
 function storeWith(entry: ConfigEntry, watermarkIso: string): WatermarkStore {
   return WatermarkStore.empty().set(
@@ -142,38 +111,42 @@ describe('boundsMessages', () => {
     expect(out[0]).toContain('all selected entries are CSV')
   })
 
-  it('given --start-date before watermark, when computing, then REWIND fires with watermark value', () => {
+  it('given --start-date before watermark, when computing, then REWIND fires with exact template', () => {
+    // M2 tightening — exact-string assertion kills StringLiteral mutations
+    // on the full warning template (not just the `REWIND` keyword).
     const bounds = DateBounds.from(ISO_JAN, undefined)
     const out = boundsMessages(
       [resolved(sobject)],
       storeWith(sobject, ISO_FEB),
       bounds
     )
-    expect(out).toHaveLength(1)
-    expect(out[0]).toContain('REWIND')
-    expect(out[0]).toContain(ISO_FEB)
+    expect(out).toEqual([
+      `[accounts] REWIND: --start-date is before watermark ${ISO_FEB}; previously-loaded records will be re-loaded; watermark may regress.`,
+    ])
   })
 
-  it('given --start-date after watermark, when computing, then HOLE fires', () => {
+  it('given --start-date after watermark, when computing, then HOLE fires with exact template', () => {
     const bounds = DateBounds.from(ISO_MAR, undefined)
     const out = boundsMessages(
       [resolved(sobject)],
       storeWith(sobject, ISO_FEB),
       bounds
     )
-    expect(out).toHaveLength(1)
-    expect(out[0]).toContain('HOLE')
+    expect(out).toEqual([
+      `[accounts] HOLE: --start-date is after watermark ${ISO_FEB}; records between the watermark and --start-date will be skipped this run AND by subsequent incremental runs (watermark will jump past the gap as soon as any in-window record loads).`,
+    ])
   })
 
-  it('given --start-date equals watermark under Append, when computing, then BOUNDARY fires', () => {
+  it('given --start-date equals watermark under Append, when computing, then BOUNDARY fires with exact template', () => {
     const bounds = DateBounds.from(ISO_FEB, undefined)
     const out = boundsMessages(
       [resolved(sobject)],
       storeWith(sobject, ISO_FEB),
       bounds
     )
-    expect(out).toHaveLength(1)
-    expect(out[0]).toContain('BOUNDARY')
+    expect(out).toEqual([
+      `[accounts] BOUNDARY: --start-date equals watermark ${ISO_FEB}; under operation Append the boundary record will be appended again (duplicate row). Bump --start-date past the watermark, or use operation Overwrite.`,
+    ])
   })
 
   it('given --start-date equals watermark under Overwrite, when computing, then no BOUNDARY fires', () => {
@@ -186,23 +159,51 @@ describe('boundsMessages', () => {
     expect(out).toEqual([])
   })
 
-  it('given --end-date before watermark, when computing, then EMPTY fires', () => {
+  it('given --end-date before watermark, when computing, then EMPTY fires with exact template', () => {
     const bounds = DateBounds.from(undefined, ISO_JAN)
     const out = boundsMessages(
       [resolved(sobject)],
       storeWith(sobject, ISO_FEB),
       bounds
     )
-    expect(out).toHaveLength(1)
-    expect(out[0]).toContain('EMPTY')
+    expect(out).toEqual([
+      `[accounts] EMPTY: --end-date is before watermark ${ISO_FEB}; query window is empty — no records will load. To replay this range, use a separate --state-file (see RUN_BOOK).`,
+    ])
   })
 })
 
 describe('dryRunAnnotation', () => {
-  it('given --start-date before watermark, when annotating, then returns REWIND suffix', () => {
+  it('given --start-date before watermark, when annotating, then returns exact REWIND suffix', () => {
     const bounds = DateBounds.from(ISO_JAN, undefined)
     const wm = Watermark.fromString(ISO_FEB)
-    expect(dryRunAnnotation(sobject, wm, bounds)).toContain('REWIND')
+    expect(dryRunAnnotation(sobject, wm, bounds)).toBe(
+      '  (REWIND: --start-date before watermark — watermark may regress)'
+    )
+  })
+
+  it('given --start-date after watermark, when annotating, then returns exact HOLE suffix', () => {
+    // I4 gap — previously only REWIND and EMPTY were tested.
+    const bounds = DateBounds.from(ISO_MAR, undefined)
+    const wm = Watermark.fromString(ISO_FEB)
+    expect(dryRunAnnotation(sobject, wm, bounds)).toBe(
+      '  (HOLE: --start-date after watermark — records in the gap will never be back-filled)'
+    )
+  })
+
+  it('given --start-date equals watermark under Append, when annotating, then returns exact BOUNDARY suffix', () => {
+    // I4 gap — Append-only BOUNDARY annotation.
+    const bounds = DateBounds.from(ISO_FEB, undefined)
+    const wm = Watermark.fromString(ISO_FEB)
+    expect(dryRunAnnotation(sobject, wm, bounds)).toBe(
+      '  (BOUNDARY: --start-date equals watermark — boundary record will be re-appended (duplicate))'
+    )
+  })
+
+  it('given --start-date equals watermark under Overwrite, when annotating, then returns empty string (no annotation)', () => {
+    // Regression guard — Overwrite must not surface BOUNDARY.
+    const bounds = DateBounds.from(ISO_FEB, undefined)
+    const wm = Watermark.fromString(ISO_FEB)
+    expect(dryRunAnnotation(sobjectOverwrite, wm, bounds)).toBe('')
   })
 
   it('given no bounds conflict, when annotating, then returns empty string', () => {
@@ -212,7 +213,9 @@ describe('dryRunAnnotation', () => {
   it('given --end-date before watermark, when annotating, then returns EMPTY suffix', () => {
     const bounds = DateBounds.from(undefined, ISO_JAN)
     const wm = Watermark.fromString(ISO_FEB)
-    expect(dryRunAnnotation(sobject, wm, bounds)).toContain('EMPTY')
+    expect(dryRunAnnotation(sobject, wm, bounds)).toBe(
+      '  (EMPTY: end-date before watermark — no records will load)'
+    )
   })
 })
 
