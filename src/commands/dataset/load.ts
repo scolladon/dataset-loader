@@ -2,7 +2,6 @@ import { Messages, Org } from '@salesforce/core'
 import { Flags, SfCommand } from '@salesforce/sf-plugins-core'
 import {
   type ConfigEntry,
-  type ElfEntry,
   entryLabel,
   isCsvEntry,
   isElfEntry,
@@ -10,7 +9,6 @@ import {
   parseConfig,
   type ResolvedEntry,
   resolveConfig,
-  type SObjectEntry,
 } from '../../adapters/config-loader.js'
 import { buildAugmentHeaderSuffix } from '../../adapters/pipeline/augment-transform.js'
 import { ProgressReporter } from '../../adapters/progress-reporter.js'
@@ -26,14 +24,17 @@ import {
   buildAuditChecks,
   runAudit,
 } from '../../domain/auditor.js'
-import { parseCsvHeader } from '../../domain/column-name.js'
 import { DatasetKey } from '../../domain/dataset-key.js'
 import { DateBounds } from '../../domain/date-bounds.js'
+import { resolveProvidedFields } from '../../domain/field-resolver.js'
 import { executePipeline, type PipelineEntry } from '../../domain/pipeline.js'
 import { ReaderKey } from '../../domain/reader-key.js'
-import { type Watermark } from '../../domain/watermark.js'
 import { WatermarkKey } from '../../domain/watermark-key.js'
 import { type WatermarkStore } from '../../domain/watermark-store.js'
+import {
+  loadDatasetLoadMessages,
+  type MessagesPort,
+} from '../../ports/messages.js'
 import {
   type AlignmentSpec,
   type CreateWriterPort,
@@ -43,9 +44,10 @@ import {
   type SalesforcePort,
   type StatePort,
 } from '../../ports/types.js'
+import { computeWarnings, dryRunAnnotation } from './warnings.js'
 
 Messages.importMessagesDirectoryFromMetaUrl(import.meta.url)
-const messages = Messages.loadMessages('dataset-loader', 'dataset.load')
+const messagesPort: MessagesPort = loadDatasetLoadMessages()
 
 interface DatasetLoadResult {
   entriesProcessed: number
@@ -66,36 +68,36 @@ interface PipelineEntrySlot {
 }
 
 export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
-  public static readonly summary = messages.getMessage('summary')
-  public static readonly examples = messages.getMessages('examples')
+  public static readonly summary = messagesPort.getSummary()
+  public static readonly examples = messagesPort.getExamples()
 
   public static readonly flags = {
     'config-file': Flags.file({
       char: 'c',
-      summary: messages.getMessage('flags.config-file.summary'),
+      summary: messagesPort.getFlagSummary('config-file'),
       default: 'dataset-load.config.json',
     }),
     'state-file': Flags.file({
       char: 's',
-      summary: messages.getMessage('flags.state-file.summary'),
+      summary: messagesPort.getFlagSummary('state-file'),
       default: '.dataset-load.state.json',
     }),
     audit: Flags.boolean({
-      summary: messages.getMessage('flags.audit.summary'),
+      summary: messagesPort.getFlagSummary('audit'),
       default: false,
     }),
     'dry-run': Flags.boolean({
-      summary: messages.getMessage('flags.dry-run.summary'),
+      summary: messagesPort.getFlagSummary('dry-run'),
       default: false,
     }),
     entry: Flags.string({
-      summary: messages.getMessage('flags.entry.summary'),
+      summary: messagesPort.getFlagSummary('entry'),
     }),
     'start-date': Flags.string({
-      summary: messages.getMessage('flags.start-date.summary'),
+      summary: messagesPort.getFlagSummary('start-date'),
     }),
     'end-date': Flags.string({
-      summary: messages.getMessage('flags.end-date.summary'),
+      summary: messagesPort.getFlagSummary('end-date'),
     }),
   }
 
@@ -179,7 +181,9 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       await Promise.all(ensurePromises)
       return await resolveConfig(config, sfPorts)
     } catch (error) {
-      this.error(`Config loading failed: ${formatErrorMessage(error)}`)
+      this.error(
+        messagesPort.getError('config-load-failed', formatErrorMessage(error))
+      )
     }
   }
 
@@ -197,8 +201,10 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     if (filtered.length === 0) {
       const hint = hasAnyName
         ? ''
-        : ' Ensure your config entries have a "name" field.'
-      this.error(`Entry '${entryName}' not found.${hint}`)
+        : ` ${messagesPort.getError('entry-not-found.hint-missing-names')}`
+      this.error(
+        `${messagesPort.getError('entry-not-found', entryName)}${hint}`
+      )
     }
     return filtered
   }
@@ -260,7 +266,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       }
     }
     /* v8 ignore next 2 -- exhaustive discriminator; unreachable */
-    throw new Error('unknown entry kind')
+    throw new Error(messagesPort.getError('unknown-entry-kind'))
   }
 
   private handleDryRun(
@@ -268,8 +274,9 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     watermarks: WatermarkStore,
     bounds: DateBounds
   ): DatasetLoadResult {
-    this.emitFirstRunWarnings(entries, watermarks, bounds)
-    this.emitBoundsWarnings(entries, watermarks, bounds)
+    for (const msg of computeWarnings(entries, watermarks, bounds)) {
+      this.warn(msg)
+    }
     this.log('Dry run — planned entries:')
     if (bounds.isEmpty()) {
       for (const { entry } of entries) {
@@ -324,114 +331,8 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     // this branch is structurally unreachable (see v8 ignore rationale above).
     if (conds.length === 0) return
     const soql = conds.join(' AND ')
-    const annotation = this.dryRunAnnotation(entry, wm, bounds)
+    const annotation = dryRunAnnotation(entry, wm, bounds)
     this.log(`    effective: ${soql}${annotation}`)
-  }
-
-  // Precondition: `entry` is non-CSV (caller `renderDryRunEntry` returns
-  // early on CSV before reaching here).
-  private dryRunAnnotation(
-    entry: ElfEntry | SObjectEntry,
-    wm: Watermark | undefined,
-    bounds: DateBounds
-  ): string {
-    if (bounds.rewindsBelow(wm)) {
-      return '  (REWIND: --start-date before watermark — watermark may regress)'
-    }
-    if (bounds.leavesHoleAbove(wm)) {
-      return '  (HOLE: --start-date after watermark — records in the gap will never be back-filled)'
-    }
-    if (bounds.matchesWatermark(wm) && entry.operation === 'Append') {
-      return '  (BOUNDARY: --start-date equals watermark — boundary record will be re-appended (duplicate))'
-    }
-    if (bounds.endsBeforeWatermark(wm)) {
-      return '  (EMPTY: end-date before watermark — no records will load)'
-    }
-    return ''
-  }
-
-  // Surfaces two first-run footguns that operators otherwise only discover
-  // after the fact:
-  //   1. FIRST_RUN_ELF — fresh state + any ELF entry + no --start-date:
-  //      every log file ever emitted gets downloaded. Easy to miss on a
-  //      "just works" first run against a busy org.
-  //   2. FRESH_END_ONLY — fresh state (any non-CSV entry) + --end-date
-  //      without --start-date: the run sets the watermark to the max
-  //      record seen within the window, but subsequent incremental runs
-  //      silently skip records created after --end-date until the flag
-  //      is removed and rerun. No existing warning covers this shape.
-  // Both warnings are suppressed when --start-date is set (it caps the
-  // pull) or when a watermark already exists for the entry (not fresh).
-  private emitFirstRunWarnings(
-    entries: ResolvedEntry[],
-    watermarks: WatermarkStore,
-    bounds: DateBounds
-  ): void {
-    if (bounds.hasStart()) return
-    for (const { entry } of entries) {
-      if (isCsvEntry(entry)) continue
-      if (watermarks.get(WatermarkKey.fromEntry(entry))) continue
-      const label = entryLabel(entry)
-      if (bounds.hasEnd()) {
-        this.warn(
-          `[${label}] FRESH_END_ONLY: no watermark yet and --end-date provided without --start-date; the watermark will advance to this run's max dateField (at or before --end-date), so records created after --end-date will be skipped until --end-date is dropped. Pass --start-date on the first run to make the window explicit.`
-        )
-      } else if (isElfEntry(entry)) {
-        this.warn(
-          `[${label}] FIRST_RUN_ELF: no watermark and no --start-date; every log file ever emitted for this event type will be downloaded. On busy orgs this is thousands of blobs. Pass --start-date (e.g. --start-date 2026-01-01T00:00:00.000Z) to cap the initial pull. See README Advanced Usage.`
-        )
-      }
-    }
-  }
-
-  private emitBoundsWarnings(
-    entries: ResolvedEntry[],
-    watermarks: WatermarkStore,
-    bounds: DateBounds
-  ): void {
-    // Stryker disable next-line ConditionalExpression: equivalent mutant.
-    // Removing this early-return yields observationally identical behavior
-    // when bounds are empty: with no startAt/endAt, all four inner
-    // predicates (rewindsBelow / leavesHoleAbove / matchesWatermark /
-    // endsBeforeWatermark) always return false, and Zod guarantees
-    // `entries.length >= 1` so the `nonCsv.length === 0` branch cannot
-    // falsely fire a "no effect" warning. The early-return is retained
-    // for readability and to short-circuit the no-op hot path.
-    if (bounds.isEmpty()) return
-    const nonCsv = entries.filter(({ entry }) => !isCsvEntry(entry))
-    if (nonCsv.length === 0) {
-      this.warn(
-        '--start-date / --end-date provided but all selected entries are CSV; bounds have no effect. CSV entries are streamed in full.'
-      )
-      return
-    }
-    for (const { entry } of nonCsv) {
-      const wm = watermarks.get(WatermarkKey.fromEntry(entry))
-      const label = entryLabel(entry)
-      if (bounds.rewindsBelow(wm)) {
-        this.warn(
-          `[${label}] REWIND: --start-date is before watermark ${wm}; previously-loaded records will be re-loaded; watermark may regress.`
-        )
-      } else if (bounds.leavesHoleAbove(wm)) {
-        this.warn(
-          `[${label}] HOLE: --start-date is after watermark ${wm}; records between the watermark and --start-date will be skipped this run AND by subsequent incremental runs (watermark will jump past the gap as soon as any in-window record loads).`
-        )
-      } else if (bounds.matchesWatermark(wm) && entry.operation === 'Append') {
-        this.warn(
-          `[${label}] BOUNDARY: --start-date equals watermark ${wm}; under operation Append the boundary record will be appended again (duplicate row). Bump --start-date past the watermark, or use operation Overwrite.`
-        )
-      } else if (bounds.endsBeforeWatermark(wm)) {
-        // Only reachable when --start-date is absent: `DateBounds.from`
-        // enforces --start-date <= --end-date, so when --start-date is
-        // set the start-date branches above always fire first (covering
-        // start < watermark, start == watermark, and start > watermark)
-        // or the window is non-empty (end >= start implies end >=
-        // watermark when start >= watermark).
-        this.warn(
-          `[${label}] EMPTY: --end-date is before watermark ${wm}; query window is empty — no records will load. To replay this range, use a separate --state-file (see RUN_BOOK).`
-        )
-      }
-    }
   }
 
   private async handlePipeline(
@@ -442,8 +343,9 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     logger: LoggerPort,
     bounds: DateBounds
   ): Promise<DatasetLoadResult> {
-    this.emitFirstRunWarnings(entries, watermarks, bounds)
-    this.emitBoundsWarnings(entries, watermarks, bounds)
+    for (const msg of computeWarnings(entries, watermarks, bounds)) {
+      this.warn(msg)
+    }
     // Two-pass entry build: sync dedupe of readers (avoids Map races under
     // concurrent awaits), then async resolution of providedFields per entry.
     const sharedReaders = new Map<string, ReaderPort>()
@@ -503,7 +405,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
 
     const srcPort = sfPorts.get(entry.sourceOrg)
     if (!srcPort)
-      throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
+      throw new Error(messagesPort.getError('no-source-port', entry.sourceOrg))
     const readerKey = this.createReaderKey(entry, bounds)
     const readerCacheKey = readerKey.toString()
     const fetcher = this.getOrCreateReader(
@@ -525,11 +427,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   ): Promise<PipelineEntry> {
     const { resolvedEntry, index, readerKey, fetcher, augmentColumns } = slot
     const { entry } = resolvedEntry
-    const providedFields = await this.resolveProvidedFields(
-      entry,
-      fetcher,
-      sfPorts
-    )
+    const providedFields = await resolveProvidedFields(entry, fetcher, sfPorts)
     const readerKind = isCsvEntry(entry)
       ? ('csv' as const)
       : isElfEntry(entry)
@@ -555,53 +453,6 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       header: async () =>
         (await fetcher.header()) + buildAugmentHeaderSuffix(augmentColumns),
     }
-  }
-
-  private async resolveProvidedFields(
-    entry: ConfigEntry,
-    fetcher: ReaderPort,
-    sfPorts: Map<string, SalesforcePort>
-  ): Promise<readonly string[]> {
-    if (isSObjectEntry(entry)) {
-      return entry.fields
-    }
-    if (isCsvEntry(entry)) {
-      // Reuse the same CsvReader built in pass 1 — header() is memoised per
-      // instance (csv-reader.ts:14), so a pipeline run triggers only one fs read.
-      return parseCsvHeader(await fetcher.header())
-    }
-    // ELF: query LogFileFieldNames for the most recent file of this type.
-    // Empty result (no prior blob) → empty list; writer & audit WARN.
-    if (!isElfEntry(entry)) {
-      /* v8 ignore next 2 -- exhaustive discriminator; unreachable */
-      throw new Error('unknown entry kind')
-    }
-    const srcPort = sfPorts.get(entry.sourceOrg)
-    /* v8 ignore next 2 -- srcPort presence is validated in buildPipelineEntryStatic */
-    if (!srcPort)
-      throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
-    // Safe interpolation: eventLog is constrained by SF_IDENTIFIER_PATTERN
-    // (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`) at config parse (config-loader.ts:177),
-    // interval is `z.enum(['Daily','Hourly'])` (config-loader.ts:178) — both
-    // exclude the single-quote character that would enable SOQL injection.
-    //
-    // Errors (permissions, connectivity) are swallowed here: the audit phase
-    // is the authoritative place to surface them. Returning empty
-    // providedFields lets the writer-init short-circuit the schema check
-    // and lets the subsequent fetch() fail per-entry instead of killing
-    // the whole run.
-    let raw: string | null | undefined
-    try {
-      const result = await srcPort.query<{
-        LogFileFieldNames: string | null
-      }>(
-        `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${entry.eventLog}' AND Interval = '${entry.interval}' ORDER BY LogDate DESC LIMIT 1`
-      )
-      raw = result.records[0]?.LogFileFieldNames
-    } catch {
-      return []
-    }
-    return raw ? parseCsvHeader(raw) : []
   }
 
   // Entries sharing the same readerKey share one ReaderPort instance so that header() returns
@@ -673,7 +524,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
           const sfPort = sfPorts.get(dataset.org)
           if (!sfPort) {
             throw new Error(
-              `No authenticated connection for target org '${dataset.org}'`
+              messagesPort.getError('no-target-port', dataset.org)
             )
           }
           return new DatasetWriterFactory(sfPort).create(
