@@ -437,25 +437,7 @@ warning at the time was the only chance to notice.
 
 ### Warning reference
 
-At most one warning per entry when bounds are set:
-
-| Warning  | Condition                              | Consequence |
-|----------|-----------------------------------------|-------------|
-| REWIND   | `--start-date < watermark`              | Previously-loaded records re-loaded; watermark may regress. |
-| HOLE     | `--start-date > watermark`              | Records in the gap skipped; not back-filled by future incremental runs. |
-| BOUNDARY | `--start-date == watermark`, Append     | Boundary record appended a second time (duplicate row). Silent under Overwrite. |
-| EMPTY    | `--end-date < watermark`, no `--start-date` | Query window is empty; no records will load. |
-
-Invalid input (bad ISO format, bad calendar date like `2026-02-30`,
-or `start-date > end-date`) aborts the run before any mode branch —
-surfaces identically under `--audit`, `--dry-run`, or a real run.
-
-### ELF first-run behaviour
-
-On a first ELF run (no watermark, no `--start-date`), the reader
-loads every available log file ascending. To cap initial load size,
-pass `--start-date <recent-iso>` or pre-seed the state file with a
-recent `LogDate`.
+See the canonical table in [README.md → Warnings & gotchas](README.md#warnings--gotchas) for the full REWIND / HOLE / BOUNDARY / EMPTY taxonomy. Invalid input (bad ISO format, bad calendar date like `2026-02-30`, or `--start-date > --end-date`) aborts the run before any mode branch — surfaces identically under `--audit`, `--dry-run`, or a real run.
 
 ## Reference
 
