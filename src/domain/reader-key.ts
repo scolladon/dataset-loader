@@ -1,5 +1,12 @@
 import { type DateBounds } from './date-bounds.js'
 
+// NUL (\0) separates key components so no component value can collide with
+// the separator. SF identifiers, field lists, interval values, and
+// DateBounds.toString() never contain control characters. The `where` clause
+// is user-provided SOQL; SOQL itself rejects NUL bytes, so even a malicious
+// `where` can't forge a collision.
+const KEY_SEPARATOR = '\0'
+
 export class ReaderKey {
   private constructor(private readonly value: string) {}
 
@@ -10,7 +17,9 @@ export class ReaderKey {
     bounds: DateBounds
   ): ReaderKey {
     return new ReaderKey(
-      ['elf', sourceOrg, eventType, interval, bounds.toString()].join('\0')
+      ['elf', sourceOrg, eventType, interval, bounds.toString()].join(
+        KEY_SEPARATOR
+      )
     )
   }
 
@@ -33,12 +42,12 @@ export class ReaderKey {
         where ?? '',
         String(queryLimit ?? 0),
         bounds.toString(),
-      ].join('\0')
+      ].join(KEY_SEPARATOR)
     )
   }
 
   static forCsv(filePath: string): ReaderKey {
-    return new ReaderKey(['csv', filePath].join('\0'))
+    return new ReaderKey(['csv', filePath].join(KEY_SEPARATOR))
   }
 
   toString(): string {

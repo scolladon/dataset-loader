@@ -248,17 +248,19 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
         interval: entry.interval,
       }
     }
-    // SObject
-    const so = entry as { sObject: string; fields: readonly string[] }
-    return {
-      readerKind: 'sobject',
-      sourceOrg: entry.sourceOrg,
-      targetOrg: entry.targetOrg,
-      targetDataset: entry.targetDataset,
-      augmentColumns,
-      sObject: so.sObject,
-      readerFields: so.fields,
+    if (isSObjectEntry(entry)) {
+      return {
+        readerKind: 'sobject',
+        sourceOrg: entry.sourceOrg,
+        targetOrg: entry.targetOrg,
+        targetDataset: entry.targetDataset,
+        augmentColumns,
+        sObject: entry.sObject,
+        readerFields: entry.fields,
+      }
     }
+    /* v8 ignore next 2 -- exhaustive discriminator; unreachable */
+    throw new Error('unknown entry kind')
   }
 
   private handleDryRun(
@@ -522,7 +524,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     sfPorts: Map<string, SalesforcePort>
   ): Promise<readonly string[]> {
     if (isSObjectEntry(entry)) {
-      return (entry as { fields: readonly string[] }).fields
+      return entry.fields
     }
     if (isCsvEntry(entry)) {
       // Reuse the same CsvReader built in pass 1 — header() is memoised per
@@ -535,15 +537,10 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       /* v8 ignore next 2 -- exhaustive discriminator; unreachable */
       throw new Error('unknown entry kind')
     }
-    const elfEntry = entry as {
-      sourceOrg: string
-      eventLog: string
-      interval: string
-    }
-    const srcPort = sfPorts.get(elfEntry.sourceOrg)
+    const srcPort = sfPorts.get(entry.sourceOrg)
     /* v8 ignore next 2 -- srcPort presence is validated in buildPipelineEntryStatic */
     if (!srcPort)
-      throw new Error(`No SF connection for org '${elfEntry.sourceOrg}'`)
+      throw new Error(`No SF connection for org '${entry.sourceOrg}'`)
     // Safe interpolation: eventLog is constrained by SF_IDENTIFIER_PATTERN
     // (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`) at config parse (config-loader.ts:177),
     // interval is `z.enum(['Daily','Hourly'])` (config-loader.ts:178) — both
@@ -559,7 +556,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
       const result = await srcPort.query<{
         LogFileFieldNames: string | null
       }>(
-        `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${elfEntry.eventLog}' AND Interval = '${elfEntry.interval}' ORDER BY LogDate DESC LIMIT 1`
+        `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${entry.eventLog}' AND Interval = '${entry.interval}' ORDER BY LogDate DESC LIMIT 1`
       )
       raw = result.records[0]?.LogFileFieldNames
     } catch {

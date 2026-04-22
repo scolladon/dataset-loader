@@ -17,7 +17,7 @@ interface SObjectReaderConfig {
   readonly dateField: string
   readonly where?: string
   readonly queryLimit?: number
-  readonly bounds?: DateBounds
+  readonly bounds: DateBounds
 }
 
 type FieldAccessor = (record: Record<string, unknown>) => unknown
@@ -81,7 +81,7 @@ export class SObjectReader implements ReaderPort {
     this.dateField = config.dateField
     this.where = config.where
     this.queryLimit = config.queryLimit
-    this.bounds = config.bounds ?? DateBounds.none()
+    this.bounds = config.bounds
     this.queryFields = config.fields.includes(config.dateField)
       ? config.fields
       : [...config.fields, config.dateField]

@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { SObjectReader } from '../../src/adapters/readers/sobject-reader.js'
 import { DatasetWriter } from '../../src/adapters/writers/dataset-writer.js'
 import { DatasetKey } from '../../src/domain/dataset-key.js'
+import { DateBounds } from '../../src/domain/date-bounds.js'
 import { buildSObjectRowProjection } from '../../src/domain/sobject-row-projection.js'
 import {
   type AlignmentSpec,
@@ -124,6 +125,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
       sobject: 'UserLogin',
       fields: alignment.providedFields as string[],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     reader.project(layout)
 

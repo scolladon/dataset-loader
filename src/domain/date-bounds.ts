@@ -25,10 +25,19 @@ function isValidCalendarDate(iso: string): boolean {
 }
 
 export class DateBounds {
+  // Pre-parsed epoch-ms for startAt/endAt, cached at construction so every
+  // bounds × watermark comparison parses the watermark side only (the bounds
+  // side is stable per instance).
+  private readonly startMs?: number
+  private readonly endMs?: number
+
   private constructor(
     private readonly startAt?: Watermark,
     private readonly endAt?: Watermark
-  ) {}
+  ) {
+    this.startMs = startAt ? Date.parse(startAt.toString()) : undefined
+    this.endMs = endAt ? Date.parse(endAt.toString()) : undefined
+  }
 
   static from(start: string | undefined, end: string | undefined): DateBounds {
     const s = DateBounds.parseFlag('--start-date', start)
@@ -63,29 +72,30 @@ export class DateBounds {
   }
 
   rewindsBelow(watermark: Watermark | undefined): boolean {
-    if (!this.startAt || !watermark) return false
-    return (
-      Date.parse(this.startAt.toString()) < Date.parse(watermark.toString())
-    )
+    // Stryker disable next-line ConditionalExpression: the LHS `false` mutation
+    // is equivalent — when `startMs` is undefined and `watermark` is defined,
+    // the mutant falls through to `undefined < number`, which JS evaluates to
+    // `false` (not a TypeError), matching the guarded path's return value.
+    if (this.startMs === undefined || !watermark) return false
+    return this.startMs < Date.parse(watermark.toString())
   }
 
   leavesHoleAbove(watermark: Watermark | undefined): boolean {
-    if (!this.startAt || !watermark) return false
-    return (
-      Date.parse(this.startAt.toString()) > Date.parse(watermark.toString())
-    )
+    // Stryker disable next-line ConditionalExpression: equivalent — see `rewindsBelow`.
+    if (this.startMs === undefined || !watermark) return false
+    return this.startMs > Date.parse(watermark.toString())
   }
 
   matchesWatermark(watermark: Watermark | undefined): boolean {
-    if (!this.startAt || !watermark) return false
-    return (
-      Date.parse(this.startAt.toString()) === Date.parse(watermark.toString())
-    )
+    // Stryker disable next-line ConditionalExpression: equivalent — see `rewindsBelow`.
+    if (this.startMs === undefined || !watermark) return false
+    return this.startMs === Date.parse(watermark.toString())
   }
 
   endsBeforeWatermark(watermark: Watermark | undefined): boolean {
-    if (!this.endAt || !watermark) return false
-    return Date.parse(this.endAt.toString()) < Date.parse(watermark.toString())
+    // Stryker disable next-line ConditionalExpression: equivalent — see `rewindsBelow`.
+    if (this.endMs === undefined || !watermark) return false
+    return this.endMs < Date.parse(watermark.toString())
   }
 
   toString(): string {

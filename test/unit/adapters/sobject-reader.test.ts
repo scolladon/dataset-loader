@@ -32,6 +32,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -61,6 +62,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -95,6 +97,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -120,6 +123,7 @@ describe('SObjectReader', () => {
       fields: ['Id'],
       dateField: 'LastModifiedDate',
       where: 'Industry != null',
+      bounds: DateBounds.none(),
     })
     await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
 
@@ -145,6 +149,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -169,6 +174,7 @@ describe('SObjectReader', () => {
       fields: ['Id'],
       dateField: 'LastModifiedDate',
       queryLimit: 50,
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -198,6 +204,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -229,6 +236,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -247,6 +255,7 @@ describe('SObjectReader', () => {
           sobject: 'Contact',
           fields: ['Id', 'Owner.Name'],
           dateField: 'LastModifiedDate',
+          bounds: DateBounds.none(),
         })
     ).not.toThrow()
   })
@@ -272,6 +281,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -303,6 +313,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -321,6 +332,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
 
     // Assert
@@ -335,6 +347,7 @@ describe('SObjectReader', () => {
         sobject: 'bad name!',
         fields: ['Id'],
         dateField: 'LastModifiedDate',
+        bounds: DateBounds.none(),
       })
 
     // Act & Assert
@@ -349,6 +362,7 @@ describe('SObjectReader', () => {
         sobject: 'Account',
         fields: ['bad field!'],
         dateField: 'LastModifiedDate',
+        bounds: DateBounds.none(),
       })
 
     // Act & Assert
@@ -363,6 +377,7 @@ describe('SObjectReader', () => {
         sobject: 'Account',
         fields: ['Id'],
         dateField: 'bad date!',
+        bounds: DateBounds.none(),
       })
 
     // Act & Assert
@@ -388,6 +403,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     await collectLines(result.lines)
@@ -405,6 +421,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name', 'CreatedDate'],
       dateField: 'CreatedDate',
+      bounds: DateBounds.none(),
     })
 
     // Assert
@@ -420,6 +437,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'CreatedDate',
+      bounds: DateBounds.none(),
     })
 
     // Assert — no fetch() called: header is derived from config
@@ -438,6 +456,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -458,6 +477,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch(Watermark.fromString('2026-01-01T00:00:00.000Z'))
 
@@ -478,6 +498,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -498,6 +519,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -520,6 +542,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'LastModifiedDate'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -551,6 +574,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -583,6 +607,7 @@ describe('SObjectReader', () => {
       sobject: 'Contact',
       fields: ['Id', 'Owner.Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -611,6 +636,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     await collectLines(result.lines)
@@ -632,6 +658,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -653,6 +680,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     await sut.fetch()
 
@@ -677,6 +705,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -708,6 +737,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const result = await sut.fetch()
     const lines = await collectLines(result.lines)
@@ -740,6 +770,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'NumField'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
 
     // Act
@@ -777,6 +808,7 @@ describe('SObjectReader', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
 
     // Act
@@ -797,6 +829,7 @@ describe('SObjectReader.project', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const layout = {
       targetSize: 2,
@@ -815,6 +848,7 @@ describe('SObjectReader.project', () => {
       sobject: 'Account',
       fields: ['Id', 'Name'],
       dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
     })
     const layout = {
       targetSize: 3,
