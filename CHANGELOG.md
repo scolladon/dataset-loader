@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.3.0](https://github.com/scolladon/dataset-loader/compare/v1.2.3...v1.3.0) (2026-04-22)
+
+
+### Features
+
+* **load:** add --start-date / --end-date flags with dry-run bounds UX ([#33](https://github.com/scolladon/dataset-loader/issues/33)) ([cbd82c9](https://github.com/scolladon/dataset-loader/commit/cbd82c9aae13f4fd58c9cd9dbe60f6a0dec072de))
+
 ## [1.2.3](https://github.com/scolladon/dataset-loader/compare/v1.2.2...v1.2.3) (2026-04-21)
 
 
