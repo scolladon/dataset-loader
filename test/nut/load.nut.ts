@@ -2020,7 +2020,7 @@ describe('DatasetLoad NUT', () => {
         logs.filter(
           l =>
             l ===
-            '    effective: LastModifiedDate >= 2026-01-01T00:00:00.000Z  (REWIND: SD before WM — watermark may regress)'
+            '    effective: LastModifiedDate >= 2026-01-01T00:00:00.000Z  (REWIND: --start-date before watermark — watermark may regress)'
         ).length
       ).toBe(1)
       // Kills `.filter(Boolean)` removal mutation on `[lower, upper]`:
@@ -2058,7 +2058,7 @@ describe('DatasetLoad NUT', () => {
         logs.filter(
           l =>
             l ===
-            '    effective: LastModifiedDate >= 2026-03-01T00:00:00.000Z  (HOLE: SD after WM — records in the gap will never be back-filled)'
+            '    effective: LastModifiedDate >= 2026-03-01T00:00:00.000Z  (HOLE: --start-date after watermark — records in the gap will never be back-filled)'
         ).length
       ).toBe(1)
       expect(logs.some(l => l.includes('undefined'))).toBe(false)
@@ -2129,7 +2129,7 @@ describe('DatasetLoad NUT', () => {
         logs.filter(
           l =>
             l ===
-            '    effective: LastModifiedDate >= 2026-02-10T00:00:00.000Z  (BOUNDARY: SD == WM — boundary record will be re-appended (duplicate))'
+            '    effective: LastModifiedDate >= 2026-02-10T00:00:00.000Z  (BOUNDARY: --start-date equals watermark — boundary record will be re-appended (duplicate))'
         ).length
       ).toBe(1)
       expect(logs.some(l => l.includes('undefined'))).toBe(false)

@@ -332,13 +332,13 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     bounds: DateBounds
   ): string {
     if (bounds.rewindsBelow(wm)) {
-      return '  (REWIND: SD before WM — watermark may regress)'
+      return '  (REWIND: --start-date before watermark — watermark may regress)'
     }
     if (bounds.leavesHoleAbove(wm)) {
-      return '  (HOLE: SD after WM — records in the gap will never be back-filled)'
+      return '  (HOLE: --start-date after watermark — records in the gap will never be back-filled)'
     }
     if (bounds.matchesWatermark(wm) && entry.operation === 'Append') {
-      return '  (BOUNDARY: SD == WM — boundary record will be re-appended (duplicate))'
+      return '  (BOUNDARY: --start-date equals watermark — boundary record will be re-appended (duplicate))'
     }
     if (bounds.endsBeforeWatermark(wm)) {
       return '  (EMPTY: end-date before watermark — no records will load)'
