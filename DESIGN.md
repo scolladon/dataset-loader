@@ -207,10 +207,21 @@ interface FetchResult {
 interface ReaderPort {
   fetch(watermark?: Watermark): Promise<FetchResult>
   header(): Promise<string>
+  // Optional: SObject readers accept a projection layout that reorders
+  // source rows into the dataset's canonical column order. ELF/CSV readers
+  // do not implement this — their source file/blob order is authoritative.
+  project?(layout: ProjectionLayout): void
+}
+
+interface WriterInitResult {
+  readonly chunker: Writable
+  // Dataset metadata's canonical column order (CRMA only). Undefined for
+  // FileWriter — the pipeline skips layout construction in that case.
+  readonly datasetFields?: readonly string[]
 }
 
 interface Writer {
-  init(): Promise<Writable>
+  init(): Promise<WriterInitResult>
   finalize(): Promise<WriterResult>
   abort(): Promise<void>
   skip(): Promise<void>
