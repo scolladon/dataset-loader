@@ -86,14 +86,75 @@ const insightsAccess: AuditCheckStrategy = {
   },
 }
 
-// sObject values are validated against SF_IDENTIFIER_PATTERN at config parse boundary
-const sobjectReadAccess: AuditCheckStrategy = {
-  select: e => (e.sObject ? [{ org: e.sourceOrg, key: e.sObject }] : []),
-  label: (org, key) => `${org}: ${key} read access`,
-  evaluate: async (sfPort, key) => {
-    await sfPort.query(`SELECT Id FROM ${key} LIMIT 1`)
-    return pass()
-  },
+// sObject values are validated against SF_IDENTIFIER_PATTERN, and reader fields
+// against SOQL_RELATIONSHIP_PATH_PATTERN, at config parse boundary (config-loader.ts)
+function buildSObjectReadChecks(
+  entries: readonly AuditEntry[],
+  sfPorts: ReadonlyMap<string, SalesforcePort>
+): readonly AuditCheck[] {
+  const fieldsByKey = aggregateSObjectFields(entries)
+  const checks: AuditCheck[] = []
+  for (const [dedupKey, fields] of fieldsByKey) {
+    const [org, sObject] = splitDedupKey(dedupKey)
+    const soql = buildFlsProbeSoql(sObject, fields)
+    checks.push({
+      org,
+      label: `${org}: ${sObject} read access`,
+      execute: async () => {
+        const sfPort = sfPorts.get(org)
+        if (!sfPort) return fail(`No SF connection for org '${org}'`)
+        try {
+          await sfPort.query(soql)
+          return pass()
+        } catch (e) {
+          return fail(formatErrorMessage(e))
+        }
+      },
+    })
+  }
+  return checks
+}
+
+function aggregateSObjectFields(
+  entries: readonly AuditEntry[]
+): ReadonlyMap<string, readonly string[]> {
+  const acc = new Map<string, string[]>()
+  for (const entry of entries) {
+    if (!entry.sObject) continue
+    const dedupKey = `${entry.sourceOrg}::${entry.sObject}`
+    const existing = acc.get(dedupKey) ?? []
+    // SObject entries always carry readerFields (commands layer sets it from
+    // config.fields); the `?? []` fallback mirrors resolveProvidedFields' defensive guard.
+    /* v8 ignore next */
+    const merged = unionPreserveOrder(existing, entry.readerFields ?? [])
+    acc.set(dedupKey, merged)
+  }
+  return acc
+}
+
+function unionPreserveOrder(
+  base: readonly string[],
+  extra: readonly string[]
+): string[] {
+  const seen = new Set(base)
+  const merged = [...base]
+  for (const f of extra) {
+    if (seen.has(f)) continue
+    seen.add(f)
+    merged.push(f)
+  }
+  return merged
+}
+
+function splitDedupKey(dedupKey: string): readonly [string, string] {
+  const idx = dedupKey.indexOf('::')
+  return [dedupKey.slice(0, idx), dedupKey.slice(idx + 2)]
+}
+
+function buildFlsProbeSoql(sObject: string, fields: readonly string[]): string {
+  /* v8 ignore next 2 -- SObject entries always carry readerFields (commands layer); fallback is defensive */
+  const projection = fields.length > 0 ? fields.join(', ') : 'Id'
+  return `SELECT ${projection} FROM ${sObject} LIMIT 1 WITH SECURITY_ENFORCED`
 }
 
 // Shared selector for dataset-scoped strategies — emits one check per
@@ -314,7 +375,6 @@ const STRATEGIES: readonly AuditCheckStrategy[] = [
   authConnectivity,
   elfAccess,
   insightsAccess,
-  sobjectReadAccess,
   datasetReady,
   schemaAlignment,
 ]
@@ -324,7 +384,10 @@ export function buildAuditChecks(
   sfPorts: ReadonlyMap<string, SalesforcePort>
 ): readonly AuditCheck[] {
   const ctx: AuditContext = { sfPorts }
-  return STRATEGIES.flatMap(s => buildChecks(entries, s, sfPorts, ctx))
+  return [
+    ...STRATEGIES.flatMap(s => buildChecks(entries, s, sfPorts, ctx)),
+    ...buildSObjectReadChecks(entries, sfPorts),
+  ]
 }
 
 function buildChecks(

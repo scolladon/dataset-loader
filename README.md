@@ -89,6 +89,8 @@ sf dataset load
 
 > **Column alignment** — CRM Analytics ingests rows by position. `--audit` verifies your source columns match the dataset's metadata before any upload runs. SObject entries are auto-reordered at runtime; ELF/CSV source order must already match the dataset.
 
+> **Audit vs run semantics** — `--audit` is the pre-flight permission gate (object + field-level access via `WITH SECURITY_ENFORCED`); the actual load runs permissively so it won't abort mid-stream if org permissions shift. The tradeoff: if access is revoked between audit and run, the load may silently emit `null` for fields the running user can no longer read. Re-run `--audit` after any permission, sharing, or FLS change.
+
 ## Config Reference
 
 ### Common Fields
