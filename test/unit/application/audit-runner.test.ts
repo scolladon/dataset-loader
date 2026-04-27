@@ -10,12 +10,12 @@ import {
 } from '../../fixtures/application.js'
 import { makeSfPort } from '../../fixtures/sf-port.js'
 
-vi.mock('../../../src/domain/auditor.js', () => ({
+vi.mock('../../../src/domain/audit/runner.js', () => ({
   buildAuditChecks: vi.fn(() => []),
   runAudit: vi.fn().mockResolvedValue({ passed: true }),
 }))
 
-import { buildAuditChecks, runAudit } from '../../../src/domain/auditor.js'
+import { buildAuditChecks, runAudit } from '../../../src/domain/audit/runner.js'
 
 describe('AuditRunner', () => {
   // `process.exitCode` is module-global; saving/restoring around each test
