@@ -75,6 +75,13 @@ export class ProgressReporter implements ProgressPort {
         let rows = 0
         let bytes = 0
         let progressUnit: ProgressUnit | undefined
+        let totalDeclared = 0
+        // Once two readers contribute totals with different units (e.g. ELF
+        // 'files' + SObject 'rows' fanning into the same dataset slot), no
+        // single bar value can represent both. Latch the bar into counter-
+        // only mode for the rest of the run — sticky to keep the display
+        // stable in the face of non-deterministic Promise.all completion order.
+        let mixedUnits = false
         const format = withParts
           ? `  ${groupLabel} — {files} {filesUnit}, {rows} {rowsUnit} → {value} {unit}`
           : `  ${groupLabel} — {files} {filesUnit}, {rows} {rowsUnit}`
@@ -131,8 +138,20 @@ export class ProgressReporter implements ProgressPort {
             updateBar()
           },
           setTotal: (count: number, unit: ProgressUnit): void => {
-            progressUnit = unit
-            groupBar.setTotal(count)
+            if (mixedUnits) return
+            if (progressUnit === undefined) {
+              progressUnit = unit
+              totalDeclared = count
+              groupBar.setTotal(count)
+            } else if (progressUnit === unit) {
+              totalDeclared += count
+              groupBar.setTotal(totalDeclared)
+            } else {
+              mixedUnits = true
+              progressUnit = undefined
+              totalDeclared = 0
+              groupBar.setTotal(0)
+            }
             updateBar()
           },
           stop: (): void => {

@@ -556,6 +556,71 @@ describe('ProgressReporter', () => {
     )
   })
 
+  it('given two setTotal calls with same unit, when called, then totals are summed', () => {
+    // Arrange — two readers fanning into the same dataset (e.g. two ELF event
+    // types into one dataset) both contribute to the same shared tracker.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(1000, 'rows')
+    tracker.setTotal(500, 'rows')
+    tracker.addRows(750)
+
+    // Assert — bar total is summed, value tracks rows counter as before
+    expect(groupBar.setTotal).toHaveBeenNthCalledWith(1, 1000)
+    expect(groupBar.setTotal).toHaveBeenNthCalledWith(2, 1500)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      750,
+      expect.objectContaining({ rows: 750 })
+    )
+  })
+
+  it('given setTotal calls with mixed units, when called, then bar reverts to counter-only', () => {
+    // Arrange — ELF reader (files unit) + SObject reader (rows unit) sharing
+    // a dataset slot. Mixed units can't be sensibly merged on one bar.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.setTotal(1000, 'rows')
+    tracker.addFiles(2)
+    tracker.addRows(300)
+
+    // Assert — bar total reset to 0, value drops back to non-unit behaviour (0)
+    expect(groupBar.setTotal).toHaveBeenNthCalledWith(1, 5)
+    expect(groupBar.setTotal).toHaveBeenLastCalledWith(0)
+    expect(groupBar.update).toHaveBeenLastCalledWith(0, expect.any(Object))
+  })
+
+  it('given mixed-unit fallback then same-unit setTotal, when called, then bar stays in counter-only mode', () => {
+    // Arrange — once mixed-unit fallback engages, subsequent same-unit calls
+    // do not re-establish a total; the bar stays counter-only for the run.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.setTotal(1000, 'rows')
+    tracker.setTotal(2000, 'rows')
+    tracker.addRows(100)
+
+    // Assert — fallback is sticky; subsequent setTotal calls are ignored,
+    // the bar stays at 0 with counters still ticking in the payload.
+    expect(groupBar.setTotal).toHaveBeenCalledTimes(2)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      0,
+      expect.objectContaining({ rows: 100 })
+    )
+  })
+
   it('given tracker, when updateParentId is called, then group bar is not updated', () => {
     // Arrange
     const sut = new ProgressReporter()
