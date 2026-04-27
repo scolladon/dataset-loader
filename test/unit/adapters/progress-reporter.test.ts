@@ -556,6 +556,57 @@ describe('ProgressReporter', () => {
     )
   })
 
+  it('given setTotal called with count of zero, when invoked, then bar total is set to zero (the boundary is accepted)', () => {
+    // Arrange — kills the `count < 0` → `count <= 0` mutation: zero must pass.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(0, 'rows')
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(0)
+  })
+
+  it('given non-TTY stderr and withParts tracker, when starting the group bar, then payload.unit is initialized to "parts"', () => {
+    // Arrange — kills the `{ unit: 'parts' }` → `{}` and `'parts'` → `''`
+    // mutations on the initial payload.
+    setStderrIsTTY(false)
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+
+    // Act
+    phase.trackGroup('DS', true)
+
+    // Assert
+    const groupBar = lastMultiBar!.bars[1]
+    expect(groupBar.start).toHaveBeenCalledWith(
+      0,
+      0,
+      expect.objectContaining({ unit: 'parts' })
+    )
+  })
+
+  it('given non-parts tracker, when addRows is called, then bar.update payload omits the unit field', () => {
+    // Arrange — kills the `if (withParts)` → `true` mutation in updateBar:
+    // when withParts=false the `unit` field must not be added to the payload.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS', false)
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.addRows(10)
+
+    // Assert
+    const lastCall = groupBar.update.mock.calls.at(-1) as
+      | [number, Record<string, unknown>]
+      | undefined
+    expect(lastCall?.[1]).not.toHaveProperty('unit')
+  })
+
   it.each([
     ['NaN', Number.NaN],
     ['Infinity', Number.POSITIVE_INFINITY],

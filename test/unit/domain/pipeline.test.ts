@@ -1208,6 +1208,75 @@ describe('executePipeline (streaming)', () => {
     expect(skipWriter.finalize).not.toHaveBeenCalled()
   })
 
+  it('given two entries sharing reader where one writer init fails, when executing, then surviving entry is still processed (bundle filter is `some`, not `every`)', async () => {
+    // Arrange — kills the `bundles.filter(b => b.entries.some(...))` →
+    // `bundles.filter(b => b.entries.every(...))` mutation. With `every`,
+    // a partial-slot bundle would be filtered out and the surviving entry
+    // wrongly skipped.
+    const sharedReader = ReaderKey.forElf(
+      'src',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
+    const wmKey = WatermarkKey.fromEntry({
+      sourceOrg: 'src',
+      eventLog: 'Login',
+      interval: 'Daily',
+    })
+    const datasetOk = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS_OK',
+    })
+    const datasetSkip = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS_SKIP',
+    })
+    const fetcher = mockFetcher(async () => createFetchResult(['"row"']))
+    const writerOk = createMockWriter()
+    const skipWriter = createMockWriter({
+      init: vi.fn(async () => {
+        throw new SkipDatasetError('No metadata for DS_SKIP')
+      }),
+    })
+    const createWriter: CreateWriterPort = {
+      create: vi.fn(dk =>
+        dk.toString().includes('DS_OK') ? writerOk : skipWriter
+      ),
+    }
+    const entryOk = createEntryWithReader(sharedReader, {
+      index: 0,
+      label: 'ok',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: datasetOk,
+      augmentColumns: {},
+    })
+    const entrySkip = createEntryWithReader(sharedReader, {
+      index: 1,
+      label: 'skip',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: datasetSkip,
+      augmentColumns: {},
+    })
+
+    // Act
+    const sut = await executePipeline({
+      entries: [entryOk, entrySkip],
+      watermarks: WatermarkStore.empty(),
+      createWriter,
+      state: createMockState(),
+      progress: createMockProgress(),
+      logger: createMockLogger(),
+    })
+
+    // Assert — entryOk is processed; entrySkip is recorded as skipped.
+    expect(sut.entriesProcessed).toBe(1)
+    expect(sut.entriesSkipped).toBe(1)
+    expect(writerOk._writtenLines).toEqual(expect.arrayContaining(['"row"']))
+  })
+
   it('given multiple entries piping concurrently, when all finish, then all lines written and finalize called once', async () => {
     // Arrange
     const wm = Watermark.fromString('2026-03-01T00:00:00.000Z')
@@ -2471,6 +2540,31 @@ describe('layoutsEqual', () => {
     expect(sut).toBe(false)
   })
 
+  it("given a's augmentSlots are a strict subset of b's (lengths differ), when comparing, then returns false", () => {
+    // Arrange — kills the `if (a.augmentSlots.length !== b.augmentSlots.length)`
+    // branch removal: without the early return, iterating only a's slots
+    // would find every position in b and (incorrectly) return true.
+    const a = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [{ pos: 1, quoted: '"x"' }],
+    }
+    const b = {
+      targetSize: 3,
+      outputIndex: new Int32Array([0]),
+      augmentSlots: [
+        { pos: 1, quoted: '"x"' },
+        { pos: 2, quoted: '"y"' },
+      ],
+    }
+
+    // Act
+    const sut = layoutsEqual(a, b)
+
+    // Assert
+    expect(sut).toBe(false)
+  })
+
   it('given augmentSlots in different order but same pos+quoted pairs, when comparing, then returns true', () => {
     // Arrange
     const a = {
@@ -2578,6 +2672,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       ),
     }
 
+    const logger = createMockLogger()
+
     // Act
     const sut = await executePipeline({
       entries: [entry1, entry2],
@@ -2585,7 +2681,7 @@ describe('executePipeline — fan-out constraint regression', () => {
       createWriter,
       state: createMockState(),
       progress: createMockProgress(),
-      logger: createMockLogger(),
+      logger,
     })
 
     // Assert — both entries rejected, pipeline did not hang
@@ -2593,6 +2689,16 @@ describe('executePipeline — fan-out constraint regression', () => {
     expect(sut.entriesProcessed).toBe(0)
     // project() is NOT called when constraint fails (all viable sinks rejected)
     expect(projectFn).not.toHaveBeenCalled()
+    // The failure message identifies the divergent-projections constraint;
+    // killing this assertion lets stryker mutate the SkipDatasetError text.
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls
+    expect(warnCalls.flat()).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Cannot share SObject reader across sinks with divergent projections'
+        ),
+      ])
+    )
   }, 5000)
 
   it('given a projecting SObject reader with a file-target sink (no datasetFields), when executing, then project is NOT called', async () => {

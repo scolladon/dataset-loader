@@ -76,6 +76,21 @@ describe('CsvReader', () => {
       expect(result).toBe('')
     })
 
+    it('given header() called, when complete, then stream.destroy is called to release the FD', async () => {
+      // Arrange — stryker mutation makes the _readHeader finally block empty;
+      // this test catches the regression by asserting cleanup actually runs.
+      const stream = makeStream('col1,col2\nval1,val2\n')
+      const destroySpy = vi.spyOn(stream, 'destroy')
+      vi.mocked(createReadStream).mockReturnValue(stream)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      await sut.header()
+
+      // Assert
+      expect(destroySpy).toHaveBeenCalled()
+    })
+
     it('given file that yields zero lines, when calling header, then returns the fallback empty string', async () => {
       // Arrange — a truly empty stream (no '\n', no bytes). The readline
       // iterator finishes without yielding any line, exercising the L25
@@ -175,6 +190,22 @@ describe('CsvReader', () => {
         expect(result.total.bytesRead()).toBe(0)
       }
       expect(createReadStream).not.toHaveBeenCalled()
+    })
+
+    it('given fetch result iterated, when iteration completes, then stream.destroy is called to release the FD', async () => {
+      // Arrange — stryker mutation makes the finally block empty; this test
+      // catches the regression by asserting cleanup actually runs.
+      const stream = makeStream('header\nrow1\n')
+      const destroySpy = vi.spyOn(stream, 'destroy')
+      vi.mocked(createReadStream).mockReturnValue(stream)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      await collectLines(result.lines)
+
+      // Assert
+      expect(destroySpy).toHaveBeenCalled()
     })
 
     it('given fetch with bytesRead-aware stream, when iterating then calling bytesRead, then returns the stream cumulative counter', async () => {
