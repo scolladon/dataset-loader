@@ -136,8 +136,9 @@ describe('buildAuditChecks', () => {
     expect(sut.kind).toBe('fail')
   })
 
-  it('given EventLogFile check with missing sfPort, when executing, then returns false', async () => {
-    // Arrange
+  it('given EventLogFile check with missing sfPort, when executing, then returns fail with the no-connection message naming the org', async () => {
+    // Arrange — kills the `if (!sfPort)` removal AND the message StringLiteral
+    // mutations on `No SF connection for org '${org}'`.
     const entries = [
       auditEntryOf({ isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' }),
     ]
@@ -151,6 +152,9 @@ describe('buildAuditChecks', () => {
 
     // Assert
     expect(sut.kind).toBe('fail')
+    if (sut.kind === 'fail') {
+      expect(sut.message).toBe("No SF connection for org 'srcA'")
+    }
   })
 
   it('given InsightsExternalData check with missing sfPort, when executing, then returns false', async () => {
@@ -291,7 +295,9 @@ describe('runAudit', () => {
   })
 
   it('given warning check, when running audit, then logs [WARN] with the message and still reports passed', async () => {
-    // Arrange
+    // Arrange — kills the StringLiteral mutations on the log format
+    // (`: ${outcome.message}` → `""` or `"Stryker was here!"`) by asserting
+    // the EXACT formatted line including indent, label, and message.
     const checks = [
       {
         org: 'src',
@@ -307,12 +313,30 @@ describe('runAudit', () => {
     // Act
     const result = await runAudit(checks, logger)
 
-    // Assert — WARN label is emitted and overall result is still passed
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('[WARN]'))
+    // Assert — exact log format kills the message-detail mutations
     expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining('casing differs')
+      '  [WARN] src: dataset schema alignment: casing differs'
     )
     expect(result.passed).toBe(true)
+  })
+
+  it('given passing check, when running audit, then logs "  [PASS] <label>" with no message detail suffix', async () => {
+    // Arrange — kills the `outcome.kind === 'pass' ? '' : …` mutation: pass
+    // outcomes must NOT append a `:` separator / message.
+    const checks = [
+      {
+        org: 'src',
+        label: 'src: only-pass',
+        execute: async () => ({ kind: 'pass' as const }),
+      },
+    ]
+    const logger = createMockLogger()
+
+    // Act
+    await runAudit(checks, logger)
+
+    // Assert — exact format, no trailing `:` or message
+    expect(logger.info).toHaveBeenCalledWith('  [PASS] src: only-pass')
   })
 
   it('given all checks pass, when running audit, then logs "All checks passed"', async () => {
