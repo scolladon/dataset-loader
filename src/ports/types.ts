@@ -69,6 +69,10 @@ export interface FetchResult {
   readonly watermark: () => Watermark | undefined
   readonly fileCount: () => number
   readonly total?: { readonly count: number; readonly unit: ProgressUnit }
+  // Optional source-side cumulative byte counter — currently CSV only, exposed
+  // so the pipeline can drive byte-level progress from the reader's own
+  // ReadStream.bytesRead instead of re-encoding lines downstream.
+  readonly bytesRead?: () => number
 }
 
 export interface ReaderPort {

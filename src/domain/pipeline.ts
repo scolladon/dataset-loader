@@ -1,4 +1,4 @@
-import { PassThrough, Readable, Writable } from 'node:stream'
+import { PassThrough, Readable, Transform, Writable } from 'node:stream'
 import { finished, pipeline } from 'node:stream/promises'
 import { buildAugmentSuffix } from '../adapters/pipeline/augment-transform.js'
 import { FanInStream } from '../adapters/pipeline/fan-in-stream.js'
@@ -382,27 +382,14 @@ async function processBundle(
     }
   }
 
-  // For byte-unit progress (CSV) the lines themselves carry the only signal —
-  // approximate consumed bytes by summing Buffer.byteLength of each batch line
-  // (+1 per line for the stripped newline). Cheap and good enough; exact
-  // ReadStream.bytesRead is awkward to expose across the sink boundary.
-  const linesIterable =
-    result.total?.unit === 'bytes'
-      ? wrapWithByteProgress(result.lines, sinks)
-      : result.lines
-  const resultForPipe: FetchResult = { ...result, lines: linesIterable }
-
   if (sinks.length === 1) {
-    await pipeSingleEntry(sinks[0], resultForPipe, input, phase)
+    await pipeSingleEntry(sinks[0], result, input, phase)
   } else {
-    await pipeFanOutEntries(sinks, resultForPipe, input, phase)
+    await pipeFanOutEntries(sinks, result, input, phase)
   }
 }
 
-async function* wrapWithByteProgress(
-  source: AsyncIterable<string[]>,
-  sinks: readonly Sink[]
-): AsyncGenerator<string[]> {
+function dedupTrackers(sinks: readonly Sink[]): GroupTracker[] {
   const seen = new Set<GroupTracker>()
   const trackers: GroupTracker[] = []
   for (const { slot } of sinks) {
@@ -410,22 +397,43 @@ async function* wrapWithByteProgress(
     seen.add(slot.tracker)
     trackers.push(slot.tracker)
   }
-  for await (const batch of source) {
-    let bytes = 0
-    for (const line of batch) bytes += Buffer.byteLength(line) + 1
-    for (const tracker of trackers) tracker.addBytes(bytes)
-    yield batch
-  }
+  return trackers
+}
+
+// Native objectMode Transform that, on each batch, reads the source's
+// cumulative bytes counter and reports the delta to all dedup'd trackers.
+// Mirrors the fan-out-transform pattern; composes cleanly with `pipeline()`
+// for backpressure and error propagation, avoiding the async-generator
+// round-trip and the per-line UTF-8 re-encoding the prior wrap incurred.
+function createByteProgressTransform(
+  readBytes: () => number,
+  trackers: readonly GroupTracker[]
+): Transform {
+  let last = 0
+  return new Transform({
+    objectMode: true,
+    transform(batch: string[], _enc, cb) {
+      const now = readBytes()
+      const delta = now - last
+      last = now
+      if (delta > 0) for (const t of trackers) t.addBytes(delta)
+      cb(null, batch)
+    },
+  })
 }
 
 function pipelineWithEntryTracking(
   source: Readable,
+  middleware: Transform | undefined,
   { entry, slot, sink }: Sink,
   result: FetchResult,
   input: PipelineInput,
   phase: Pick<PhaseProgress, 'tick'>
 ): Promise<void> {
-  return pipeline(source, sink)
+  const completed = middleware
+    ? pipeline(source, middleware, sink)
+    : pipeline(source, sink)
+  return completed
     .then((): void => {
       slot.entryResults.push(
         resolveEntryResult(
@@ -448,8 +456,13 @@ async function pipeSingleEntry(
   input: PipelineInput,
   phase: Pick<PhaseProgress, 'tick'>
 ): Promise<void> {
+  const source = Readable.from(result.lines)
+  const byteProgress = result.bytesRead
+    ? createByteProgressTransform(result.bytesRead, dedupTrackers([sink]))
+    : undefined
   await pipelineWithEntryTracking(
-    Readable.from(result.lines),
+    source,
+    byteProgress,
     sink,
     result,
     input,
@@ -470,13 +483,27 @@ async function pipeFanOutEntries(
       `Entry '${sinks[idx].entry.label}' fan-out write failed: ${formatErrorMessage(err)}`
     )
   })
+  const source = Readable.from(result.lines)
+  const byteProgress = result.bytesRead
+    ? createByteProgressTransform(result.bytesRead, dedupTrackers(sinks))
+    : undefined
+  const sourcePipeline = byteProgress
+    ? pipeline(source, byteProgress, fanOut)
+    : pipeline(source, fanOut)
   await Promise.all([
-    pipeline(Readable.from(result.lines), fanOut).catch((err: Error) => {
+    sourcePipeline.catch((err: Error) => {
       input.logger.warn(`Fan-out source failed: ${formatErrorMessage(err)}`)
       channels.forEach(ch => ch.destroy(err))
     }),
     ...sinks.map((sink, i) =>
-      pipelineWithEntryTracking(channels[i], sink, result, input, phase)
+      pipelineWithEntryTracking(
+        channels[i],
+        undefined,
+        sink,
+        result,
+        input,
+        phase
+      )
     ),
   ])
 }

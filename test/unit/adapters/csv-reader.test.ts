@@ -158,6 +158,50 @@ describe('CsvReader', () => {
       expect(stat).toHaveBeenCalledWith('./data/test.csv')
     })
 
+    it('given fetch not yet iterated, when calling bytesRead, then returns zero', async () => {
+      // Arrange — the ReadStream is created lazily inside the generator so an
+      // unconsumed FetchResult does not leak a file handle. bytesRead falls
+      // back to 0 until the first iteration starts.
+      vi.mocked(createReadStream).mockReturnValue(makeStream('header\nrow\n'))
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+
+      // Assert — never iterated `result.lines`, no underlying stream yet
+      expect(result.bytesRead?.()).toBe(0)
+      expect(createReadStream).not.toHaveBeenCalled()
+    })
+
+    it('given fetch with bytesRead-aware stream, when iterating then calling bytesRead, then returns the stream cumulative counter', async () => {
+      // Arrange — patch the mock stream with a `bytesRead` getter that mimics
+      // Node's fs.ReadStream.bytesRead (incremented as chunks are consumed).
+      let bytesConsumed = 0
+      const stream = Readable.from(
+        (async function* () {
+          for (const line of ['header', 'row1', 'row2']) {
+            const chunk = Buffer.from(`${line}\n`)
+            bytesConsumed += chunk.length
+            yield chunk
+          }
+        })()
+      ) as unknown as ReadStream
+      Object.defineProperty(stream, 'bytesRead', {
+        get: () => bytesConsumed,
+      })
+      vi.mocked(createReadStream).mockReturnValue(stream)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      await collectLines(result.lines)
+
+      // Assert — after full iteration the counter equals the total bytes
+      // emitted by the source (matches stat.size for real files).
+      expect(result.bytesRead?.()).toBe(bytesConsumed)
+      expect(bytesConsumed).toBe(7 + 5 + 5) // 'header\n' + 'row1\n' + 'row2\n'
+    })
+
     it('given any file, when fetching, then watermark is a valid ISO 8601 timestamp', async () => {
       // Arrange
       vi.mocked(createReadStream).mockReturnValue(makeStream('header\nrow1\n'))

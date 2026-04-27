@@ -860,7 +860,7 @@ describe('executePipeline (streaming)', () => {
     expect(tracker.setTotal).toHaveBeenCalledWith(5, 'files')
   })
 
-  it('given two entries sharing reader and dataset with bytes total, when streaming, then addBytes is called once per batch on the shared tracker', async () => {
+  it('given two entries sharing reader and dataset with bytesRead, when streaming, then addBytes is called once per batch on the shared tracker', async () => {
     // Arrange
     const readerKey = ReaderKey.forElf(
       'prod',
@@ -879,11 +879,12 @@ describe('executePipeline (streaming)', () => {
     })
     const fetcher = mockFetcher(async () => ({
       lines: (async function* () {
-        yield ['ab'] // 2 + 1 newline = 3
+        yield ['ab']
       })(),
       watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
       fileCount: () => 1,
       total: { count: 3, unit: 'bytes' as const },
+      bytesRead: vi.fn().mockReturnValueOnce(3),
     }))
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
@@ -919,16 +920,20 @@ describe('executePipeline (streaming)', () => {
     expect(tracker.addBytes).toHaveBeenCalledWith(3)
   })
 
-  it('given fetch result with bytes total, when streaming batches, then addBytes is called per batch with byteLength sum + newline', async () => {
-    // Arrange
+  it('given fetch result with bytesRead, when streaming batches, then addBytes is called per batch with bytesRead deltas', async () => {
+    // Arrange — bytesRead returns the source's cumulative byte counter; the
+    // Transform reports the delta since the last batch. Sequential mocked
+    // returns guarantee deterministic delta arithmetic regardless of how
+    // Readable.from buffers the source generator's output.
     const fetcher = mockFetcher(async () => ({
       lines: (async function* () {
-        yield ['ab', 'cd'] // bytes = 2 + 1 + 2 + 1 = 6
-        yield ['ef'] // bytes = 2 + 1 = 3
+        yield ['ab', 'cd']
+        yield ['ef']
       })(),
       watermark: () => undefined,
       fileCount: () => 1,
       total: { count: 9, unit: 'bytes' as const },
+      bytesRead: vi.fn().mockReturnValueOnce(6).mockReturnValueOnce(9),
     }))
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
@@ -948,6 +953,67 @@ describe('executePipeline (streaming)', () => {
     expect(tracker.addBytes).toHaveBeenCalledTimes(2)
     expect(tracker.addBytes).toHaveBeenNthCalledWith(1, 6)
     expect(tracker.addBytes).toHaveBeenNthCalledWith(2, 3)
+  })
+
+  it('given fetch result without bytesRead, when streaming batches, then addBytes is never called', async () => {
+    // Arrange — readers that don't expose a source-side byte counter (ELF,
+    // SObject) should not get the byte-progress Transform inserted at all.
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['ab', 'cd']
+        yield ['ef']
+      })(),
+      watermark: () => undefined,
+      fileCount: () => 1,
+      total: { count: 100, unit: 'rows' as const },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.addBytes).not.toHaveBeenCalled()
+  })
+
+  it('given bytesRead returning a non-monotonic delta, when streaming batches, then non-positive deltas are not reported', async () => {
+    // Arrange — defensively guard against a mis-behaving source that returns
+    // a stale or rewound counter; the Transform must not push negative or
+    // zero deltas into the tracker.
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['ab']
+        yield ['cd']
+      })(),
+      watermark: () => undefined,
+      fileCount: () => 1,
+      total: { count: 5, unit: 'bytes' as const },
+      bytesRead: vi.fn().mockReturnValueOnce(5).mockReturnValueOnce(5),
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — first batch reports 5 (delta from 0), second batch is no-op
+    expect(tracker.addBytes).toHaveBeenCalledTimes(1)
+    expect(tracker.addBytes).toHaveBeenCalledWith(5)
   })
 
   it('given progress listener wired, when writer invokes onSinkReady during init, then updates tracker parentId', async () => {
