@@ -2,15 +2,15 @@ import { PassThrough, type Writable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import { DateBounds } from '../../../src/domain/date-bounds.js'
+import { executePipeline } from '../../../src/domain/pipeline.js'
 import {
   createHeaderProvider,
   DatasetGroup,
-  executePipeline,
   groupByReader,
-  layoutsEqual,
   type PipelineEntry,
   type ReaderBundle,
-} from '../../../src/domain/pipeline.js'
+} from '../../../src/domain/pipeline-groups.js'
+import { layoutsEqual } from '../../../src/domain/pipeline-layout.js'
 import { ReaderKey } from '../../../src/domain/reader-key.js'
 import { Watermark } from '../../../src/domain/watermark.js'
 import { WatermarkKey } from '../../../src/domain/watermark-key.js'
@@ -883,8 +883,11 @@ describe('executePipeline (streaming)', () => {
       })(),
       watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
       fileCount: () => 1,
-      total: { count: 3, unit: 'bytes' as const },
-      bytesRead: vi.fn().mockReturnValueOnce(3),
+      total: {
+        unit: 'bytes' as const,
+        count: 3,
+        bytesRead: vi.fn().mockReturnValueOnce(3),
+      },
     }))
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
@@ -932,8 +935,11 @@ describe('executePipeline (streaming)', () => {
       })(),
       watermark: () => undefined,
       fileCount: () => 1,
-      total: { count: 9, unit: 'bytes' as const },
-      bytesRead: vi.fn().mockReturnValueOnce(6).mockReturnValueOnce(9),
+      total: {
+        unit: 'bytes' as const,
+        count: 9,
+        bytesRead: vi.fn().mockReturnValueOnce(6).mockReturnValueOnce(9),
+      },
     }))
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
@@ -995,8 +1001,11 @@ describe('executePipeline (streaming)', () => {
       })(),
       watermark: () => undefined,
       fileCount: () => 1,
-      total: { count: 5, unit: 'bytes' as const },
-      bytesRead: vi.fn().mockReturnValueOnce(5).mockReturnValueOnce(5),
+      total: {
+        unit: 'bytes' as const,
+        count: 5,
+        bytesRead: vi.fn().mockReturnValueOnce(5).mockReturnValueOnce(5),
+      },
     }))
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
@@ -1014,6 +1023,88 @@ describe('executePipeline (streaming)', () => {
     // Assert — first batch reports 5 (delta from 0), second batch is no-op
     expect(tracker.addBytes).toHaveBeenCalledTimes(1)
     expect(tracker.addBytes).toHaveBeenCalledWith(5)
+  })
+
+  it('given two entries sharing reader but targeting distinct datasets with bytesRead, when streaming, then every shared tracker receives the same delta exactly once per batch', async () => {
+    // Arrange — fan-out path: same reader fans out to two writer slots with
+    // distinct trackers. The byte-progress Transform must announce the delta
+    // to both trackers, but only once per batch (no duplication via per-sink
+    // dedup loops).
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
+    const wmKey = WatermarkKey.fromEntry({
+      sourceOrg: 'prod',
+      eventLog: 'Login',
+      interval: 'Daily',
+    })
+    const datasetA = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DSA',
+    })
+    const datasetB = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DSB',
+    })
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['ab']
+      })(),
+      watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
+      fileCount: () => 1,
+      total: {
+        unit: 'bytes' as const,
+        count: 7,
+        bytesRead: vi.fn().mockReturnValueOnce(7),
+      },
+    }))
+    const trackerA = createMockGroupTracker()
+    const trackerB = createMockGroupTracker()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick: vi.fn(),
+        trackGroup: vi
+          .fn()
+          .mockReturnValueOnce(trackerA)
+          .mockReturnValueOnce(trackerB),
+        stop: vi.fn(),
+      })),
+    }
+    const entryA = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'A',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: datasetA,
+      augmentColumns: {},
+    })
+    const entryB = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'B',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey: datasetB,
+      augmentColumns: {},
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entryA, entryB],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — each tracker received exactly one addBytes call with the full delta
+    expect(trackerA.addBytes).toHaveBeenCalledTimes(1)
+    expect(trackerA.addBytes).toHaveBeenCalledWith(7)
+    expect(trackerB.addBytes).toHaveBeenCalledTimes(1)
+    expect(trackerB.addBytes).toHaveBeenCalledWith(7)
   })
 
   it('given progress listener wired, when writer invokes onSinkReady during init, then updates tracker parentId', async () => {

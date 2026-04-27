@@ -99,11 +99,20 @@ export class ProgressReporter implements ProgressPort {
           groupBar.start(0, 0, payload)
         }
 
+        // Switch is exhaustive over `ProgressUnit | undefined` — adding a new
+        // unit to the type forces a compile error here, preventing silent
+        // fall-through to the parts/0 fallback.
         const progressValue = (): number => {
-          if (progressUnit === 'rows') return rows
-          if (progressUnit === 'files') return files
-          if (progressUnit === 'bytes') return bytes
-          return withParts ? parts : 0
+          switch (progressUnit) {
+            case 'rows':
+              return rows
+            case 'files':
+              return files
+            case 'bytes':
+              return bytes
+            case undefined:
+              return withParts ? parts : 0
+          }
         }
 
         const updateBar = (): void => {
@@ -138,6 +147,15 @@ export class ProgressReporter implements ProgressPort {
             updateBar()
           },
           setTotal: (count: number, unit: ProgressUnit): void => {
+            // Defend against malformed external counts (e.g. a corrupted
+            // Salesforce response): only accept finite, non-negative integers.
+            if (
+              !Number.isFinite(count) ||
+              !Number.isInteger(count) ||
+              count < 0
+            ) {
+              return
+            }
             if (mixedUnits) return
             if (progressUnit === undefined) {
               progressUnit = unit

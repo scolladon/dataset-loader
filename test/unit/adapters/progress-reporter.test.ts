@@ -556,6 +556,25 @@ describe('ProgressReporter', () => {
     )
   })
 
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['negative', -1],
+    ['fractional', 1.5],
+  ])('given setTotal called with %s, when invoked, then bar.setTotal is not called', (_label, badCount) => {
+    // Arrange — defends against malformed Salesforce responses or test mocks.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(badCount, 'rows')
+
+    // Assert
+    expect(groupBar.setTotal).not.toHaveBeenCalled()
+  })
+
   it('given two setTotal calls with same unit, when called, then totals are summed', () => {
     // Arrange — two readers fanning into the same dataset (e.g. two ELF event
     // types into one dataset) both contribute to the same shared tracker.

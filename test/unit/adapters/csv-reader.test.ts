@@ -153,7 +153,8 @@ describe('CsvReader', () => {
       await collectLines(result.lines)
 
       // Assert
-      expect(result.total).toEqual({ count: 12345, unit: 'bytes' })
+      expect(result.total?.unit).toBe('bytes')
+      expect(result.total?.count).toBe(12345)
       expect(stat).toHaveBeenCalledTimes(1)
       expect(stat).toHaveBeenCalledWith('./data/test.csv')
     })
@@ -169,7 +170,10 @@ describe('CsvReader', () => {
       const result = await sut.fetch()
 
       // Assert — never iterated `result.lines`, no underlying stream yet
-      expect(result.bytesRead?.()).toBe(0)
+      expect(result.total?.unit).toBe('bytes')
+      if (result.total?.unit === 'bytes') {
+        expect(result.total.bytesRead()).toBe(0)
+      }
       expect(createReadStream).not.toHaveBeenCalled()
     })
 
@@ -198,7 +202,10 @@ describe('CsvReader', () => {
 
       // Assert — after full iteration the counter equals the total bytes
       // emitted by the source (matches stat.size for real files).
-      expect(result.bytesRead?.()).toBe(bytesConsumed)
+      expect(result.total?.unit).toBe('bytes')
+      if (result.total?.unit === 'bytes') {
+        expect(result.total.bytesRead()).toBe(bytesConsumed)
+      }
       expect(bytesConsumed).toBe(7 + 5 + 5) // 'header\n' + 'row1\n' + 'row2\n'
     })
 

@@ -33,12 +33,13 @@ export class CsvReader implements ReaderPort {
   async fetch(_watermark?: Watermark): Promise<FetchResult> {
     const filePath = this.filePath
     const consumedAt = Watermark.fromString(new Date().toISOString())
-    // Stat once at fetch start — gives the byte total without re-reading.
+    // stat is intentionally eager: the byte total is part of the FetchResult
+    // contract regardless of whether `lines` is iterated, and `stat` is cheap
+    // (a single fstat). The actual file handle (createReadStream) is opened
+    // lazily inside the generator so an unconsumed FetchResult never leaks.
     const fileStat = await stat(filePath)
-    // Hold the ReadStream reference in outer scope so the pipeline can read
-    // its live `bytesRead` counter for progress without re-encoding lines.
-    // Created lazily inside the generator on first iteration so an unconsumed
-    // FetchResult does not leak an open file handle.
+    // Hold the ReadStream reference in outer scope so byte progress can read
+    // its live `bytesRead` counter without re-encoding lines.
     let stream: ReadStream | undefined
     return {
       lines: (async function* (): AsyncGenerator<string[]> {
@@ -64,8 +65,11 @@ export class CsvReader implements ReaderPort {
       })(),
       watermark: () => consumedAt,
       fileCount: () => 1,
-      total: { count: fileStat.size, unit: 'bytes' },
-      bytesRead: () => stream?.bytesRead ?? 0,
+      total: {
+        unit: 'bytes',
+        count: fileStat.size,
+        bytesRead: () => stream?.bytesRead ?? 0,
+      },
     }
   }
 }

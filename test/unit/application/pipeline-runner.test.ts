@@ -17,7 +17,7 @@ import {
   type PipelineRunnerDeps,
 } from '../../../src/application/pipeline-runner.js'
 import { DateBounds } from '../../../src/domain/date-bounds.js'
-import type { PipelineEntry } from '../../../src/domain/pipeline.js'
+import type { PipelineEntry } from '../../../src/domain/pipeline-groups.js'
 import { WatermarkStore } from '../../../src/domain/watermark-store.js'
 import { loadDatasetLoadMessages } from '../../../src/ports/messages.js'
 import {
