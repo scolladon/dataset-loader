@@ -62,10 +62,26 @@ export type Operation = 'Append' | 'Overwrite'
 export type BatchMiddleware = (batch: string[]) => string[]
 export type ReaderKind = 'sobject' | 'elf' | 'csv'
 
+export type ProgressUnit = 'rows' | 'files' | 'bytes'
+
+// Discriminated by `unit`. `bytes` requires a source-side cumulative byte
+// counter so the pipeline can drive progress without re-encoding payload;
+// other units carry only `count` because their progress is observed at the
+// batch boundary by the existing tracker counters.
+type ProgressTotal =
+  | { readonly unit: 'rows'; readonly count: number }
+  | { readonly unit: 'files'; readonly count: number }
+  | {
+      readonly unit: 'bytes'
+      readonly count: number
+      readonly bytesRead: () => number
+    }
+
 export interface FetchResult {
   readonly lines: AsyncIterable<string[]>
   readonly watermark: () => Watermark | undefined
   readonly fileCount: () => number
+  readonly total?: ProgressTotal
 }
 
 export interface ReaderPort {
@@ -167,6 +183,8 @@ export interface GroupTracker {
   incrementParts(): void
   addFiles(count: number): void
   addRows(count: number): void
+  addBytes(count: number): void
+  setTotal(count: number, unit: ProgressUnit): void
   stop(): void
 }
 

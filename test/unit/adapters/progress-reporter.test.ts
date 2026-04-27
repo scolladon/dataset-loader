@@ -6,6 +6,7 @@ type MockBar = {
   increment: ReturnType<typeof vi.fn>
   update: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
+  setTotal: ReturnType<typeof vi.fn>
 }
 
 type MockMultiBar = {
@@ -41,7 +42,12 @@ vi.mock('cli-progress', () => ({
       const bars: MockBar[] = []
       lastMultiBar = {
         create: vi.fn(() => {
-          const bar = { increment: vi.fn(), update: vi.fn(), start: vi.fn() }
+          const bar = {
+            increment: vi.fn(),
+            update: vi.fn(),
+            start: vi.fn(),
+            setTotal: vi.fn(),
+          }
           bars.push(bar)
           return bar
         }),
@@ -100,6 +106,8 @@ describe('ProgressReporter', () => {
     expect(() => tracker.incrementParts()).not.toThrow()
     expect(() => tracker.addFiles(2)).not.toThrow()
     expect(() => tracker.addRows(100)).not.toThrow()
+    expect(() => tracker.addBytes(2048)).not.toThrow()
+    expect(() => tracker.setTotal(10, 'rows')).not.toThrow()
     expect(() => tracker.stop()).not.toThrow()
   })
 
@@ -453,6 +461,231 @@ describe('ProgressReporter', () => {
 
     // Assert — withParts=true but parts=0, so first arg is 0
     expect(groupBar.update).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ rows: 100 })
+    )
+  })
+
+  it('given tracker without total, when addBytes is called, then bar value stays 0 (default)', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.addBytes(2048)
+
+    // Assert — without setTotal, bytes don't drive the bar value (still 0, no parts)
+    expect(groupBar.update).toHaveBeenLastCalledWith(0, expect.any(Object))
+  })
+
+  it('given setTotal called with rows unit, when addRows is called, then bar value reflects rows count', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(1000, 'rows')
+    tracker.addRows(250)
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(1000)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      250,
+      expect.objectContaining({ rows: 250 })
+    )
+  })
+
+  it('given setTotal called with files unit, when addFiles is called, then bar value reflects files count', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.addFiles(2)
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(5)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      2,
+      expect.objectContaining({ files: 2 })
+    )
+  })
+
+  it('given setTotal called with bytes unit, when addBytes is called, then bar value reflects accumulated bytes', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(10_000, 'bytes')
+    tracker.addBytes(1500)
+    tracker.addBytes(2500)
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(10_000)
+    expect(groupBar.update).toHaveBeenLastCalledWith(4000, expect.any(Object))
+  })
+
+  it('given setTotal with parts tracker, when incrementParts is called, then parts still wins via withParts default', () => {
+    // Arrange — withParts=true keeps parts as the visual driver until setTotal
+    // overrides; setTotal('rows') redirects the value to rows (kills mutation
+    // where parts would always win).
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS', true)
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.incrementParts()
+    tracker.setTotal(100, 'rows')
+    tracker.addRows(40)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      40,
+      expect.objectContaining({ rows: 40 })
+    )
+  })
+
+  it('given setTotal called with count of zero, when invoked, then bar total is set to zero (the boundary is accepted)', () => {
+    // Arrange — kills the `count < 0` → `count <= 0` mutation: zero must pass.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(0, 'rows')
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(0)
+  })
+
+  it('given non-TTY stderr and withParts tracker, when starting the group bar, then payload.unit is initialized to "parts"', () => {
+    // Arrange — kills the `{ unit: 'parts' }` → `{}` and `'parts'` → `''`
+    // mutations on the initial payload.
+    setStderrIsTTY(false)
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+
+    // Act
+    phase.trackGroup('DS', true)
+
+    // Assert
+    const groupBar = lastMultiBar!.bars[1]
+    expect(groupBar.start).toHaveBeenCalledWith(
+      0,
+      0,
+      expect.objectContaining({ unit: 'parts' })
+    )
+  })
+
+  it('given non-parts tracker, when addRows is called, then bar.update payload omits the unit field', () => {
+    // Arrange — kills the `if (withParts)` → `true` mutation in updateBar:
+    // when withParts=false the `unit` field must not be added to the payload.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS', false)
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.addRows(10)
+
+    // Assert
+    const lastCall = groupBar.update.mock.calls.at(-1) as
+      | [number, Record<string, unknown>]
+      | undefined
+    expect(lastCall?.[1]).not.toHaveProperty('unit')
+  })
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['negative', -1],
+    ['fractional', 1.5],
+  ])('given setTotal called with %s, when invoked, then bar.setTotal is not called', (_label, badCount) => {
+    // Arrange — defends against malformed Salesforce responses or test mocks.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(badCount, 'rows')
+
+    // Assert
+    expect(groupBar.setTotal).not.toHaveBeenCalled()
+  })
+
+  it('given two setTotal calls with same unit, when called, then totals are summed', () => {
+    // Arrange — two readers fanning into the same dataset (e.g. two ELF event
+    // types into one dataset) both contribute to the same shared tracker.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(1000, 'rows')
+    tracker.setTotal(500, 'rows')
+    tracker.addRows(750)
+
+    // Assert — bar total is summed, value tracks rows counter as before
+    expect(groupBar.setTotal).toHaveBeenNthCalledWith(1, 1000)
+    expect(groupBar.setTotal).toHaveBeenNthCalledWith(2, 1500)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      750,
+      expect.objectContaining({ rows: 750 })
+    )
+  })
+
+  it('given setTotal calls with mixed units, when called, then bar reverts to counter-only', () => {
+    // Arrange — ELF reader (files unit) + SObject reader (rows unit) sharing
+    // a dataset slot. Mixed units can't be sensibly merged on one bar.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.setTotal(1000, 'rows')
+    tracker.addFiles(2)
+    tracker.addRows(300)
+
+    // Assert — bar total reset to 0, value drops back to non-unit behaviour (0)
+    expect(groupBar.setTotal).toHaveBeenNthCalledWith(1, 5)
+    expect(groupBar.setTotal).toHaveBeenLastCalledWith(0)
+    expect(groupBar.update).toHaveBeenLastCalledWith(0, expect.any(Object))
+  })
+
+  it('given mixed-unit fallback then same-unit setTotal, when called, then bar stays in counter-only mode', () => {
+    // Arrange — once mixed-unit fallback engages, subsequent same-unit calls
+    // do not re-establish a total; the bar stays counter-only for the run.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.setTotal(1000, 'rows')
+    tracker.setTotal(2000, 'rows')
+    tracker.addRows(100)
+
+    // Assert — fallback is sticky; subsequent setTotal calls are ignored,
+    // the bar stays at 0 with counters still ticking in the payload.
+    expect(groupBar.setTotal).toHaveBeenCalledTimes(2)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
       0,
       expect.objectContaining({ rows: 100 })
     )

@@ -3,6 +3,7 @@ import {
   type GroupTracker,
   type PhaseProgress,
   type ProgressPort,
+  type ProgressUnit,
 } from '../ports/types.js'
 
 function partUnit(count: number): string {
@@ -20,6 +21,12 @@ const NOOP_GROUP_TRACKER: GroupTracker = {
     /* noop */
   },
   addRows: () => {
+    /* noop */
+  },
+  addBytes: () => {
+    /* noop */
+  },
+  setTotal: () => {
     /* noop */
   },
   stop: () => {
@@ -66,6 +73,15 @@ export class ProgressReporter implements ProgressPort {
         let parts = 0
         let files = 0
         let rows = 0
+        let bytes = 0
+        let progressUnit: ProgressUnit | undefined
+        let totalDeclared = 0
+        // Once two readers contribute totals with different units (e.g. ELF
+        // 'files' + SObject 'rows' fanning into the same dataset slot), no
+        // single bar value can represent both. Latch the bar into counter-
+        // only mode for the rest of the run — sticky to keep the display
+        // stable in the face of non-deterministic Promise.all completion order.
+        let mixedUnits = false
         const format = withParts
           ? `  ${groupLabel} — {files} {filesUnit}, {rows} {rowsUnit} → {value} {unit}`
           : `  ${groupLabel} — {files} {filesUnit}, {rows} {rowsUnit}`
@@ -83,13 +99,29 @@ export class ProgressReporter implements ProgressPort {
           groupBar.start(0, 0, payload)
         }
 
+        // Switch is exhaustive over `ProgressUnit | undefined` — adding a new
+        // unit to the type forces a compile error here, preventing silent
+        // fall-through to the parts/0 fallback.
+        const progressValue = (): number => {
+          switch (progressUnit) {
+            case 'rows':
+              return rows
+            case 'files':
+              return files
+            case 'bytes':
+              return bytes
+            case undefined:
+              return withParts ? parts : 0
+          }
+        }
+
         const updateBar = (): void => {
           payload.files = files
           payload.filesUnit = files === 1 ? 'file' : 'files'
           payload.rows = rows
           payload.rowsUnit = rows === 1 ? 'row' : 'rows'
           if (withParts) payload.unit = partUnit(parts)
-          groupBar.update(withParts ? parts : 0, payload)
+          groupBar.update(progressValue(), payload)
         }
 
         return {
@@ -108,6 +140,36 @@ export class ProgressReporter implements ProgressPort {
           },
           addRows: (count: number): void => {
             rows += count
+            updateBar()
+          },
+          addBytes: (count: number): void => {
+            bytes += count
+            updateBar()
+          },
+          setTotal: (count: number, unit: ProgressUnit): void => {
+            // Defend against malformed external counts (e.g. a corrupted
+            // Salesforce response): only accept finite, non-negative integers.
+            if (
+              !Number.isFinite(count) ||
+              !Number.isInteger(count) ||
+              count < 0
+            ) {
+              return
+            }
+            if (mixedUnits) return
+            if (progressUnit === undefined) {
+              progressUnit = unit
+              totalDeclared = count
+              groupBar.setTotal(count)
+            } else if (progressUnit === unit) {
+              totalDeclared += count
+              groupBar.setTotal(totalDeclared)
+            } else {
+              mixedUnits = true
+              progressUnit = undefined
+              totalDeclared = 0
+              groupBar.setTotal(0)
+            }
             updateBar()
           },
           stop: (): void => {

@@ -58,6 +58,31 @@ describe('ElfReader', () => {
     expect(lines).toHaveLength(0)
     expect(result.fileCount()).toBe(0)
     expect(result.watermark()).toBeUndefined()
+    expect(result.total).toEqual({ count: 0, unit: 'files' })
+  })
+
+  it('given firstPage with totalSize, when fetching, then total reports file count', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 7,
+        done: true,
+        records: [
+          { Id: '0AT1', LogDate: '2026-03-01T00:00:00.000Z', LogFile: '' },
+        ],
+      }),
+      getBlobStream: vi
+        .fn()
+        .mockResolvedValue(Readable.from([Buffer.from('hdr\ndata\n')])),
+    })
+
+    // Act
+    const sut = new ElfReader(sfPort, 'Login', 'Daily')
+    const result = await sut.fetch()
+    await collectLines(result.lines)
+
+    // Assert
+    expect(result.total).toEqual({ count: 7, unit: 'files' })
   })
 
   it('given watermark, when fetching, then includes watermark in SOQL', async () => {

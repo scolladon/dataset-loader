@@ -73,6 +73,51 @@ describe('SObjectReader', () => {
     expect(result.fileCount()).toBe(0)
   })
 
+  it('given firstPage with totalSize, when fetching, then total reports row count', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 42,
+        done: true,
+        records: [{ Id: '001', LastModifiedDate: '2026-01-01T00:00:00.000Z' }],
+      }),
+    })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'LastModifiedDate'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
+    })
+    const result = await sut.fetch()
+    await collectLines(result.lines)
+
+    // Assert
+    expect(result.total).toEqual({ count: 42, unit: 'rows' })
+  })
+
+  it('given empty result with zero totalSize, when fetching, then total reports zero rows', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      query: vi
+        .fn()
+        .mockResolvedValue({ totalSize: 0, done: true, records: [] }),
+    })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
+    })
+    const result = await sut.fetch()
+
+    // Assert
+    expect(result.total).toEqual({ count: 0, unit: 'rows' })
+  })
+
   it('given paginated results, when fetching, then yields lines from all pages', async () => {
     // Arrange
     const sfPort = makeSfPort({

@@ -1,4 +1,5 @@
-import { createReadStream } from 'node:fs'
+import { createReadStream, type ReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { Watermark } from '../../domain/watermark.js'
 import { type FetchResult, type ReaderPort } from '../../ports/types.js'
@@ -32,9 +33,17 @@ export class CsvReader implements ReaderPort {
   async fetch(_watermark?: Watermark): Promise<FetchResult> {
     const filePath = this.filePath
     const consumedAt = Watermark.fromString(new Date().toISOString())
+    // stat is intentionally eager: the byte total is part of the FetchResult
+    // contract regardless of whether `lines` is iterated, and `stat` is cheap
+    // (a single fstat). The actual file handle (createReadStream) is opened
+    // lazily inside the generator so an unconsumed FetchResult never leaks.
+    const fileStat = await stat(filePath)
+    // Hold the ReadStream reference in outer scope so byte progress can read
+    // its live `bytesRead` counter without re-encoding lines.
+    let stream: ReadStream | undefined
     return {
       lines: (async function* (): AsyncGenerator<string[]> {
-        const stream = createReadStream(filePath)
+        stream = createReadStream(filePath)
         const rl = createInterface({ input: stream, crlfDelay: Infinity })
         try {
           const iter = rl[Symbol.asyncIterator]()
@@ -56,6 +65,11 @@ export class CsvReader implements ReaderPort {
       })(),
       watermark: () => consumedAt,
       fileCount: () => 1,
+      total: {
+        unit: 'bytes',
+        count: fileStat.size,
+        bytesRead: () => stream?.bytesRead ?? 0,
+      },
     }
   }
 }

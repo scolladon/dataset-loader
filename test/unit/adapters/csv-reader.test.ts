@@ -9,7 +9,12 @@ vi.mock('node:fs', () => ({
   createReadStream: vi.fn(),
 }))
 
+vi.mock('node:fs/promises', () => ({
+  stat: vi.fn(),
+}))
+
 import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 
 async function* asyncChunks(content: string): AsyncGenerator<Buffer> {
   for (const line of content.split('\n')) {
@@ -24,6 +29,9 @@ function makeStream(content: string): ReadStream {
 describe('CsvReader', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    vi.mocked(stat).mockResolvedValue({
+      size: 0,
+    } as Awaited<ReturnType<typeof stat>>)
   })
 
   describe('header()', () => {
@@ -66,6 +74,21 @@ describe('CsvReader', () => {
 
       // Assert
       expect(result).toBe('')
+    })
+
+    it('given header() called, when complete, then stream.destroy is called to release the FD', async () => {
+      // Arrange — stryker mutation makes the _readHeader finally block empty;
+      // this test catches the regression by asserting cleanup actually runs.
+      const stream = makeStream('col1,col2\nval1,val2\n')
+      const destroySpy = vi.spyOn(stream, 'destroy')
+      vi.mocked(createReadStream).mockReturnValue(stream)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      await sut.header()
+
+      // Assert
+      expect(destroySpy).toHaveBeenCalled()
     })
 
     it('given file that yields zero lines, when calling header, then returns the fallback empty string', async () => {
@@ -130,6 +153,91 @@ describe('CsvReader', () => {
 
       // Assert
       expect(result.fileCount()).toBe(1)
+    })
+
+    it('given file with size, when fetching, then total reports stat.size in bytes', async () => {
+      // Arrange
+      vi.mocked(createReadStream).mockReturnValue(makeStream('header\nrow\n'))
+      vi.mocked(stat).mockResolvedValue({
+        size: 12345,
+      } as Awaited<ReturnType<typeof stat>>)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      await collectLines(result.lines)
+
+      // Assert
+      expect(result.total?.unit).toBe('bytes')
+      expect(result.total?.count).toBe(12345)
+      expect(stat).toHaveBeenCalledTimes(1)
+      expect(stat).toHaveBeenCalledWith('./data/test.csv')
+    })
+
+    it('given fetch not yet iterated, when calling bytesRead, then returns zero', async () => {
+      // Arrange — the ReadStream is created lazily inside the generator so an
+      // unconsumed FetchResult does not leak a file handle. bytesRead falls
+      // back to 0 until the first iteration starts.
+      vi.mocked(createReadStream).mockReturnValue(makeStream('header\nrow\n'))
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+
+      // Assert — never iterated `result.lines`, no underlying stream yet
+      expect(result.total?.unit).toBe('bytes')
+      if (result.total?.unit === 'bytes') {
+        expect(result.total.bytesRead()).toBe(0)
+      }
+      expect(createReadStream).not.toHaveBeenCalled()
+    })
+
+    it('given fetch result iterated, when iteration completes, then stream.destroy is called to release the FD', async () => {
+      // Arrange — stryker mutation makes the finally block empty; this test
+      // catches the regression by asserting cleanup actually runs.
+      const stream = makeStream('header\nrow1\n')
+      const destroySpy = vi.spyOn(stream, 'destroy')
+      vi.mocked(createReadStream).mockReturnValue(stream)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      await collectLines(result.lines)
+
+      // Assert
+      expect(destroySpy).toHaveBeenCalled()
+    })
+
+    it('given fetch with bytesRead-aware stream, when iterating then calling bytesRead, then returns the stream cumulative counter', async () => {
+      // Arrange — patch the mock stream with a `bytesRead` getter that mimics
+      // Node's fs.ReadStream.bytesRead (incremented as chunks are consumed).
+      let bytesConsumed = 0
+      const stream = Readable.from(
+        (async function* () {
+          for (const line of ['header', 'row1', 'row2']) {
+            const chunk = Buffer.from(`${line}\n`)
+            bytesConsumed += chunk.length
+            yield chunk
+          }
+        })()
+      ) as unknown as ReadStream
+      Object.defineProperty(stream, 'bytesRead', {
+        get: () => bytesConsumed,
+      })
+      vi.mocked(createReadStream).mockReturnValue(stream)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      await collectLines(result.lines)
+
+      // Assert — after full iteration the counter equals the total bytes
+      // emitted by the source (matches stat.size for real files).
+      expect(result.total?.unit).toBe('bytes')
+      if (result.total?.unit === 'bytes') {
+        expect(result.total.bytesRead()).toBe(bytesConsumed)
+      }
+      expect(bytesConsumed).toBe(7 + 5 + 5) // 'header\n' + 'row1\n' + 'row2\n'
     })
 
     it('given any file, when fetching, then watermark is a valid ISO 8601 timestamp', async () => {
