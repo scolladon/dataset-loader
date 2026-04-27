@@ -68,7 +68,7 @@ export type ProgressUnit = 'rows' | 'files' | 'bytes'
 // counter so the pipeline can drive progress without re-encoding payload;
 // other units carry only `count` because their progress is observed at the
 // batch boundary by the existing tracker counters.
-export type ProgressTotal =
+type ProgressTotal =
   | { readonly unit: 'rows'; readonly count: number }
   | { readonly unit: 'files'; readonly count: number }
   | {

@@ -30,7 +30,7 @@ import { layoutsEqual } from './pipeline-layout.js'
 import { buildSObjectRowProjection } from './sobject-row-projection.js'
 import { type Watermark } from './watermark.js'
 
-export interface EntryResult {
+interface EntryResult {
   readonly status: 'processed' | 'skipped' | 'failed'
   readonly watermark?: WatermarkEntry
 }
