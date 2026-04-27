@@ -4,11 +4,8 @@ import {
   isElfEntry,
   type ResolvedEntry,
 } from '../adapters/config-loader.js'
-import {
-  type AuditEntry,
-  buildAuditChecks,
-  runAudit,
-} from '../domain/auditor.js'
+import { type AuditEntry } from '../domain/audit/audit-strategy.js'
+import { buildAuditChecks, runAudit } from '../domain/audit/runner.js'
 import { type LoggerPort, type SalesforcePort } from '../ports/types.js'
 import { type DatasetLoadResult, EMPTY_RESULT } from './load-inputs.js'
 
