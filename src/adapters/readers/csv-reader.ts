@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { Watermark } from '../../domain/watermark.js'
 import { type FetchResult, type ReaderPort } from '../../ports/types.js'
@@ -32,6 +33,8 @@ export class CsvReader implements ReaderPort {
   async fetch(_watermark?: Watermark): Promise<FetchResult> {
     const filePath = this.filePath
     const consumedAt = Watermark.fromString(new Date().toISOString())
+    // Stat once at fetch start — gives the byte total without re-reading.
+    const fileStat = await stat(filePath)
     return {
       lines: (async function* (): AsyncGenerator<string[]> {
         const stream = createReadStream(filePath)
@@ -56,6 +59,7 @@ export class CsvReader implements ReaderPort {
       })(),
       watermark: () => consumedAt,
       fileCount: () => 1,
+      total: { count: fileStat.size, unit: 'bytes' },
     }
   }
 }

@@ -62,10 +62,13 @@ export type Operation = 'Append' | 'Overwrite'
 export type BatchMiddleware = (batch: string[]) => string[]
 export type ReaderKind = 'sobject' | 'elf' | 'csv'
 
+export type ProgressUnit = 'rows' | 'files' | 'bytes'
+
 export interface FetchResult {
   readonly lines: AsyncIterable<string[]>
   readonly watermark: () => Watermark | undefined
   readonly fileCount: () => number
+  readonly total?: { readonly count: number; readonly unit: ProgressUnit }
 }
 
 export interface ReaderPort {
@@ -167,6 +170,8 @@ export interface GroupTracker {
   incrementParts(): void
   addFiles(count: number): void
   addRows(count: number): void
+  addBytes(count: number): void
+  setTotal(count: number, unit: ProgressUnit): void
   stop(): void
 }
 

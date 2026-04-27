@@ -184,6 +184,9 @@ export class SObjectReader implements ReaderPort {
           ? Watermark.fromString(String(lastRecord[dateField]))
           : undefined,
       fileCount: () => pagesProcessed,
+      // totalSize already reflects any LIMIT clause — Salesforce returns the
+      // post-LIMIT match count, not the raw filter count.
+      total: { count: firstPage.totalSize, unit: 'rows' },
     }
   }
 }

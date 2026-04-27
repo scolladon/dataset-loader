@@ -3,6 +3,7 @@ import {
   type GroupTracker,
   type PhaseProgress,
   type ProgressPort,
+  type ProgressUnit,
 } from '../ports/types.js'
 
 function partUnit(count: number): string {
@@ -20,6 +21,12 @@ const NOOP_GROUP_TRACKER: GroupTracker = {
     /* noop */
   },
   addRows: () => {
+    /* noop */
+  },
+  addBytes: () => {
+    /* noop */
+  },
+  setTotal: () => {
     /* noop */
   },
   stop: () => {
@@ -66,6 +73,8 @@ export class ProgressReporter implements ProgressPort {
         let parts = 0
         let files = 0
         let rows = 0
+        let bytes = 0
+        let progressUnit: ProgressUnit | undefined
         const format = withParts
           ? `  ${groupLabel} — {files} {filesUnit}, {rows} {rowsUnit} → {value} {unit}`
           : `  ${groupLabel} — {files} {filesUnit}, {rows} {rowsUnit}`
@@ -83,13 +92,20 @@ export class ProgressReporter implements ProgressPort {
           groupBar.start(0, 0, payload)
         }
 
+        const progressValue = (): number => {
+          if (progressUnit === 'rows') return rows
+          if (progressUnit === 'files') return files
+          if (progressUnit === 'bytes') return bytes
+          return withParts ? parts : 0
+        }
+
         const updateBar = (): void => {
           payload.files = files
           payload.filesUnit = files === 1 ? 'file' : 'files'
           payload.rows = rows
           payload.rowsUnit = rows === 1 ? 'row' : 'rows'
           if (withParts) payload.unit = partUnit(parts)
-          groupBar.update(withParts ? parts : 0, payload)
+          groupBar.update(progressValue(), payload)
         }
 
         return {
@@ -108,6 +124,15 @@ export class ProgressReporter implements ProgressPort {
           },
           addRows: (count: number): void => {
             rows += count
+            updateBar()
+          },
+          addBytes: (count: number): void => {
+            bytes += count
+            updateBar()
+          },
+          setTotal: (count: number, unit: ProgressUnit): void => {
+            progressUnit = unit
+            groupBar.setTotal(count)
             updateBar()
           },
           stop: (): void => {

@@ -370,10 +370,51 @@ async function processBundle(
     return
   }
 
+  // Surface fetch-time totals onto each sink's per-reader bar. Trackers are
+  // shared across entries within a single dataset slot, so dedupe before
+  // calling setTotal — otherwise the same total is announced N times.
+  if (result.total) {
+    const seen = new Set<GroupTracker>()
+    for (const { slot } of sinks) {
+      if (seen.has(slot.tracker)) continue
+      seen.add(slot.tracker)
+      slot.tracker.setTotal(result.total.count, result.total.unit)
+    }
+  }
+
+  // For byte-unit progress (CSV) the lines themselves carry the only signal —
+  // approximate consumed bytes by summing Buffer.byteLength of each batch line
+  // (+1 per line for the stripped newline). Cheap and good enough; exact
+  // ReadStream.bytesRead is awkward to expose across the sink boundary.
+  const linesIterable =
+    result.total?.unit === 'bytes'
+      ? wrapWithByteProgress(result.lines, sinks)
+      : result.lines
+  const resultForPipe: FetchResult = { ...result, lines: linesIterable }
+
   if (sinks.length === 1) {
-    await pipeSingleEntry(sinks[0], result, input, phase)
+    await pipeSingleEntry(sinks[0], resultForPipe, input, phase)
   } else {
-    await pipeFanOutEntries(sinks, result, input, phase)
+    await pipeFanOutEntries(sinks, resultForPipe, input, phase)
+  }
+}
+
+async function* wrapWithByteProgress(
+  source: AsyncIterable<string[]>,
+  sinks: readonly Sink[]
+): AsyncGenerator<string[]> {
+  const seen = new Set<GroupTracker>()
+  const trackers: GroupTracker[] = []
+  for (const { slot } of sinks) {
+    if (seen.has(slot.tracker)) continue
+    seen.add(slot.tracker)
+    trackers.push(slot.tracker)
+  }
+  for await (const batch of source) {
+    let bytes = 0
+    for (const line of batch) bytes += Buffer.byteLength(line) + 1
+    for (const tracker of trackers) tracker.addBytes(bytes)
+    yield batch
   }
 }
 

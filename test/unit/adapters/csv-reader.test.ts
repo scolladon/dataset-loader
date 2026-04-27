@@ -9,7 +9,12 @@ vi.mock('node:fs', () => ({
   createReadStream: vi.fn(),
 }))
 
+vi.mock('node:fs/promises', () => ({
+  stat: vi.fn(),
+}))
+
 import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 
 async function* asyncChunks(content: string): AsyncGenerator<Buffer> {
   for (const line of content.split('\n')) {
@@ -24,6 +29,9 @@ function makeStream(content: string): ReadStream {
 describe('CsvReader', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    vi.mocked(stat).mockResolvedValue({
+      size: 0,
+    } as Awaited<ReturnType<typeof stat>>)
   })
 
   describe('header()', () => {
@@ -130,6 +138,24 @@ describe('CsvReader', () => {
 
       // Assert
       expect(result.fileCount()).toBe(1)
+    })
+
+    it('given file with size, when fetching, then total reports stat.size in bytes', async () => {
+      // Arrange
+      vi.mocked(createReadStream).mockReturnValue(makeStream('header\nrow\n'))
+      vi.mocked(stat).mockResolvedValue({
+        size: 12345,
+      } as Awaited<ReturnType<typeof stat>>)
+      const sut = new CsvReader('./data/test.csv')
+
+      // Act
+      const result = await sut.fetch()
+      await collectLines(result.lines)
+
+      // Assert
+      expect(result.total).toEqual({ count: 12345, unit: 'bytes' })
+      expect(stat).toHaveBeenCalledTimes(1)
+      expect(stat).toHaveBeenCalledWith('./data/test.csv')
     })
 
     it('given any file, when fetching, then watermark is a valid ISO 8601 timestamp', async () => {

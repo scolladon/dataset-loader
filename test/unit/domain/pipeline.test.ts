@@ -47,6 +47,8 @@ function createMockGroupTracker(): GroupTracker {
     incrementParts: vi.fn(),
     addFiles: vi.fn(),
     addRows: vi.fn(),
+    addBytes: vi.fn(),
+    setTotal: vi.fn(),
     stop: vi.fn(),
   }
 }
@@ -746,6 +748,206 @@ describe('executePipeline (streaming)', () => {
     expect(tracker.addFiles).toHaveBeenCalledTimes(1)
     expect(tracker.addRows).toHaveBeenCalledWith(2)
     expect(tracker.addRows).toHaveBeenCalledTimes(1)
+  })
+
+  it('given fetch result with rows total, when executing, then sets tracker total before streaming', async () => {
+    // Arrange
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['"r1"', '"r2"']
+      })(),
+      watermark: () => watermark,
+      fileCount: () => 1,
+      total: { count: 99, unit: 'rows' as const },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.setTotal).toHaveBeenCalledWith(99, 'rows')
+    expect(tracker.setTotal).toHaveBeenCalledTimes(1)
+  })
+
+  it('given fetch result without total, when executing, then setTotal is not called', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => createFetchResult(['"v"']))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.setTotal).not.toHaveBeenCalled()
+  })
+
+  it('given two entries sharing reader and dataset, when total is set, then setTotal is called once on the shared tracker', async () => {
+    // Arrange — two entries collapse into a single slot (shared dataset) and
+    // a single bundle (shared reader); the dedup must avoid announcing the
+    // total twice on the same tracker.
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
+    const wmKey = WatermarkKey.fromEntry({
+      sourceOrg: 'prod',
+      eventLog: 'Login',
+      interval: 'Daily',
+    })
+    const datasetKey = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS1',
+    })
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['"a"']
+      })(),
+      watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
+      fileCount: () => 1,
+      total: { count: 5, unit: 'files' as const },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+    const entry1 = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'e1',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey,
+      augmentColumns: {},
+    })
+    const entry2 = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'e2',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey,
+      augmentColumns: {},
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.setTotal).toHaveBeenCalledTimes(1)
+    expect(tracker.setTotal).toHaveBeenCalledWith(5, 'files')
+  })
+
+  it('given two entries sharing reader and dataset with bytes total, when streaming, then addBytes is called once per batch on the shared tracker', async () => {
+    // Arrange
+    const readerKey = ReaderKey.forElf(
+      'prod',
+      'Login',
+      'Daily',
+      DateBounds.none()
+    )
+    const wmKey = WatermarkKey.fromEntry({
+      sourceOrg: 'prod',
+      eventLog: 'Login',
+      interval: 'Daily',
+    })
+    const datasetKey = DatasetKey.fromEntry({
+      targetOrg: 'ana',
+      targetDataset: 'DS1',
+    })
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['ab'] // 2 + 1 newline = 3
+      })(),
+      watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
+      fileCount: () => 1,
+      total: { count: 3, unit: 'bytes' as const },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+    const entry1 = createEntryWithReader(readerKey, {
+      index: 0,
+      label: 'e1',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey,
+      augmentColumns: {},
+    })
+    const entry2 = createEntryWithReader(readerKey, {
+      index: 1,
+      label: 'e2',
+      fetcher,
+      watermarkKey: wmKey,
+      datasetKey,
+      augmentColumns: {},
+    })
+
+    // Act
+    await executePipeline({
+      entries: [entry1, entry2],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — single addBytes call despite two sinks sharing the tracker
+    expect(tracker.addBytes).toHaveBeenCalledTimes(1)
+    expect(tracker.addBytes).toHaveBeenCalledWith(3)
+  })
+
+  it('given fetch result with bytes total, when streaming batches, then addBytes is called per batch with byteLength sum + newline', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['ab', 'cd'] // bytes = 2 + 1 + 2 + 1 = 6
+        yield ['ef'] // bytes = 2 + 1 = 3
+      })(),
+      watermark: () => undefined,
+      fileCount: () => 1,
+      total: { count: 9, unit: 'bytes' as const },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.setTotal).toHaveBeenCalledWith(9, 'bytes')
+    expect(tracker.addBytes).toHaveBeenCalledTimes(2)
+    expect(tracker.addBytes).toHaveBeenNthCalledWith(1, 6)
+    expect(tracker.addBytes).toHaveBeenNthCalledWith(2, 3)
   })
 
   it('given progress listener wired, when writer invokes onSinkReady during init, then updates tracker parentId', async () => {

@@ -72,6 +72,8 @@ const progress: ProgressPort = {
       incrementParts: vi.fn(),
       addFiles: vi.fn(),
       addRows: vi.fn(),
+      addBytes: vi.fn(),
+      setTotal: vi.fn(),
       stop: vi.fn(),
     })),
     stop: vi.fn(),
@@ -221,6 +223,29 @@ describe('PipelineRunner', () => {
     }
   })
 
+  it('given two SObject entries with identical reader-cache key, when running, then the reader-cache hit reuses the existing fetcher', async () => {
+    // Arrange — kills the `if (existing) return existing` branch in
+    // getOrCreateReader. Two SObject entries with the same configuration
+    // produce the same readerKey, so the second pass-1 lookup must reuse
+    // the first entry's fetcher instance.
+    const { runner } = makeRunner()
+
+    // Act
+    await runner.run(
+      [resolved(sobject, 0), resolved(sobject, 1)],
+      new Map([['src', makeSfPort()]]),
+      WatermarkStore.empty(),
+      state,
+      DateBounds.none()
+    )
+
+    // Assert
+    const call = vi.mocked(executePipeline).mock.calls[0][0]
+    const entries = call.entries as readonly PipelineEntry[]
+    expect(entries).toHaveLength(2)
+    expect(entries[0].fetcher).toBe(entries[1].fetcher)
+  })
+
   it('given SObject entry, when running, then readerKey is an sobject-kind key (not elf-kind)', async () => {
     // Arrange — kills the ConditionalExpression mutant in createReaderKey
     // (`if (isElfEntry(entry))` → `if (true)`) by asserting that an SObject
@@ -241,6 +266,38 @@ describe('PipelineRunner', () => {
     const call = vi.mocked(executePipeline).mock.calls[0][0]
     const entries = call.entries as readonly PipelineEntry[]
     expect(entries[0].readerKey.toString().startsWith('sobject\x00')).toBe(true)
+  })
+
+  it('given resolved entry, when invoking header(), then suffix from augmentColumns is appended to fetcher header', async () => {
+    // Arrange — exercises the entry.header() closure that wraps fetcher.header()
+    // with buildAugmentHeaderSuffix(augmentColumns); pipeline-runner test mocks
+    // executePipeline so the closure is otherwise uncovered.
+    const csvPath = join(
+      os.tmpdir(),
+      `pipeline-runner-header-${randomUUID()}.csv`
+    )
+    writeFileSync(csvPath, 'col1,col2\nrow\n')
+    const csvWithAugment = { ...csv, csvFile: csvPath }
+    const { runner } = makeRunner()
+
+    try {
+      // Act
+      await runner.run(
+        [resolved(csvWithAugment)],
+        new Map(),
+        WatermarkStore.empty(),
+        state,
+        DateBounds.none()
+      )
+
+      // Assert
+      const call = vi.mocked(executePipeline).mock.calls[0][0]
+      const entries = call.entries as readonly PipelineEntry[]
+      const header = await entries[0].header()
+      expect(header).toContain('col1,col2')
+    } finally {
+      rmSync(csvPath, { force: true })
+    }
   })
 
   it('given ELF entry, when running, then readerKey is an elf-kind key', async () => {

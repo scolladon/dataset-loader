@@ -6,6 +6,7 @@ type MockBar = {
   increment: ReturnType<typeof vi.fn>
   update: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
+  setTotal: ReturnType<typeof vi.fn>
 }
 
 type MockMultiBar = {
@@ -41,7 +42,12 @@ vi.mock('cli-progress', () => ({
       const bars: MockBar[] = []
       lastMultiBar = {
         create: vi.fn(() => {
-          const bar = { increment: vi.fn(), update: vi.fn(), start: vi.fn() }
+          const bar = {
+            increment: vi.fn(),
+            update: vi.fn(),
+            start: vi.fn(),
+            setTotal: vi.fn(),
+          }
           bars.push(bar)
           return bar
         }),
@@ -100,6 +106,8 @@ describe('ProgressReporter', () => {
     expect(() => tracker.incrementParts()).not.toThrow()
     expect(() => tracker.addFiles(2)).not.toThrow()
     expect(() => tracker.addRows(100)).not.toThrow()
+    expect(() => tracker.addBytes(2048)).not.toThrow()
+    expect(() => tracker.setTotal(10, 'rows')).not.toThrow()
     expect(() => tracker.stop()).not.toThrow()
   })
 
@@ -455,6 +463,96 @@ describe('ProgressReporter', () => {
     expect(groupBar.update).toHaveBeenCalledWith(
       0,
       expect.objectContaining({ rows: 100 })
+    )
+  })
+
+  it('given tracker without total, when addBytes is called, then bar value stays 0 (default)', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.addBytes(2048)
+
+    // Assert — without setTotal, bytes don't drive the bar value (still 0, no parts)
+    expect(groupBar.update).toHaveBeenLastCalledWith(0, expect.any(Object))
+  })
+
+  it('given setTotal called with rows unit, when addRows is called, then bar value reflects rows count', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(1000, 'rows')
+    tracker.addRows(250)
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(1000)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      250,
+      expect.objectContaining({ rows: 250 })
+    )
+  })
+
+  it('given setTotal called with files unit, when addFiles is called, then bar value reflects files count', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.addFiles(2)
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(5)
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      2,
+      expect.objectContaining({ files: 2 })
+    )
+  })
+
+  it('given setTotal called with bytes unit, when addBytes is called, then bar value reflects accumulated bytes', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(10_000, 'bytes')
+    tracker.addBytes(1500)
+    tracker.addBytes(2500)
+
+    // Assert
+    expect(groupBar.setTotal).toHaveBeenCalledWith(10_000)
+    expect(groupBar.update).toHaveBeenLastCalledWith(4000, expect.any(Object))
+  })
+
+  it('given setTotal with parts tracker, when incrementParts is called, then parts still wins via withParts default', () => {
+    // Arrange — withParts=true keeps parts as the visual driver until setTotal
+    // overrides; setTotal('rows') redirects the value to rows (kills mutation
+    // where parts would always win).
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS', true)
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.incrementParts()
+    tracker.setTotal(100, 'rows')
+    tracker.addRows(40)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      40,
+      expect.objectContaining({ rows: 40 })
     )
   })
 
