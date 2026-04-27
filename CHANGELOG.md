@@ -1,6 +1,14 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.4.0](https://github.com/scolladon/dataset-loader/compare/v1.3.0...v1.4.0) (2026-04-27)
+
+
+### Features
+
+* **audit:** enforce FLS via WITH SECURITY_ENFORCED on SObject read check ([#37](https://github.com/scolladon/dataset-loader/issues/37)) ([50f2d7f](https://github.com/scolladon/dataset-loader/commit/50f2d7fb7ac2fa4472acc1e8e97477e53826d427))
+* **progress:** show per-reader progress totals from firstPage.totalSize ([#35](https://github.com/scolladon/dataset-loader/issues/35)) ([eb114b3](https://github.com/scolladon/dataset-loader/commit/eb114b30a3f3c7a57766b3e63dddfa27fb5b8bed))
+
 ## [1.3.0](https://github.com/scolladon/dataset-loader/compare/v1.2.3...v1.3.0) (2026-04-22)
 
 
