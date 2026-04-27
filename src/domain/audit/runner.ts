@@ -18,36 +18,66 @@ import { insightsAccess } from './strategies/insights-access.js'
 import { schemaAlignment } from './strategies/schema-alignment.js'
 import { sobjectFieldAccess } from './strategies/sobject-field-access.js'
 
-// Strategy registry. The unified `buildChecks` runs each strategy through the
-// same select/merge/evaluate pipeline; `merge` defaults to first-entry-wins
-// when omitted, so simple permission checks stay one-liners while FLS gets
-// per-key field union for free.
-const STRATEGIES: readonly AuditCheckStrategy<unknown>[] = [
-  authConnectivity,
-  elfAccess,
-  insightsAccess,
-  sobjectFieldAccess,
-  datasetReady,
-  schemaAlignment,
-] as readonly AuditCheckStrategy<unknown>[]
+// Each registered strategy is wrapped via `asBuilder` so its `Payload` type
+// is captured at registration; the registry stores opaque builders that hide
+// per-strategy generics from the runner.
+type ChecksBuilder = (
+  entries: readonly AuditEntry[],
+  sfPorts: ReadonlyMap<string, SalesforcePort>,
+  ctx: AuditContext
+) => readonly AuditCheck[]
+
+// `AuditCheckStrategy<P>` is a conditional type that makes `merge` required
+// when P deviates from AuditEntry. Both branches share the same runtime shape
+// (an `optional merge`); widening to this view at the strategy↔runner seam
+// lets `buildChecks` consume a single non-conditional shape.
+type StrategyView<P> = {
+  readonly select: (
+    entry: AuditEntry
+  ) => readonly { org: string; key: string }[]
+  readonly merge?: (existing: P | undefined, entry: AuditEntry) => P
+  readonly label: (org: string, key: string) => string
+  readonly evaluate: (
+    sfPort: SalesforcePort,
+    key: string,
+    payload: P,
+    ctx: AuditContext
+  ) => Promise<import('../../ports/types.js').AuditOutcome>
+}
+
+function asBuilder<P>(strategy: AuditCheckStrategy<P>): ChecksBuilder {
+  const view = strategy as StrategyView<P>
+  return (entries, sfPorts, ctx) => buildChecks(entries, view, sfPorts, ctx)
+}
+
+const STRATEGIES: readonly ChecksBuilder[] = [
+  asBuilder(authConnectivity),
+  asBuilder(elfAccess),
+  asBuilder(insightsAccess),
+  asBuilder(sobjectFieldAccess),
+  asBuilder(datasetReady),
+  asBuilder(schemaAlignment),
+]
 
 export function buildAuditChecks(
   entries: readonly AuditEntry[],
   sfPorts: ReadonlyMap<string, SalesforcePort>
 ): readonly AuditCheck[] {
   const ctx: AuditContext = { sfPorts }
-  return STRATEGIES.flatMap(s => buildChecks(entries, s, sfPorts, ctx))
+  return STRATEGIES.flatMap(build => build(entries, sfPorts, ctx))
 }
 
 function buildChecks<P>(
   entries: readonly AuditEntry[],
-  strategy: AuditCheckStrategy<P>,
+  strategy: StrategyView<P>,
   sfPorts: ReadonlyMap<string, SalesforcePort>,
   ctx: AuditContext
 ): readonly AuditCheck[] {
-  // Default merge: first contributing entry wins (matches the legacy
-  // strategy semantics, where evaluate() used to receive the first AuditEntry
-  // that hit a given dedup key).
+  // First-entry-wins default. The conditional type on AuditCheckStrategy
+  // makes `merge` REQUIRED whenever Payload deviates from AuditEntry — so
+  // when we land in this branch, P is provably AuditEntry and the cast is
+  // identity at runtime. The cast is needed only because TS cannot project
+  // the conditional-type guarantee into a generic `P` here.
   const merge =
     strategy.merge ??
     ((existing: P | undefined, entry: AuditEntry): P =>
@@ -106,7 +136,7 @@ export async function runAudit(
     if (result.status !== 'fulfilled') continue
     const { check, outcome } = result.value
     const label = outcomeLabel(outcome)
-    const detail = outcome.kind === 'pass' ? '' : `: ${outcomeMessage(outcome)}`
+    const detail = outcome.kind === 'pass' ? '' : `: ${outcome.message}`
     logger.info(`  [${label}] ${check.label}${detail}`)
     if (outcome.kind === 'fail') allPassed = false
   }
@@ -119,10 +149,4 @@ function outcomeLabel(outcome: AuditOutcome): 'PASS' | 'WARN' | 'FAIL' {
   if (outcome.kind === 'pass') return 'PASS'
   if (outcome.kind === 'warn') return 'WARN'
   return 'FAIL'
-}
-
-function outcomeMessage(outcome: AuditOutcome): string {
-  /* v8 ignore next -- pass path is handled by the caller */
-  if (outcome.kind === 'pass') return ''
-  return outcome.message
 }

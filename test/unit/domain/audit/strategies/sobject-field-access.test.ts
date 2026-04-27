@@ -4,18 +4,18 @@ import {
   runAudit,
 } from '../../../../../src/domain/audit/runner.js'
 import {
+  auditEntryOf,
   createMockLogger,
   createMockSfPort,
-  legacyEntry,
 } from '../../../../fixtures/audit.js'
 
 describe('SObject read access check', () => {
   it('given SObject entries, when building checks, then includes check per unique (org, sObject)', () => {
     // Arrange
     const entries = [
-      legacyEntry({ isElf: false, sourceOrg: 'srcA', sObject: 'Account' }),
-      legacyEntry({ isElf: false, sourceOrg: 'srcA', sObject: 'Contact' }),
-      legacyEntry({ isElf: false, sourceOrg: 'srcA', sObject: 'Account' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'srcA', sObject: 'Account' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'srcA', sObject: 'Contact' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'srcA', sObject: 'Account' }),
     ]
     const sfPorts = new Map([['srcA', createMockSfPort()]])
 
@@ -36,7 +36,7 @@ describe('SObject read access check', () => {
   it('given no SObject entries, when building checks, then skips sObject read access check', () => {
     // Arrange
     const entries = [
-      legacyEntry({ isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' }),
+      auditEntryOf({ isElf: true, sourceOrg: 'srcA', targetOrg: 'anaA' }),
     ]
     const sfPorts = new Map([
       ['srcA', createMockSfPort()],
@@ -55,7 +55,7 @@ describe('SObject read access check', () => {
     // Arrange
     const sfMock = createMockSfPort()
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         sObject: 'Account',
@@ -79,13 +79,13 @@ describe('SObject read access check', () => {
     // Arrange
     const sfMock = createMockSfPort()
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         sObject: 'Account',
         readerFields: ['Id', 'Name'],
       }),
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         sObject: 'Account',
@@ -123,7 +123,7 @@ describe('SObject read access check', () => {
       del: vi.fn(),
     }
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         sObject: 'Account',
@@ -148,7 +148,7 @@ describe('SObject read access check', () => {
   it('given sObject query succeeds, when executing check, then returns true', async () => {
     // Arrange
     const entries = [
-      legacyEntry({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
     ]
     const sfPorts = new Map([['src', createMockSfPort('ok')]])
     const checks = buildAuditChecks(entries, sfPorts)
@@ -164,7 +164,7 @@ describe('SObject read access check', () => {
   it('given sObject query fails, when executing check, then returns false', async () => {
     // Arrange
     const entries = [
-      legacyEntry({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
     ]
     const sfPorts = new Map([['src', createMockSfPort('fail')]])
     const checks = buildAuditChecks(entries, sfPorts)
@@ -180,7 +180,7 @@ describe('SObject read access check', () => {
   it('given sObject check with missing sfPort, when executing, then returns false', async () => {
     // Arrange
     const entries = [
-      legacyEntry({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
     ]
     const sfPorts = new Map<string, SalesforcePort>()
     const checks = buildAuditChecks(entries, sfPorts)

@@ -1,4 +1,6 @@
+import { readFile } from 'node:fs/promises'
 import {
+  type AuditOutcome,
   type QueryResult,
   type SalesforcePort,
   SkipDatasetError,
@@ -53,7 +55,7 @@ function runSchemaChecks(
   datasetName: string,
   datasetFields: readonly string[],
   providedFields: readonly string[]
-): ReturnType<typeof pass | typeof fail | typeof warn> {
+): AuditOutcome {
   const augmentKeys = Object.keys(entry.augmentColumns)
   const overlap = detectOverlap(providedFields, augmentKeys)
   if (overlap.length > 0) {
@@ -67,9 +69,9 @@ function runSchemaChecks(
   }
 
   const provided = [...providedFields, ...augmentKeys]
-  // `targetDataset` is guaranteed by the schemaAlignment selector.
-  /* v8 ignore next */
-  const entryLabel = entry.targetDataset ?? datasetName
+  // datasetName IS the entry's targetDataset (by construction of
+  // selectByDataset, which keys the dedup slot on entry.targetDataset).
+  const entryLabel = datasetName
   const result = checkSchemaAlignment({
     datasetName,
     entryLabel,
@@ -91,10 +93,10 @@ function runSObjectCheck(
   datasetName: string,
   datasetFields: readonly string[],
   providedFields: readonly string[]
-): ReturnType<typeof pass | typeof fail | typeof warn> {
-  // `targetDataset` is guaranteed by the schemaAlignment selector.
-  /* v8 ignore next */
-  const entryLabel = entry.targetDataset ?? datasetName
+): AuditOutcome {
+  // datasetName IS the entry's targetDataset (by construction of
+  // selectByDataset, which keys the dedup slot on entry.targetDataset).
+  const entryLabel = datasetName
   try {
     buildSObjectRowProjection({
       datasetName,
@@ -140,29 +142,41 @@ async function resolveProvidedFields(
   entry: AuditEntry,
   ctx: AuditContext
 ): Promise<readonly string[] | 'warn:no-prior-elf' | 'fail:csv-missing'> {
-  if (entry.readerKind === 'sobject') {
-    // readerFields is always populated for SObject entries (commands layer
-    // sets it from config.fields). Fallback is defensive.
-    /* v8 ignore next */
-    return entry.readerFields ?? []
+  switch (entry.readerKind) {
+    case 'sobject':
+      // readerFields is always populated for SObject entries (commands layer
+      // sets it from config.fields). Fallback is defensive.
+      /* v8 ignore next */
+      return entry.readerFields ?? []
+    case 'elf':
+      return resolveElfHeaderFields(entry, ctx)
+    case 'csv':
+      return resolveCsvHeaderFields(entry)
   }
-  if (entry.readerKind === 'elf') {
-    const sourcePort = ctx.sfPorts.get(entry.sourceOrg)
-    if (!sourcePort) return 'warn:no-prior-elf'
-    // Safe interpolation: eventType is SF_IDENTIFIER_PATTERN-constrained,
-    // interval is z.enum(['Daily','Hourly']) — both validated at config
-    // parse (config-loader.ts:175-180). Neither admits single quotes.
-    const result = await sourcePort.query<{ LogFileFieldNames: string | null }>(
-      `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${entry.eventType}' AND Interval = '${entry.interval}' ORDER BY LogDate DESC LIMIT 1`
-    )
-    const raw = result.records[0]?.LogFileFieldNames
-    if (!raw) return 'warn:no-prior-elf'
-    return parseCsvHeader(raw)
-  }
-  // CSV
+}
+
+async function resolveElfHeaderFields(
+  entry: AuditEntry,
+  ctx: AuditContext
+): Promise<readonly string[] | 'warn:no-prior-elf'> {
+  const sourcePort = ctx.sfPorts.get(entry.sourceOrg)
+  if (!sourcePort) return 'warn:no-prior-elf'
+  // Safe interpolation: eventType is SF_IDENTIFIER_PATTERN-constrained,
+  // interval is z.enum(['Daily','Hourly']) — both validated at config
+  // parse (config-loader.ts:175-180). Neither admits single quotes.
+  const result = await sourcePort.query<{ LogFileFieldNames: string | null }>(
+    `SELECT LogFileFieldNames FROM EventLogFile WHERE EventType = '${entry.eventType}' AND Interval = '${entry.interval}' ORDER BY LogDate DESC LIMIT 1`
+  )
+  const raw = result.records[0]?.LogFileFieldNames
+  if (!raw) return 'warn:no-prior-elf'
+  return parseCsvHeader(raw)
+}
+
+async function resolveCsvHeaderFields(
+  entry: AuditEntry
+): Promise<readonly string[] | 'fail:csv-missing'> {
   if (!entry.csvFile) return 'fail:csv-missing'
   try {
-    const { readFile } = await import('node:fs/promises')
     const content = await readFile(entry.csvFile, 'utf-8')
     const firstLine = content.split('\n', 1)[0]
     return parseCsvHeader(firstLine)

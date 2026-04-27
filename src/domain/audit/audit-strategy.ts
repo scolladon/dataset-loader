@@ -30,19 +30,10 @@ export interface AuditContext {
   readonly sfPorts: ReadonlyMap<string, SalesforcePort>
 }
 
-// A strategy describes how one audit concern is selected, aggregated, labelled,
-// and evaluated. `Payload` is the per-key data that `evaluate` receives:
-// - default `Payload = AuditEntry`: the first entry seen for the dedup key
-//   (today's behaviour for permission/connectivity strategies).
-// - custom `Payload` + `merge`: aggregate across entries (e.g. union of
-//   reader fields for FLS probes that share an SObject).
-export interface AuditCheckStrategy<Payload = AuditEntry> {
+interface AuditCheckStrategyBase<Payload> {
   readonly select: (
     entry: AuditEntry
   ) => readonly { org: string; key: string }[]
-  // Optional reducer over entries that contribute to the same `(org, key)`.
-  // When omitted, the first contributing entry's `AuditEntry` is the payload.
-  readonly merge?: (existing: Payload | undefined, entry: AuditEntry) => Payload
   readonly label: (org: string, key: string) => string
   readonly evaluate: (
     sfPort: SalesforcePort,
@@ -51,6 +42,30 @@ export interface AuditCheckStrategy<Payload = AuditEntry> {
     ctx: AuditContext
   ) => Promise<AuditOutcome>
 }
+
+// A strategy describes how one audit concern is selected, aggregated, labelled,
+// and evaluated. `Payload` is the per-key data that `evaluate` receives:
+// - default `Payload = AuditEntry`: the first entry seen for the dedup key
+//   (today's behaviour for permission/connectivity strategies). `merge` is
+//   optional in this case — its omission means "first-entry-wins".
+// - custom `Payload`: `merge` is REQUIRED (the type system enforces this), so
+//   the strategy always specifies how entries combine into the payload that
+//   `evaluate` will receive (e.g. union of reader fields for FLS probes).
+export type AuditCheckStrategy<Payload = AuditEntry> = [Payload] extends [
+  AuditEntry,
+]
+  ? AuditCheckStrategyBase<AuditEntry> & {
+      readonly merge?: (
+        existing: AuditEntry | undefined,
+        entry: AuditEntry
+      ) => AuditEntry
+    }
+  : AuditCheckStrategyBase<Payload> & {
+      readonly merge: (
+        existing: Payload | undefined,
+        entry: AuditEntry
+      ) => Payload
+    }
 
 export const pass = (): AuditOutcome => ({ kind: 'pass' })
 export const fail = (message: string): AuditOutcome => ({

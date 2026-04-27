@@ -4,28 +4,28 @@ import {
   runAudit,
 } from '../../../../../src/domain/audit/runner.js'
 import {
+  auditEntryOf,
   createMockLogger,
   createMockSfPort,
-  legacyEntry,
 } from '../../../../fixtures/audit.js'
 
 describe('Dataset ready check', () => {
   it('given entries with targetOrg and targetDataset, when building checks, then includes check per unique (org, dataset)', () => {
     // Arrange
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'srcA',
         targetOrg: 'anaA',
         targetDataset: 'DS_One',
       }),
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'srcA',
         targetOrg: 'anaA',
         targetDataset: 'DS_Two',
       }),
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'srcA',
         targetOrg: 'anaA',
@@ -54,7 +54,7 @@ describe('Dataset ready check', () => {
   it('given entries without targetDataset, when building checks, then skips dataset ready check', () => {
     // Arrange
     const entries = [
-      legacyEntry({ isElf: false, sourceOrg: 'srcA', targetOrg: 'anaA' }),
+      auditEntryOf({ isElf: false, sourceOrg: 'srcA', targetOrg: 'anaA' }),
     ]
     const sfPorts = new Map([
       ['srcA', createMockSfPort()],
@@ -73,7 +73,7 @@ describe('Dataset ready check', () => {
     // Arrange
     const anaMock = createMockSfPort()
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         targetOrg: 'ana',
@@ -99,7 +99,7 @@ describe('Dataset ready check', () => {
   it('given dataset query returns records, when executing check, then returns true', async () => {
     // Arrange
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         targetOrg: 'ana',
@@ -130,7 +130,7 @@ describe('Dataset ready check', () => {
   it('given dataset query returns 0 records, when executing check, then returns false', async () => {
     // Arrange
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         targetOrg: 'ana',
@@ -154,7 +154,7 @@ describe('Dataset ready check', () => {
   it('given dataset query throws, when executing check, then returns false', async () => {
     // Arrange
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         targetOrg: 'ana',
@@ -178,7 +178,7 @@ describe('Dataset ready check', () => {
   it('given dataset ready check with missing sfPort, when executing, then returns false', async () => {
     // Arrange
     const entries = [
-      legacyEntry({
+      auditEntryOf({
         isElf: false,
         sourceOrg: 'src',
         targetOrg: 'ana',

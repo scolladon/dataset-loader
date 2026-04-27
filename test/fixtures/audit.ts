@@ -6,7 +6,7 @@ import { type LoggerPort, type SalesforcePort } from '../../src/ports/types.js'
 // The `AuditEntry` shape (readerKind, augmentColumns, ...) is shipped for the
 // schemaAlignment strategy. This helper preserves the legacy test inputs
 // without rewriting every test body.
-export function legacyEntry(o: {
+export function auditEntryOf(o: {
   isElf?: boolean
   sourceOrg: string
   targetOrg?: string

@@ -4,9 +4,9 @@ import {
   runAudit,
 } from '../../../../../src/domain/audit/runner.js'
 import {
+  auditEntryOf,
   createMockLogger,
   createMockSfPort,
-  legacyEntry,
 } from '../../../../fixtures/audit.js'
 
 describe('schemaAlignment strategy', () => {
