@@ -6,7 +6,7 @@ import {
 } from 'node:stream'
 import { finished, pipeline } from 'node:stream/promises'
 import { buildAugmentSuffix } from '../adapters/pipeline/augment-transform.js'
-import { createByteProgressTransform } from '../adapters/pipeline/byte-progress-transform.js'
+import { createCounterProgressTransform } from '../adapters/pipeline/counter-progress-transform.js'
 import { type FanInStream } from '../adapters/pipeline/fan-in-stream.js'
 import { createFanOutTransform } from '../adapters/pipeline/fan-out-transform.js'
 import {
@@ -196,13 +196,57 @@ export async function processBundle(
   }
 }
 
+interface CounterTransformPlan {
+  readonly transform?: Transform
+  // Present and `true` only when the transform streams the files counter
+  // into trackers itself; in that case the end-of-entry `addFiles`
+  // reconciliation must skip to avoid double-counting (per-batch + flush
+  // deltas vs. final fileCount). Absence is the default and means
+  // "end-of-entry must reconcile".
+  readonly ownsFileCounter?: true
+}
+
+// Build the source-side counter transform for any reader that exposes a
+// cumulative counter under `total` (bytes or files). For 'rows' the writer
+// reports progress via `onRowsWritten` instead, so no transform is needed.
+// Only the files-unit path tags the plan with `ownsFileCounter: true`;
+// every other path leaves the field absent so a mutated object-literal
+// that drops the field stays observable as a behavior change.
+function planCounterTransform(
+  total: FetchResult['total'],
+  trackers: readonly GroupTracker[]
+): CounterTransformPlan {
+  if (total === undefined) return {}
+  if (total.unit === 'bytes') {
+    return {
+      transform: createCounterProgressTransform(
+        total.bytesRead,
+        trackers,
+        'bytes'
+      ),
+    }
+  }
+  if (total.unit === 'files') {
+    return {
+      transform: createCounterProgressTransform(
+        total.filesRead,
+        trackers,
+        'files'
+      ),
+      ownsFileCounter: true,
+    }
+  }
+  return {}
+}
+
 function pipelineWithEntryTracking(
   source: Readable,
   middleware: Transform | undefined,
   { entry, slot, sink }: Sink,
   result: FetchResult,
   input: BundleRunInput,
-  phase: Pick<PhaseProgress, 'tick'>
+  phase: Pick<PhaseProgress, 'tick'>,
+  skipAddFiles: boolean
 ): Promise<void> {
   const completed = middleware
     ? pipeline(source, middleware, sink)
@@ -215,7 +259,8 @@ function pipelineWithEntryTracking(
           result.fileCount(),
           result.watermark(),
           slot.tracker,
-          phase
+          phase,
+          skipAddFiles
         )
       )
     })
@@ -231,20 +276,15 @@ async function pipeSingleEntry(
   phase: Pick<PhaseProgress, 'tick'>
 ): Promise<void> {
   const source = Readable.from(result.lines)
-  const byteProgress =
-    result.total?.unit === 'bytes'
-      ? createByteProgressTransform(
-          result.total.bytesRead,
-          dedupTrackers([sink])
-        )
-      : undefined
+  const plan = planCounterTransform(result.total, dedupTrackers([sink]))
   await pipelineWithEntryTracking(
     source,
-    byteProgress,
+    plan.transform,
     sink,
     result,
     input,
-    phase
+    phase,
+    plan.ownsFileCounter === true
   )
 }
 
@@ -262,15 +302,9 @@ async function pipeFanOutEntries(
     )
   })
   const source = Readable.from(result.lines)
-  const byteProgress =
-    result.total?.unit === 'bytes'
-      ? createByteProgressTransform(
-          result.total.bytesRead,
-          dedupTrackers(sinks)
-        )
-      : undefined
-  const sourcePipeline = byteProgress
-    ? pipeline(source, byteProgress, fanOut)
+  const plan = planCounterTransform(result.total, dedupTrackers(sinks))
+  const sourcePipeline = plan.transform
+    ? pipeline(source, plan.transform, fanOut)
     : pipeline(source, fanOut)
   await Promise.all([
     sourcePipeline.catch((err: Error) => {
@@ -284,7 +318,8 @@ async function pipeFanOutEntries(
         sink,
         result,
         input,
-        phase
+        phase,
+        plan.ownsFileCounter === true
       )
     ),
   ])
@@ -372,9 +407,10 @@ function resolveEntryResult(
   fileCount: number,
   wm: Watermark | undefined,
   tracker: Pick<GroupTracker, 'addFiles'>,
-  phase: { tick: (detail: string) => void }
+  phase: { tick: (detail: string) => void },
+  skipAddFiles: boolean
 ): EntryResult {
-  tracker.addFiles(fileCount)
+  if (!skipAddFiles) tracker.addFiles(fileCount)
   if (fileCount === 0) {
     phase.tick(`  [${entry.index}] ${entry.label} — skipped (no new records)`)
     return { status: 'skipped' }
