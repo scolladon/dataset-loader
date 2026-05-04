@@ -86,11 +86,11 @@ src/
     │   ├── dataset-writer.ts  # CRM Analytics upload (InsightsExternalData)
     │   └── file-writer.ts     # Local file writer (CSV output)
     └── pipeline/
-        ├── async-channel.ts       # Bounded async channel (multi-producer, single-consumer)
-        ├── augment-transform.ts   # Appends extra columns to CSV lines
-        ├── fan-in-stream.ts       # Merges N writer slots into one downstream chunker
-        ├── fan-out-transform.ts   # Tees a stream to multiple writable channels
-        └── row-counter.ts         # PassThrough that counts rows for progress
+        ├── async-channel.ts                # Bounded async channel (multi-producer, single-consumer)
+        ├── augment-transform.ts            # Appends extra columns to CSV lines
+        ├── counter-progress-transform.ts   # Polls a reader's cumulative byte/file counter on each batch + flush; reports deltas to the dedup'd `GroupTracker`s
+        ├── fan-in-stream.ts                # Merges N writer slots into one downstream chunker
+        └── fan-out-transform.ts            # Tees a stream to multiple writable channels
 
 test/
 ├── unit/
@@ -116,7 +116,7 @@ All cross-boundary communication goes through port interfaces defined in `ports/
 | `HeaderProvider`   | Deferred header resolution (used by `FileWriter` to write header on first row)                                                          | `createHeaderProvider` closure (domain)     |
 | `StatePort`        | Read/write watermark persistence                                                                                                        | `FileStateManager`                          |
 | `ProgressPort`     | Progress bar lifecycle, creates `PhaseProgress` with `GroupTracker` per dataset                                                         | `ProgressReporter`                          |
-| `GroupTracker`     | Per-group real-time tracking of parentId, files, rows, and parts                                                                        | `ProgressReporter` (closure)                |
+| `GroupTracker`     | Per-group real-time tracking of parentId, files, rows, bytes, and parts. `setTotal(count, unit)` declares the bar's progress driver — `'rows' \| 'files' \| 'bytes'`; first non-zero declaration latches the unit. Mixed units across readers fanning into the same tracker fall back to counter-only display | `ProgressReporter` (closure)                |
 | `LoggerPort`       | Structured logging                                                                                                                      | SF CLI logger                               |
 
 **Shared types and utilities** in `ports/types.ts`:
@@ -169,8 +169,10 @@ executePipeline()
   │   │   ├── Build per-entry ProjectionLayout from slot.datasetFields + entry.alignment
   │   │   ├── Fan-out constraint: reject whole bundle if viable layouts diverge
   │   │   ├── Call reader.project(layout) once (SObject only) before fetch
-  │   │   ├── Single entry: Fetch via ReaderPort → [Projection baked in for SObject | AugmentTransform for ELF/CSV] → chunker
-  │   │   └── Multiple entries: FanOutTransform tees the reader stream to each entry's channel
+  │   │   ├── Announce result.total to dedup'd trackers via setTotal(count, unit)
+  │   │   ├── planCounterTransform(result.total) → transform? + ownsFileCounter flag
+  │   │   ├── Single entry: Fetch via ReaderPort → [Projection baked in for SObject | AugmentTransform for ELF/CSV] → [CounterProgressTransform if bytes/files] → chunker
+  │   │   └── Multiple entries: FanOutTransform tees the reader stream (via the optional CounterProgressTransform) to each entry's channel
   │   │
   │   ├── End chunker stream and await completion
   │   ├── Finalize Writer
@@ -186,22 +188,39 @@ executePipeline()
 
 Data never fully materializes in memory. The pipeline streams through three layers:
 
-1. **Readers** yield `AsyncIterable<string[]>` — batches of 2000 CSV lines (header-stripped for ELF)
-   - ELF: concurrent blob stream downloads via `getBlobStream()`; all blobs in a page are fetched in parallel; batches are pushed to a bounded `AsyncChannel<string[]>` which applies backpressure when the queue is full; strips header row from each blob
+1. **Readers** yield `AsyncIterable<string[]>` — batches of 2000 CSV lines (header-stripped for ELF). Each `FetchResult` may declare a `total` for live progress — `'bytes'` (CSV) carries `bytesRead()`, `'files'` (ELF) carries `filesRead()`, `'rows'` (SObject) carries only `count` because rows are reported via `Writer`'s `onRowsWritten` listener.
+   - ELF: concurrent blob stream downloads via `getBlobStream()`; all blobs in a page are fetched in parallel; batches are pushed to a bounded `AsyncChannel<string[]>` which applies backpressure when the queue is full; strips header row from each blob; `filesRead()` returns the running `filesProcessed` counter (incremented in each blob processor's `finally`)
    - SObject: SOQL query with prefetched next page, yields CSV lines via a hand-rolled `csvQuote` helper (csv-stringify parity, plus OWASP formula-injection guard that TAB-prefixes leading `= + - @ |` etc.)
-2. **AugmentTransform + RowCounter** — Transform stream that appends augment columns to each batch; PassThrough that counts rows for progress tracking
-3. **FanOutTransform** — When multiple entries share the same reader (same org + eventLog/sObject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
-4. **Writer chunker** — Writable stream returned by `Writer.init()`:
+   - CSV: streams the file via `createReadStream`; `bytesRead()` returns the `ReadStream`'s live `bytesRead` counter
+2. **CounterProgressTransform** — when `total.unit` is `'bytes'` or `'files'`, the bundle-runner injects this `objectMode` transform before the writer sink. On each batch — and once more from `flush()` to capture any tail movement after the final yield — it polls the reader's `read()` callback and reports the delta to the dedup'd `GroupTracker`s via `addBytes` or `addFiles`. The flush reconciliation matters for ELF, where blob `finally` increments can land after the channel drains. The `'rows'` path bypasses this transform — `DatasetWriter`'s `onRowsWritten` listener already reports per-batch rows on the writer side.
+3. **AugmentTransform** — Transform stream that appends augment columns to each batch when the reader doesn't project (ELF/CSV); SObject readers bake augment values into the projection layout instead.
+4. **FanOutTransform** — When multiple entries share the same reader (same org + eventLog/sObject + watermark), a single fetch is teed to N channels via `promiseWrite`, one per entry
+5. **Writer chunker** — Writable stream returned by `Writer.init()`:
    - CRM Analytics (`GzipChunkingWritable`): batch gzip-compresses (512KB flush threshold), splits at 10 MB base64 part boundaries, uploads parts concurrently up to `UPLOAD_HIGH_WATER` (= 25) in-flight
    - File (`FileWriter` internal): streams CSV rows directly to a `fs.WriteStream`; writes header on first row via `HeaderProvider`
 
 Key types:
 
 ```typescript
+// Discriminated union — `'bytes'` and `'files'` carry a source-side
+// cumulative counter so the pipeline can drive a live progress bar without
+// re-encoding payload; `'rows'` reports its progress at the batch boundary
+// via the writer's `onRowsWritten` listener instead.
+type ProgressTotal =
+  | { readonly unit: 'rows';  readonly count: number }
+  | { readonly unit: 'files'; readonly count: number; readonly filesRead: () => number }
+  | { readonly unit: 'bytes'; readonly count: number; readonly bytesRead: () => number }
+
 interface FetchResult {
   readonly lines: AsyncIterable<string[]>
   readonly watermark: () => Watermark | undefined
+  // End-of-entry counter used by the bundle-runner to reconcile the bar's
+  // `{files}` display and decide whether the entry produced any data.
   readonly fileCount: () => number
+  // Optional: declared by readers that know their workload size up-front
+  // (e.g. SObject `firstPage.totalSize`, ELF SOQL count, CSV `stat.size`).
+  // Drives the visual progress bar's `{value}/{total}` ratio.
+  readonly total?: ProgressTotal
 }
 
 interface ReaderPort {
@@ -300,14 +319,15 @@ Two entries targeting the same dataset with different augment **values** (e.g. d
 | `AugmentTransform`     | `adapters/pipeline/augment-transform.ts` | Transform stream that appends augment column values (CSV-quoted) to each line.                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `FanInStream`          | `adapters/pipeline/fan-in-stream.ts`     | Merges N writer slots into one downstream chunker. Each slot is a `Writable` created via `createSlot()`; when the last slot closes (via `close` event, which fires on both finish and destroy), `downstream.end()` is called automatically. Provides backpressure by delegating each slot write to the downstream write callback.                                                                                                                                                                          |
 | `FanOutTransform`      | `adapters/pipeline/fan-out-transform.ts` | Transform stream that tees each chunk to N `PassThrough` channels concurrently via `Promise.all`. Used when multiple entries share the same reader (same org + type + watermark). Channels that error are removed from the active set.                                                                                                                                                                                                                                                                     |
-| `RowCounter`           | `adapters/pipeline/row-counter.ts`       | PassThrough stream that counts rows for progress tracking via `GroupTracker.addRows()`.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `CounterProgressTransform` | `adapters/pipeline/counter-progress-transform.ts` | `objectMode` Transform that polls the reader's cumulative counter on each batch and once more from `flush()`, reporting deltas to the dedup'd `GroupTracker`s via `addBytes` (CSV) or `addFiles` (ELF). Strict per-unit dispatch via switch + `assertNever` guard. The flush reconciliation captures any tail movement (e.g. an ELF blob whose `filesProcessed++` lands after the producer promise resolves). |
 | `AsyncChannel<T>`      | `adapters/pipeline/async-channel.ts`     | Bounded multi-producer, single-consumer async queue. Producers call `push()` and await backpressure when the queue reaches `highWater`. Consumer iterates with `for await`. `close()` and `fail(err)` are idempotent; `push()` after either rejects (no silent data loss). If the consumer breaks early, the async iterator's `return()` cancels the channel and releases any stalled producers.                                                                                                           |
 | `DatasetWriterFactory` | `adapters/writers/dataset-writer.ts`     | Creates `DatasetWriter` instances per CRM Analytics dataset. `DatasetWriter.init()` queries existing metadata (required), normalizes `numberOfLinesToIgnore` to 0, creates the parent record, and returns a `GzipChunkingWritable`. The writable batch-compresses with 512KB flush threshold, splits at 10 MB base64 boundaries, and keeps at most `UPLOAD_HIGH_WATER` (= 25) part uploads in-flight via `Promise.race` backpressure.                                                                      |
 | `FileWriterFactory`    | `adapters/writers/file-writer.ts`        | Creates `FileWriter` instances per output file path. `FileWriter.init()` opens a `fs.WriteStream` (append or overwrite). Header is written on first row via `HeaderProvider.resolveHeader()`. `skip()` deletes the file on overwrite.                                                                                                                                                                                                                                                                      |
 | `ConfigLoader`         | `adapters/config-loader.ts`              | Reads JSON config, Zod schema validation, operation consistency checks, mustache token resolution (`{{sourceOrg.Id}}`, etc.)                                                                                                                                                                                                                                                                                                                                                                               |
 | `FileStateManager`     | `adapters/state-manager.ts`              | Atomic read/write of watermark state file (temp file + rename, mode `0o600`)                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `ProgressReporter`     | `adapters/progress-reporter.ts`          | CLI progress display using `cli-progress` MultiBar. Main bar tracks entries, per-group sub-bars show real-time files fetched, rows processed, and parts uploaded. No-op for zero-length phases. Includes workaround for cli-progress non-TTY `bar.start()` bug.                                                                                                                                                                                                                                            |
+| `ProgressReporter`     | `adapters/progress-reporter.ts`          | CLI progress display using `cli-progress` MultiBar. Main bar tracks entries; per-group sub-bars render `{bar} {value}/{total} {unit}` plus live `{files}`, `{rows}`, and (for dataset targets) `{parts}` counters. The bar's unit label tracks the `progressUnit` declared via `setTotal` (`'rows' \| 'row' \| 'files' \| 'file' \| 'bytes' \| 'items'`). Strips `{` and `}` from user-controlled labels to prevent cli-progress format-token collision. `setTotal` rejects non-finite, non-integer, negative, and zero counts (cli-progress can't render `total=0`); mixed units across a fanned-in tracker latch into counter-only mode. No-op for zero-length phases. Includes workaround for cli-progress non-TTY `bar.start()` bug. |
 | `Pipeline`             | `domain/pipeline.ts`                     | Core orchestration: `executePipeline` (entry point). Three phases: (1) init one `WriterSlot` + `FanInStream` per `DatasetGroup`; (2) process reader bundles concurrently — single-entry path pipes directly, multi-entry path fans out via `FanOutTransform`; (3) await each `FanInStream`-owned chunker drain, then finalize/abort each writer. `DatasetGroup` is a pure data class; `createHeaderProvider` creates the deferred header closure.                                                          |
+| `BundleRunner`         | `domain/bundle-runner.ts`                | Per-bundle stream wiring (`processBundle`, `pipeSingleEntry`, `pipeFanOutEntries`, `finalizeSlot`). After `await fetcher.fetch()` it announces `total.count`/`unit` to each dedup'd tracker via `setTotal` and calls `planCounterTransform(result.total, trackers)` — which returns either `{transform, ownsFileCounter: true}` for the files unit, `{transform}` for bytes, or `{}` for rows / no-total. The transform is injected into the pipeline; `ownsFileCounter === true` then makes `resolveEntryResult` skip the end-of-entry `addFiles(fileCount)` reconciliation so the per-batch + flush deltas aren't double-counted. |
 | `Auditor`              | `domain/auditor.ts`                      | Builds and runs pre-flight checks (`authConnectivity`, `elfAccess`, `insightsAccess`, `sobjectReadAccess`, `datasetReady`, `schemaAlignment`). Deduplicates by `(org, key)` across entries. `MetadataJson` is memoised per `(org, dataset)` within a single audit run. `runAudit` executes all checks via `Promise.allSettled`, logs `[PASS]`/`[WARN]`/`[FAIL]` per check, and returns `passed: boolean` (WARN is non-blocking). |
 | Domain helpers         | `domain/{column-name,schema-check,sobject-row-projection,csv-quote}.ts` | Pure utilities: `parseCsvHeader` (CSV-safe header tokenizer), `checkSchemaAlignment` (set + order comparison), `buildSObjectRowProjection` (ProjectionLayout builder with overlap/set rejection), `csvQuote` (OWASP-safe cell quoting). |
 
