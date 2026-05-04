@@ -10,6 +10,14 @@ function partUnit(count: number): string {
   return count === 1 ? 'part' : 'parts'
 }
 
+// Placeholder total used when the bar has no real total yet (no setTotal
+// call has landed, or a mixed-unit fallback latched). `cli-progress` treats
+// `value === total` as "bar complete" and renders it fully filled, so a
+// freshly-created `total=0, value=0` bar shows up as 100% before any data
+// flows. A placeholder of 1 keeps the bar at 0% (`0/1`) and gets replaced
+// by `groupBar.setTotal(realCount)` as soon as a reader announces.
+const PLACEHOLDER_TOTAL = 1
+
 // `cli-progress` performs `{token}` substitution against the bar payload.
 // A user-controlled dataset name like `{value}` would be re-substituted at
 // render time and corrupt the display. Stripping braces from any label
@@ -140,10 +148,10 @@ export class ProgressReporter implements ProgressPort {
           ...(withParts ? { parts: 0, partUnit: partUnit(0) } : {}),
         }
 
-        const groupBar = multibar.create(0, 0, {}, { format })
+        const groupBar = multibar.create(PLACEHOLDER_TOTAL, 0, {}, { format })
         // Workaround: same non-TTY issue as the main bar (see above).
         if (!process.stderr.isTTY) {
-          groupBar.start(0, 0, payload)
+          groupBar.start(PLACEHOLDER_TOTAL, 0, payload)
         }
 
         // Switch is exhaustive over `ProgressUnit | undefined` — the
@@ -228,7 +236,9 @@ export class ProgressReporter implements ProgressPort {
               mixedUnits = true
               progressUnit = undefined
               totalDeclared = 0
-              groupBar.setTotal(0)
+              // Reset to the placeholder total (not 0) so the bar renders
+              // empty, not "complete", in counter-only fallback mode.
+              groupBar.setTotal(PLACEHOLDER_TOTAL)
             }
             updateBar()
           },

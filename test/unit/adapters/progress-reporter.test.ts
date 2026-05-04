@@ -309,10 +309,11 @@ describe('ProgressReporter', () => {
     // Act
     phase.trackGroup('DS', false)
 
-    // Assert
+    // Assert — placeholder total of 1 (not 0) so cli-progress doesn't
+    // render `value === total` as "complete" before any setTotal lands.
     const groupBar = lastMultiBar!.bars[1]
     expect(groupBar.start).toHaveBeenCalledWith(
-      0,
+      1,
       0,
       expect.objectContaining({
         files: 0,
@@ -321,6 +322,28 @@ describe('ProgressReporter', () => {
         rowsUnit: 'rows',
       })
     )
+  })
+
+  it('given a fresh tracker before any setTotal, when the group bar is created, then its initial total is the placeholder 1 (not 0)', () => {
+    // Arrange — `cli-progress` renders `value === total` as a fully-filled
+    // bar; an initial `(0, 0)` group bar therefore appears 100% complete
+    // before any data flows. The placeholder of 1 forces `0/1` (empty).
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+
+    // Act
+    phase.trackGroup('DS', false)
+
+    // Assert — the 2nd `multibar.create` call (1st is the parent bar) is
+    // the group bar; its total argument must be ≥ 1.
+    const groupCreateCall = lastMultiBar!.create.mock.calls[1] as [
+      number,
+      number,
+      object,
+      { format: string },
+    ]
+    expect(groupCreateCall[0]).toBe(1)
+    expect(groupCreateCall[1]).toBe(0)
   })
 
   it('given TTY stderr, when tracking group, then group bar start is not called', () => {
@@ -639,10 +662,10 @@ describe('ProgressReporter', () => {
     // Act
     phase.trackGroup('DS', true)
 
-    // Assert
+    // Assert — see "zero-initialized payload" test for placeholder rationale.
     const groupBar = lastMultiBar!.bars[1]
     expect(groupBar.start).toHaveBeenCalledWith(
-      0,
+      1,
       0,
       expect.objectContaining({ parts: 0, partUnit: 'parts', unit: 'items' })
     )
@@ -745,9 +768,10 @@ describe('ProgressReporter', () => {
     tracker.addFiles(2)
     tracker.addRows(300)
 
-    // Assert — bar total reset to 0, value drops back to non-unit behaviour (0)
+    // Assert — bar total reverts to the placeholder (1, not 0) so the
+    // counter-only fallback renders empty, not "complete".
     expect(groupBar.setTotal).toHaveBeenNthCalledWith(1, 5)
-    expect(groupBar.setTotal).toHaveBeenLastCalledWith(0)
+    expect(groupBar.setTotal).toHaveBeenLastCalledWith(1)
     expect(groupBar.update).toHaveBeenLastCalledWith(0, expect.any(Object))
   })
 
