@@ -208,7 +208,44 @@ describe('ProgressReporter', () => {
     expect(lastMultiBar!.stop).toHaveBeenCalledTimes(1)
   })
 
-  it('given tracker with parts, when tracking group, then group bar format includes value and unit placeholders', () => {
+  it('given a dataset label containing cli-progress tokens, when tracking group, then the label is sanitized in the format string', () => {
+    // Arrange — a user-supplied dataset name like `{value}` would be re-
+    // substituted by cli-progress and corrupt the display. Sanitization
+    // strips `{` and `}` so the literal text stays in place.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+
+    // Act
+    phase.trackGroup('My{value}Set', false)
+
+    // Assert
+    const groupCreateCall = lastMultiBar!.create.mock.calls[1] as [
+      number,
+      number,
+      object,
+      { format: string },
+    ]
+    expect(groupCreateCall[3].format).not.toContain('{value}Set')
+    expect(groupCreateCall[3].format).toContain('MyvalueSet')
+  })
+
+  it('given a phase label containing cli-progress tokens, when creating a phase, then the label is sanitized in the MultiBar format', () => {
+    // Arrange — symmetric protection for the parent bar.
+    const sut = new ProgressReporter()
+
+    // Act
+    sut.create('Pro{bar}cessing', 1)
+
+    // Assert
+    expect(lastMultiBarOptions).toEqual(
+      expect.objectContaining({
+        format: expect.stringContaining('Probarcessing'),
+      })
+    )
+    expect(lastMultiBarOptions?.format).not.toContain('Pro{bar}cessing')
+  })
+
+  it('given tracker with parts, when tracking group, then group bar format includes bar, value/total, unit, and parts placeholders', () => {
     // Arrange
     const sut = new ProgressReporter()
     const phase = sut.create('Test', 1)
@@ -217,18 +254,23 @@ describe('ProgressReporter', () => {
     phase.trackGroup('MyDataset', true)
 
     // Assert — 2nd create call is the group bar; 4th arg carries the format
-    expect(lastMultiBar!.create).toHaveBeenNthCalledWith(
-      2,
-      0,
-      0,
-      {},
-      {
-        format: expect.stringContaining('→ {value} {unit}'),
-      }
-    )
+    const groupCreateCall = lastMultiBar!.create.mock.calls[1] as [
+      number,
+      number,
+      object,
+      { format: string },
+    ]
+    expect(groupCreateCall[3].format).toContain('{bar}')
+    expect(groupCreateCall[3].format).toContain('{value}/{total}')
+    expect(groupCreateCall[3].format).toContain('{unit}')
+    expect(groupCreateCall[3].format).toContain('{files}')
+    expect(groupCreateCall[3].format).toContain('{rows}')
+    expect(groupCreateCall[3].format).toContain('MyDataset')
+    // Kills the parts-suffix mutation: format must contain a parts arrow
+    expect(groupCreateCall[3].format).toContain('→ {parts} {partUnit}')
   })
 
-  it('given tracker without parts, when tracking group, then group bar format excludes value placeholder', () => {
+  it('given tracker without parts, when tracking group, then group bar format includes bar but omits parts placeholders', () => {
     // Arrange
     const sut = new ProgressReporter()
     const phase = sut.create('Test', 1)
@@ -236,18 +278,26 @@ describe('ProgressReporter', () => {
     // Act
     phase.trackGroup('MyDataset', false)
 
-    // Assert — 2nd create call is the group bar; extract format to use .not.toContain
+    // Assert — 2nd create call is the group bar; 4th arg carries the format
     const groupCreateCall = lastMultiBar!.create.mock.calls[1] as [
       number,
       number,
       object,
       { format: string },
     ]
-    expect(groupCreateCall[3].format).not.toContain('{value}')
-    // Kills L71 StringLiteral: empty template has none of these placeholders
+    expect(groupCreateCall[3].format).toContain('{bar}')
+    expect(groupCreateCall[3].format).toContain('{value}/{total}')
+    expect(groupCreateCall[3].format).toContain('{unit}')
     expect(groupCreateCall[3].format).toContain('{files}')
     expect(groupCreateCall[3].format).toContain('{rows}')
     expect(groupCreateCall[3].format).toContain('MyDataset')
+    // No parts arrow when withParts=false. The terminating placeholder is
+    // `{rowsUnit}` — anchoring on `$` kills mutations that append stray
+    // text in the false branch of the parts ternary.
+    expect(groupCreateCall[3].format).not.toContain('{parts}')
+    expect(groupCreateCall[3].format).not.toContain('{partUnit}')
+    expect(groupCreateCall[3].format).not.toContain('→')
+    expect(groupCreateCall[3].format).toMatch(/\{rowsUnit\}$/)
   })
 
   it('given non-TTY stderr, when tracking group, then group bar started with zero-initialized payload', () => {
@@ -259,10 +309,11 @@ describe('ProgressReporter', () => {
     // Act
     phase.trackGroup('DS', false)
 
-    // Assert
+    // Assert — placeholder total of 1 (not 0) so cli-progress doesn't
+    // render `value === total` as "complete" before any setTotal lands.
     const groupBar = lastMultiBar!.bars[1]
     expect(groupBar.start).toHaveBeenCalledWith(
-      0,
+      1,
       0,
       expect.objectContaining({
         files: 0,
@@ -271,6 +322,28 @@ describe('ProgressReporter', () => {
         rowsUnit: 'rows',
       })
     )
+  })
+
+  it('given a fresh tracker before any setTotal, when the group bar is created, then its initial total is the placeholder 1 (not 0)', () => {
+    // Arrange — `cli-progress` renders `value === total` as a fully-filled
+    // bar; an initial `(0, 0)` group bar therefore appears 100% complete
+    // before any data flows. The placeholder of 1 forces `0/1` (empty).
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+
+    // Act
+    phase.trackGroup('DS', false)
+
+    // Assert — the 2nd `multibar.create` call (1st is the parent bar) is
+    // the group bar; its total argument must be ≥ 1.
+    const groupCreateCall = lastMultiBar!.create.mock.calls[1] as [
+      number,
+      number,
+      object,
+      { format: string },
+    ]
+    expect(groupCreateCall[0]).toBe(1)
+    expect(groupCreateCall[1]).toBe(0)
   })
 
   it('given TTY stderr, when tracking group, then group bar start is not called', () => {
@@ -355,7 +428,7 @@ describe('ProgressReporter', () => {
     )
   })
 
-  it('given tracker with parts, when incrementParts called once, then group bar updated with unit "part"', () => {
+  it('given tracker with parts, when incrementParts called once, then group bar payload carries parts=1 and singular partUnit', () => {
     // Arrange
     const sut = new ProgressReporter()
     const phase = sut.create('Test', 1)
@@ -365,14 +438,14 @@ describe('ProgressReporter', () => {
     // Act
     tracker.incrementParts()
 
-    // Assert
+    // Assert — bar value driven by parts (no setTotal yet; withParts uses parts)
     expect(groupBar.update).toHaveBeenCalledWith(
       1,
-      expect.objectContaining({ unit: 'part' })
+      expect.objectContaining({ parts: 1, partUnit: 'part' })
     )
   })
 
-  it('given tracker with parts, when incrementParts is called, then group bar updates with incremented part count', () => {
+  it('given tracker with parts, when incrementParts is called twice, then group bar updates with incremented parts count and plural partUnit', () => {
     // Arrange
     const sut = new ProgressReporter()
     const phase = sut.create('Processing', 1)
@@ -386,7 +459,7 @@ describe('ProgressReporter', () => {
     // Assert
     expect(groupBar.update).toHaveBeenLastCalledWith(
       2,
-      expect.objectContaining({ unit: 'parts' })
+      expect.objectContaining({ parts: 2, partUnit: 'parts' })
     )
   })
 
@@ -556,8 +629,13 @@ describe('ProgressReporter', () => {
     )
   })
 
-  it('given setTotal called with count of zero, when invoked, then bar total is set to zero (the boundary is accepted)', () => {
-    // Arrange — kills the `count < 0` → `count <= 0` mutation: zero must pass.
+  it('given setTotal called with count of zero, when invoked, then the tracker stays in counter-only mode', () => {
+    // Arrange — `cli-progress` renders `total=0` as a garbage/empty bar,
+    // so an "empty fetch" reply (e.g. SOQL totalSize=0) must leave the bar
+    // alone and let the existing zero-state render. Asserts the `count <= 0`
+    // boundary in setTotal: zero must be rejected, AND a subsequent same-
+    // unit call should still establish the total (i.e. zero must NOT have
+    // latched the unit).
     const sut = new ProgressReporter()
     const phase = sut.create('Test', 1)
     const tracker = phase.trackGroup('DS')
@@ -565,14 +643,18 @@ describe('ProgressReporter', () => {
 
     // Act
     tracker.setTotal(0, 'rows')
+    tracker.setTotal(50, 'rows')
 
-    // Assert
-    expect(groupBar.setTotal).toHaveBeenCalledWith(0)
+    // Assert — zero is silently dropped; subsequent positive call lands
+    expect(groupBar.setTotal).toHaveBeenCalledTimes(1)
+    expect(groupBar.setTotal).toHaveBeenCalledWith(50)
   })
 
-  it('given non-TTY stderr and withParts tracker, when starting the group bar, then payload.unit is initialized to "parts"', () => {
-    // Arrange — kills the `{ unit: 'parts' }` → `{}` and `'parts'` → `''`
-    // mutations on the initial payload.
+  it('given non-TTY stderr and withParts tracker, when starting the group bar, then payload includes parts=0 and partUnit "parts"', () => {
+    // Arrange — kills the `{ parts: 0, partUnit: 'parts' }` → `{}` mutation
+    // on the initial payload, AND ensures the bar `unit` defaults to 'items'
+    // before any setTotal has landed (kills `unitLabel` undefined-case
+    // string-literal mutations).
     setStderrIsTTY(false)
     const sut = new ProgressReporter()
     const phase = sut.create('Test', 1)
@@ -580,18 +662,39 @@ describe('ProgressReporter', () => {
     // Act
     phase.trackGroup('DS', true)
 
-    // Assert
+    // Assert — see "zero-initialized payload" test for placeholder rationale.
     const groupBar = lastMultiBar!.bars[1]
     expect(groupBar.start).toHaveBeenCalledWith(
+      1,
       0,
-      0,
-      expect.objectContaining({ unit: 'parts' })
+      expect.objectContaining({ parts: 0, partUnit: 'parts', unit: 'items' })
     )
   })
 
-  it('given non-parts tracker, when addRows is called, then bar.update payload omits the unit field', () => {
-    // Arrange — kills the `if (withParts)` → `true` mutation in updateBar:
-    // when withParts=false the `unit` field must not be added to the payload.
+  it('given non-TTY stderr and tracker without parts, when starting the group bar, then payload omits parts and partUnit', () => {
+    // Arrange — kills the `(withParts ? {parts,partUnit} : {})` → `{}`
+    // inversion mutation, asserting the no-parts branch.
+    setStderrIsTTY(false)
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+
+    // Act
+    phase.trackGroup('DS', false)
+
+    // Assert
+    const groupBar = lastMultiBar!.bars[1]
+    const startCall = groupBar.start.mock.calls.at(-1) as
+      | [number, number, Record<string, unknown>]
+      | undefined
+    expect(startCall?.[2]).not.toHaveProperty('parts')
+    expect(startCall?.[2]).not.toHaveProperty('partUnit')
+  })
+
+  it('given non-parts tracker, when addRows is called, then bar.update payload omits parts and partUnit', () => {
+    // Arrange — kills the `if (withParts) { payload.parts = ...; payload.partUnit = ... }`
+    // → `true` mutation in updateBar: when withParts=false the parts payload
+    // fields must not be set. The bar `unit` is always present (it labels
+    // the bar's progress driver).
     const sut = new ProgressReporter()
     const phase = sut.create('Test', 1)
     const tracker = phase.trackGroup('DS', false)
@@ -604,7 +707,10 @@ describe('ProgressReporter', () => {
     const lastCall = groupBar.update.mock.calls.at(-1) as
       | [number, Record<string, unknown>]
       | undefined
-    expect(lastCall?.[1]).not.toHaveProperty('unit')
+    expect(lastCall?.[1]).not.toHaveProperty('parts')
+    expect(lastCall?.[1]).not.toHaveProperty('partUnit')
+    // bar driver unit is always present and defaults to 'items' before setTotal
+    expect(lastCall?.[1]).toHaveProperty('unit', 'items')
   })
 
   it.each([
@@ -662,9 +768,10 @@ describe('ProgressReporter', () => {
     tracker.addFiles(2)
     tracker.addRows(300)
 
-    // Assert — bar total reset to 0, value drops back to non-unit behaviour (0)
+    // Assert — bar total reverts to the placeholder (1, not 0) so the
+    // counter-only fallback renders empty, not "complete".
     expect(groupBar.setTotal).toHaveBeenNthCalledWith(1, 5)
-    expect(groupBar.setTotal).toHaveBeenLastCalledWith(0)
+    expect(groupBar.setTotal).toHaveBeenLastCalledWith(1)
     expect(groupBar.update).toHaveBeenLastCalledWith(0, expect.any(Object))
   })
 
@@ -688,6 +795,117 @@ describe('ProgressReporter', () => {
     expect(groupBar.update).toHaveBeenLastCalledWith(
       0,
       expect.objectContaining({ rows: 100 })
+    )
+  })
+
+  it('given setTotal with rows unit, when addRows lands a singular value, then payload.unit reads "row"', () => {
+    // Arrange — kills the `value === 1` boundary mutation in unitLabel for the
+    // rows case (would otherwise read 'rows' for a 1-row bar value).
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(10, 'rows')
+    tracker.addRows(1)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      1,
+      expect.objectContaining({ unit: 'row' })
+    )
+  })
+
+  it('given setTotal with rows unit, when addRows lands a plural value, then payload.unit reads "rows"', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(100, 'rows')
+    tracker.addRows(50)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      50,
+      expect.objectContaining({ unit: 'rows' })
+    )
+  })
+
+  it('given setTotal with files unit, when addFiles lands a singular value, then payload.unit reads "file"', () => {
+    // Arrange — kills the `value === 1` boundary mutation in unitLabel for files.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(10, 'files')
+    tracker.addFiles(1)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      1,
+      expect.objectContaining({ unit: 'file' })
+    )
+  })
+
+  it('given setTotal with files unit, when addFiles lands a plural value, then payload.unit reads "files"', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(10, 'files')
+    tracker.addFiles(3)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      3,
+      expect.objectContaining({ unit: 'files' })
+    )
+  })
+
+  it('given setTotal with bytes unit, when addBytes lands, then payload.unit reads "bytes"', () => {
+    // Arrange
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(2048, 'bytes')
+    tracker.addBytes(1024)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      1024,
+      expect.objectContaining({ unit: 'bytes' })
+    )
+  })
+
+  it('given mixed-unit fallback, when addRows is called afterwards, then payload.unit reverts to "items"', () => {
+    // Arrange — kills the unitLabel undefined-case mutation: fallback must
+    // re-label the bar driver as the neutral 'items'.
+    const sut = new ProgressReporter()
+    const phase = sut.create('Test', 1)
+    const tracker = phase.trackGroup('DS')
+    const groupBar = lastMultiBar!.bars[1]
+
+    // Act
+    tracker.setTotal(5, 'files')
+    tracker.setTotal(1000, 'rows')
+    tracker.addRows(50)
+
+    // Assert
+    expect(groupBar.update).toHaveBeenLastCalledWith(
+      0,
+      expect.objectContaining({ unit: 'items', rows: 50 })
     )
   })
 

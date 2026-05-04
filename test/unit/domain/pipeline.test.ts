@@ -750,8 +750,88 @@ describe('executePipeline (streaming)', () => {
     expect(tracker.addRows).toHaveBeenCalledTimes(1)
   })
 
-  it('given fetch result with rows total, when executing, then sets tracker total before streaming', async () => {
-    // Arrange
+  it('given fetch result with bytes total, when streaming completes, then end-of-entry still calls addFiles with the reader fileCount', async () => {
+    // Arrange — kills the `ownsFileCounter: false` → `true` mutation in the
+    // bytes branch of planCounterTransform. The bytes counter transform
+    // streams *bytes*, not files, so the end-of-entry reconciliation must
+    // still emit the final files count.
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['"row"']
+      })(),
+      watermark: () => watermark,
+      fileCount: () => 1,
+      total: {
+        count: 12,
+        unit: 'bytes' as const,
+        bytesRead: vi.fn().mockReturnValue(12),
+      },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — bytes-unit total drives addBytes, but the reader-level
+    // fileCount still lands via the end-of-entry reconciliation.
+    expect(tracker.addFiles).toHaveBeenCalledTimes(1)
+    expect(tracker.addFiles).toHaveBeenCalledWith(1)
+  })
+
+  it('given fetch result with files total, when streaming completes, then end-of-entry skips addFiles to avoid double-counting transform-reported deltas', async () => {
+    // Arrange — when the source-side counter transform owns the files
+    // counter (unit='files'), the per-batch + flush-time deltas already
+    // reach the tracker. The end-of-entry reconciliation must skip
+    // `addFiles(fileCount)` to avoid double-counting.
+    const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
+    const fetcher = mockFetcher(async () => ({
+      lines: (async function* () {
+        yield ['"r1"']
+      })(),
+      watermark: () => watermark,
+      fileCount: () => 2,
+      total: {
+        count: 7,
+        unit: 'files' as const,
+        // Transform polls this on each batch then once more on flush.
+        filesRead: vi.fn().mockReturnValueOnce(1).mockReturnValueOnce(2),
+      },
+    }))
+    const tracker = createMockGroupTracker()
+    const progress = createMockProgress(tracker)
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert — transform's per-batch tick contributes 1, flush contributes
+    // another 1; the end-of-entry addFiles is suppressed (skipAddFiles=true).
+    expect(tracker.addFiles).toHaveBeenCalledTimes(2)
+    expect(tracker.addFiles).toHaveBeenNthCalledWith(1, 1)
+    expect(tracker.addFiles).toHaveBeenNthCalledWith(2, 1)
+  })
+
+  it('given fetch result with rows total, when executing, then sets tracker total before streaming and calls addFiles end-of-entry', async () => {
+    // Arrange — kills the `ownsFileCounter: false` → `true` mutation in the
+    // rows fall-through of planCounterTransform: rows readers do NOT use
+    // the counter transform (writer reports rows via onRowsWritten), so
+    // the end-of-entry reconciliation must still fire addFiles with the
+    // reader's fileCount.
     const watermark = Watermark.fromString('2026-03-01T00:00:00.000Z')
     const fetcher = mockFetcher(async () => ({
       lines: (async function* () {
@@ -777,6 +857,8 @@ describe('executePipeline (streaming)', () => {
     // Assert
     expect(tracker.setTotal).toHaveBeenCalledWith(99, 'rows')
     expect(tracker.setTotal).toHaveBeenCalledTimes(1)
+    expect(tracker.addFiles).toHaveBeenCalledTimes(1)
+    expect(tracker.addFiles).toHaveBeenCalledWith(1)
   })
 
   it('given fetch result without total, when executing, then setTotal is not called', async () => {
@@ -799,10 +881,14 @@ describe('executePipeline (streaming)', () => {
     expect(tracker.setTotal).not.toHaveBeenCalled()
   })
 
-  it('given two entries sharing reader and dataset, when total is set, then setTotal is called once on the shared tracker', async () => {
+  it('given two entries sharing reader and dataset with files total, when streaming completes, then setTotal is called once and end-of-entry addFiles is suppressed', async () => {
     // Arrange — two entries collapse into a single slot (shared dataset) and
     // a single bundle (shared reader); the dedup must avoid announcing the
-    // total twice on the same tracker.
+    // total twice on the same tracker. This also covers the fan-out
+    // (`pipeFanOutEntries`) path's `plan.ownsFileCounter === true` flag —
+    // for files unit the transform owns the counter, so end-of-entry
+    // addFiles must NOT fire on either sink (would double-count under
+    // fan-out twice over).
     const readerKey = ReaderKey.forElf(
       'prod',
       'Login',
@@ -824,7 +910,11 @@ describe('executePipeline (streaming)', () => {
       })(),
       watermark: () => Watermark.fromString('2024-01-02T00:00:00.000Z'),
       fileCount: () => 1,
-      total: { count: 5, unit: 'files' as const },
+      total: {
+        count: 5,
+        unit: 'files' as const,
+        filesRead: () => 0,
+      },
     }))
     const tracker = createMockGroupTracker()
     const progress = createMockProgress(tracker)
@@ -858,6 +948,10 @@ describe('executePipeline (streaming)', () => {
     // Assert
     expect(tracker.setTotal).toHaveBeenCalledTimes(1)
     expect(tracker.setTotal).toHaveBeenCalledWith(5, 'files')
+    // Transform read filesRead() and saw 0 deltas, so no addFiles from
+    // the transform side. End-of-entry must skip addFiles too (files unit
+    // owns the counter). Net: zero calls on either sink.
+    expect(tracker.addFiles).not.toHaveBeenCalled()
   })
 
   it('given two entries sharing reader and dataset with bytesRead, when streaming, then addBytes is called once per batch on the shared tracker', async () => {
@@ -921,6 +1015,13 @@ describe('executePipeline (streaming)', () => {
     // Assert — single addBytes call despite two sinks sharing the tracker
     expect(tracker.addBytes).toHaveBeenCalledTimes(1)
     expect(tracker.addBytes).toHaveBeenCalledWith(3)
+    // bytes-unit fan-out: end-of-entry addFiles still fires (per sink)
+    // because the bytes transform doesn't own the files counter. Kills
+    // the `plan.ownsFileCounter === true` → `true` mutation in the
+    // fan-out path.
+    expect(tracker.addFiles).toHaveBeenCalledTimes(2)
+    expect(tracker.addFiles).toHaveBeenNthCalledWith(1, 1)
+    expect(tracker.addFiles).toHaveBeenNthCalledWith(2, 1)
   })
 
   it('given fetch result with bytesRead, when streaming batches, then addBytes is called per batch with bytesRead deltas', async () => {

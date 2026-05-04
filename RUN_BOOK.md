@@ -168,12 +168,18 @@ Returns:
 
 ### Progress Bars
 
-During execution, a main progress bar tracks overall entry progress, with per-group sub-bars showing real-time fetch and upload stats:
+During execution, a main progress bar tracks overall entry progress, with per-group sub-bars showing real-time fetch and upload stats. Each sub-bar's visual `{bar} {value}/{total} {unit}` is driven by whichever workload size the reader knows up-front:
+
+- **ELF** — total = `EventLogFile` SOQL count; unit = `files`. The `filesProcessed` counter is polled per batch and reconciled at stream end, so the bar advances live as each blob completes.
+- **CSV** — total = file size in bytes; unit = `bytes`. The Node `ReadStream`'s cumulative `bytesRead` drives the bar.
+- **SObject** — total = `firstPage.totalSize` (post-`LIMIT`); unit = `rows`. Rows are reported via the writer's `onRowsWritten` listener as batches land in the chunker.
+- Until a total is declared (or if two readers fan into the same dataset with mismatched units), the bar reads `0/0 items` in counter-only mode while the `{files}`, `{rows}`, and `{parts}` counters still tick.
 
 ```bash
 Processing ████████████████████░░░░░░░░░░░░░░░░░░░░ 2/5 items | 3s elapsed
-  ElfDS1 (06V000000000001) — 2 files, 4992 rows → 1 part
-  AcctDS (06V000000000002) — 1 file, 150 rows → 0 parts
+  ElfDS1 ████████████░░░░░░░░░░░░░░░░░░░░ 12/30 files | 12 files, 4992 rows → 1 part
+  AcctDS ████████░░░░░░░░░░░░░░░░░░░░░░░░ 150/600 rows | 1 file, 150 rows → 0 parts
+  EventsCsv ███████████░░░░░░░░░░░░░░░░░░ 18874368/52428800 bytes | 1 file, 9438 rows
 ```
 
 Progress bars are displayed only in TTY mode and suppressed with `--json`.

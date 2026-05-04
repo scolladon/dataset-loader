@@ -58,7 +58,12 @@ describe('ElfReader', () => {
     expect(lines).toHaveLength(0)
     expect(result.fileCount()).toBe(0)
     expect(result.watermark()).toBeUndefined()
-    expect(result.total).toEqual({ count: 0, unit: 'files' })
+    expect(result.total).toMatchObject({ count: 0, unit: 'files' })
+    // empty-result branch returns a stable filesRead always reporting 0
+    expect(result.total?.unit).toBe('files')
+    if (result.total?.unit === 'files') {
+      expect(result.total.filesRead()).toBe(0)
+    }
   })
 
   it('given firstPage with totalSize, when fetching, then total reports file count', async () => {
@@ -81,8 +86,44 @@ describe('ElfReader', () => {
     const result = await sut.fetch()
     await collectLines(result.lines)
 
-    // Assert
-    expect(result.total).toEqual({ count: 7, unit: 'files' })
+    // Assert — total carries the SOQL totalSize and a filesRead callback
+    // that, after the stream drains, reports the number of blobs processed.
+    expect(result.total).toMatchObject({ count: 7, unit: 'files' })
+    expect(result.total?.unit).toBe('files')
+    if (result.total?.unit === 'files') {
+      expect(result.total.filesRead()).toBe(1)
+    }
+  })
+
+  it('given multiple records, when fetching, then filesRead advances as blobs complete', async () => {
+    // Arrange — three blobs whose processing closures all fire `filesProcessed++`.
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 3,
+        done: true,
+        records: [
+          { Id: '0AT1', LogDate: '2026-03-01T00:00:00.000Z', LogFile: '' },
+          { Id: '0AT2', LogDate: '2026-03-02T00:00:00.000Z', LogFile: '' },
+          { Id: '0AT3', LogDate: '2026-03-03T00:00:00.000Z', LogFile: '' },
+        ],
+      }),
+      getBlobStream: vi.fn(async () =>
+        Readable.from([Buffer.from('hdr\ndata\n')])
+      ),
+    })
+
+    // Act
+    const sut = new ElfReader(sfPort, 'Login', 'Daily')
+    const result = await sut.fetch()
+    expect(result.total?.unit).toBe('files')
+    if (result.total?.unit !== 'files') return
+    // Before draining, no blobs have been processed.
+    expect(result.total.filesRead()).toBe(0)
+    await collectLines(result.lines)
+
+    // Assert — after draining, all three blobs are accounted for.
+    expect(result.total.filesRead()).toBe(3)
+    expect(result.fileCount()).toBe(3)
   })
 
   it('given watermark, when fetching, then includes watermark in SOQL', async () => {

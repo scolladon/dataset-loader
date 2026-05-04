@@ -46,6 +46,7 @@ src/
     └── pipeline/
         ├── async-channel.ts    # In-memory async channel
         ├── augment-transform.ts # Appends extra columns to CSV lines
+        ├── counter-progress-transform.ts # Polls a cumulative byte/file counter and reports deltas to the tracker
         ├── fan-in-stream.ts    # Merges multiple sources into one stream
         └── fan-out-transform.ts # Tees a stream to multiple writable channels
 
