@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.4.1](https://github.com/scolladon/dataset-loader/compare/v1.4.0...v1.4.1) (2026-05-04)
+
+
+### Bug Fixes
+
+* **progress:** live per-reader progress bar with correct unit and visual fill ([#39](https://github.com/scolladon/dataset-loader/issues/39)) ([718c2ce](https://github.com/scolladon/dataset-loader/commit/718c2cecff2842bffe168b21b98af5eb07a6eb36))
+
 ## [1.4.0](https://github.com/scolladon/dataset-loader/compare/v1.3.0...v1.4.0) (2026-04-27)
 
 
