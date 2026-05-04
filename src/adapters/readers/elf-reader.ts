@@ -60,7 +60,11 @@ export class ElfReader implements ReaderPort {
         })(),
         watermark: () => undefined,
         fileCount: () => 0,
-        total: { count: firstPage.totalSize, unit: 'files' },
+        total: {
+          count: firstPage.totalSize,
+          unit: 'files',
+          filesRead: () => 0,
+        },
       }
     }
 
@@ -164,7 +168,11 @@ export class ElfReader implements ReaderPort {
       })(),
       watermark: () => Watermark.fromString(lastRecord.LogDate),
       fileCount: () => filesProcessed,
-      total: { count: firstPage.totalSize, unit: 'files' },
+      total: {
+        count: firstPage.totalSize,
+        unit: 'files',
+        filesRead: () => filesProcessed,
+      },
     }
   }
 }

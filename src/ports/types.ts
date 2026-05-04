@@ -64,13 +64,17 @@ export type ReaderKind = 'sobject' | 'elf' | 'csv'
 
 export type ProgressUnit = 'rows' | 'files' | 'bytes'
 
-// Discriminated by `unit`. `bytes` requires a source-side cumulative byte
-// counter so the pipeline can drive progress without re-encoding payload;
-// other units carry only `count` because their progress is observed at the
-// batch boundary by the existing tracker counters.
+// Discriminated by `unit`. `bytes` and `files` carry a source-side
+// cumulative counter so the pipeline can drive a live progress bar without
+// re-encoding payload; `rows` reports its progress at the batch boundary
+// via the writer's `onRowsWritten` listener instead.
 type ProgressTotal =
   | { readonly unit: 'rows'; readonly count: number }
-  | { readonly unit: 'files'; readonly count: number }
+  | {
+      readonly unit: 'files'
+      readonly count: number
+      readonly filesRead: () => number
+    }
   | {
       readonly unit: 'bytes'
       readonly count: number
