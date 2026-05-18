@@ -802,4 +802,138 @@ describe('SalesforceClient', () => {
       expect(sfClient.apiVersion).toBe('62.0')
     })
   })
+
+  describe('describe', () => {
+    it('given a sObject name, when called, then sends GET to the sObject describe endpoint and projects to the narrow DescribeField shape', async () => {
+      // Arrange — full SF describe payload has many extra attrs; the adapter
+      // projects down to the narrow DescribeField shape the synthesiser consumes.
+      requestSpy.mockResolvedValue({
+        name: 'User',
+        custom: false,
+        keyPrefix: '005',
+        fields: [
+          {
+            name: 'Id',
+            label: 'User ID',
+            type: 'id',
+            precision: 0,
+            scale: 0,
+            referenceTo: [],
+            relationshipName: null,
+            extraAttr: 'ignored',
+          },
+          {
+            name: 'ProfileId',
+            label: 'Profile ID',
+            type: 'reference',
+            referenceTo: ['Profile'],
+            relationshipName: 'Profile',
+          },
+        ],
+      })
+
+      // Act
+      const result = await sut.describe('User')
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledWith({
+        method: 'GET',
+        url: '/services/data/v62.0/sobjects/User/describe',
+        headers: { 'Accept-Encoding': 'gzip' },
+      })
+      expect(result).toEqual({
+        name: 'User',
+        fields: [
+          {
+            name: 'Id',
+            label: 'User ID',
+            type: 'id',
+            precision: 0,
+            scale: 0,
+            referenceTo: [],
+            relationshipName: null,
+          },
+          {
+            name: 'ProfileId',
+            label: 'Profile ID',
+            type: 'reference',
+            precision: undefined,
+            scale: undefined,
+            referenceTo: ['Profile'],
+            relationshipName: 'Profile',
+          },
+        ],
+      })
+    })
+
+    it('given two sequential calls for the same sObject, when called, then exactly one underlying request fires', async () => {
+      // Arrange
+      requestSpy.mockResolvedValue({ name: 'User', fields: [] })
+
+      // Act
+      await sut.describe('User')
+      await sut.describe('User')
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('given two concurrent calls for the same sObject, when awaited, then exactly one in-flight request fires and both resolve to the same payload', async () => {
+      // Arrange — never resolve the request until both callers have arrived,
+      // proving the cache shares the in-flight Promise, not the resolved value.
+      let resolveRequest!: (value: unknown) => void
+      const pending = new Promise(resolve => {
+        resolveRequest = resolve
+      })
+      requestSpy.mockReturnValue(pending)
+
+      // Act
+      const a = sut.describe('User')
+      const b = sut.describe('User')
+      resolveRequest({ name: 'User', fields: [] })
+      const [resA, resB] = await Promise.all([a, b])
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(1)
+      expect(resA).toEqual(resB)
+    })
+
+    it('given different sObjects, when called, then each fires its own request', async () => {
+      // Arrange
+      requestSpy.mockImplementation(({ url }: { url: string }) =>
+        Promise.resolve({
+          name: url.split('/').slice(-2, -1)[0],
+          fields: [],
+        })
+      )
+
+      // Act
+      await sut.describe('User')
+      await sut.describe('Profile')
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('given the underlying request fails, when called, then the formatted SF error propagates and the failure is NOT cached', async () => {
+      // Arrange
+      requestSpy
+        .mockRejectedValueOnce(
+          Object.assign(new Error('INVALID_TYPE'), {
+            data: [
+              { errorCode: 'INVALID_TYPE', message: 'sObject not supported' },
+            ],
+          })
+        )
+        .mockResolvedValueOnce({ name: 'User', fields: [] })
+
+      // Act / Assert — first call surfaces a formatted error
+      await expect(sut.describe('User')).rejects.toThrow(/INVALID_TYPE/)
+
+      // Act / Assert — second call retries (cache must not memoise failures)
+      const result = await sut.describe('User')
+      expect(result).toEqual({ name: 'User', fields: [] })
+      expect(requestSpy).toHaveBeenCalledTimes(2)
+    })
+  })
 })

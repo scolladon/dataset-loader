@@ -53,6 +53,7 @@ export function createMockSfPort(
     post: vi.fn(),
     patch: vi.fn(),
     del: vi.fn(),
+    describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
     apiVersion: '62.0',
   }
 }

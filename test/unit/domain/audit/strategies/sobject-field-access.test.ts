@@ -115,6 +115,7 @@ describe('SObject read access check', () => {
       post: vi.fn(),
       patch: vi.fn(),
       del: vi.fn(),
+      describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
     }
     const entries = [
       auditEntryOf({

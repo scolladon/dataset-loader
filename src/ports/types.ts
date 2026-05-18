@@ -166,6 +166,24 @@ export interface CreateWriterPort {
   ): Writer
 }
 
+// Narrow subset of SF Describe — only the fields the synthesiser consumes.
+// Full Describe payloads carry hundreds of attributes per field; we project
+// down at the adapter boundary so the domain never sees the wide shape.
+export interface DescribeField {
+  readonly name: string
+  readonly label: string
+  readonly type: string
+  readonly precision?: number
+  readonly scale?: number
+  readonly referenceTo?: readonly string[]
+  readonly relationshipName?: string | null
+}
+
+export interface SObjectDescribe {
+  readonly name: string
+  readonly fields: readonly DescribeField[]
+}
+
 export interface SalesforcePort {
   readonly apiVersion: string
   query<T>(soql: string): Promise<QueryResult<T>>
@@ -175,6 +193,7 @@ export interface SalesforcePort {
   post<T>(path: string, body: Record<string, unknown>): Promise<T>
   patch<T>(path: string, body: Record<string, unknown>): Promise<T>
   del(path: string): Promise<void>
+  describe(sobjectName: string): Promise<SObjectDescribe>
 }
 
 export interface StatePort {
