@@ -93,7 +93,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     const watermarks = await state.read()
 
     if (inputs.dryRun) {
-      return new DryRunRenderer(logger).render(
+      return new DryRunRenderer(logger, sfPorts).render(
         filtered,
         watermarks,
         inputs.bounds
