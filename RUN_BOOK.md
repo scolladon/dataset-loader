@@ -244,7 +244,7 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 ### Audit FAIL: "{org}: {sObject} read access"
 
 - **Symptom**: `[FAIL] <org>: <sObject> read access: ...` in audit output. Often paired with a Salesforce error like `INSUFFICIENT_ACCESS`, `INVALID_TYPE`, or `sObject type '<name>' is not supported`.
-- **Cause**: The authenticated user lacks read permission on the queried SObject in the source org. The `sobjectReadAccess` strategy issues `SELECT Id FROM <sObject> LIMIT 1`; anything that rejects this query surfaces here — CRUD-level denial, a missing profile assignment, a standard object disabled for the user's license, or a typo in the config's `sObject` value.
+- **Cause**: The authenticated user lacks read permission on the queried SObject or one of its fields in the source org. The `sobjectReadAccess` strategy issues `SELECT <fields> FROM <sObject> WITH SECURITY_ENFORCED LIMIT 1`; anything that rejects this query surfaces here — CRUD-level denial, FLS-level denial on a specific field, a missing profile assignment, a standard object disabled for the user's license, or a typo in the config's `sObject` / `fields` values. (The one exception is entities Salesforce blocks from `WITH SECURITY_ENFORCED`, which degrade to `[WARN]` — see below.)
 - **Resolution**:
   1. Confirm the SObject name is spelled correctly (case-sensitive API name, including `__c` suffix for custom objects).
   2. In Setup → Users, find the CLI user and verify their Profile and assigned Permission Sets grant **Read** on the object.
@@ -283,6 +283,12 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
   - `No prior EventLogFile for <type>/<interval>; schema check skipped` — there's no blob to compare against. A real run would load zero rows anyway (no data to check).
   - `Schema casing differs from dataset metadata; dataset will keep its canonical casing` — source column names differ only in letter case from the dataset's; CRM Analytics keeps the dataset's canonical casing, so this is harmless but flagged for visibility.
 - **Resolution**: No action required. WARN does not set a non-zero exit code.
+
+### Audit WARN: "FLS not enforced for {sObject}"
+
+- **Symptom**: `[WARN] <org>: <sObject> read access: FLS not enforced for <sObject>: WITH SECURITY_ENFORCED unsupported on this entity`. Typically seen for `User`, `UserLogin`, and a handful of other standard objects.
+- **Cause**: Salesforce rejects `WITH SECURITY_ENFORCED` on certain entities (the SOQL parser returns `SECURITY_ENFORCED not allowed in this context`). The `sobjectReadAccess` strategy detects that specific error and re-probes the same projection without `WITH SECURITY_ENFORCED` — the query still verifies the entity is queryable and every field name resolves, but field-level security is not asserted by the audit.
+- **Resolution**: No action required for the audit to pass; WARN is non-blocking. If FLS coverage on that entity matters to you, verify it out-of-band (Setup → Object Manager → Field Accessibility, or `sf sobject describe`) and confirm the running user's Profile/Permission Sets grant Read on every field listed under the entry's `fields` config.
 
 ### "Cannot share SObject reader across sinks with divergent projections"
 
