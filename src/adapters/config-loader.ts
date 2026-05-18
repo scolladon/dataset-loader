@@ -23,6 +23,7 @@ interface BaseEntry {
   readonly targetFile?: string
   readonly operation: Operation
   readonly augmentColumns?: Record<string, string>
+  readonly overrideMetadata: boolean
 }
 
 export interface ElfEntry extends BaseEntry, ElfShape {
@@ -42,6 +43,7 @@ export interface CsvEntry extends CsvShape {
   targetFile?: string
   operation: Operation
   augmentColumns?: Record<string, string>
+  overrideMetadata: boolean
 }
 
 export type ConfigEntry = ElfEntry | SObjectEntry | CsvEntry
@@ -133,6 +135,36 @@ function validateTargetFields(
   }
 }
 
+function validateOverrideMetadata(
+  entry: {
+    overrideMetadata?: boolean
+    operation?: Operation
+    targetOrg?: string
+  },
+  ctx: z.RefinementCtx
+): void {
+  if (!entry.overrideMetadata) return
+
+  if (!entry.targetOrg) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'overrideMetadata requires targetOrg — file targets have no dataset to override',
+      path: ['overrideMetadata'],
+    })
+    return
+  }
+
+  if (entry.operation !== 'Overwrite') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "overrideMetadata: true requires operation: 'Overwrite' because CRMA rejects schema changes on Append (FIELD_INTEGRITY_EXCEPTION)",
+      path: ['overrideMetadata'],
+    })
+  }
+}
+
 function rejectAugmentColumns(
   columns: Record<string, string>,
   predicate: (value: string) => boolean,
@@ -162,6 +194,7 @@ const targetFields = {
     .optional(),
   operation: z.enum(['Append', 'Overwrite']).default('Append'),
   augmentColumns: z.record(datasetColumnName, z.string()).optional(),
+  overrideMetadata: z.boolean().default(false),
 } as const
 
 const baseEntrySchema = z
@@ -172,6 +205,7 @@ const baseEntrySchema = z
   })
   .superRefine((entry, ctx) => {
     validateTargetFields(entry, ctx)
+    validateOverrideMetadata(entry, ctx)
     if (!entry.targetOrg && entry.augmentColumns) {
       rejectAugmentColumns(
         entry.augmentColumns,
@@ -269,6 +303,7 @@ const csvEntrySchema = z
   .strict()
   .superRefine((entry, ctx) => {
     validateTargetFields(entry, ctx)
+    validateOverrideMetadata(entry, ctx)
     if (entry.augmentColumns) {
       rejectAugmentColumns(
         entry.augmentColumns,
@@ -419,6 +454,29 @@ function validateAugmentColumnConsistency(entries: ConfigEntry[]): void {
   }
 }
 
+function validateOverrideMetadataConsistency(entries: ConfigEntry[]): void {
+  const groups = groupEntriesByDatasetKey(entries)
+
+  for (const [, { datasetKey, ops }] of groups) {
+    const groupEntries = ops.flatMap(o => o.indices)
+    if (groupEntries.length < 2) continue
+
+    const truthy: number[] = []
+    const falsy: number[] = []
+    for (const i of groupEntries) {
+      if (entries[i].overrideMetadata) truthy.push(i)
+      else falsy.push(i)
+    }
+    if (truthy.length > 0 && falsy.length > 0) {
+      throw new Error(
+        `Entries targeting '${datasetKey.toString()}' have inconsistent overrideMetadata: ` +
+          `true (entries ${truthy.join(', ')}) vs false (entries ${falsy.join(', ')}). ` +
+          `All entries that fan out to the same dataset must agree on overrideMetadata.`
+      )
+    }
+  }
+}
+
 function validateSObjectFieldConsistency(entries: ConfigEntry[]): void {
   const groups = groupEntriesByDatasetKey(entries)
 
@@ -475,6 +533,7 @@ export async function parseConfig(configPath: string): Promise<Config> {
   validateNameUniqueness(config.entries)
   validateAugmentColumnConsistency(config.entries)
   validateSObjectFieldConsistency(config.entries)
+  validateOverrideMetadataConsistency(config.entries)
   return config
 }
 
