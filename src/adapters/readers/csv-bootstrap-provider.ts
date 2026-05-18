@@ -1,10 +1,11 @@
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { parseCsvHeader } from '../../domain/column-name.js'
+import { type SourceSchema } from '../../domain/metadata-types.js'
 import {
-  type SourceField,
-  type SourceSchema,
-} from '../../domain/metadata-types.js'
+  appendAugmentFields,
+  readerTextField,
+} from '../../domain/source-schema-builder.js'
 import type { BootstrapMetadataProvider } from '../../ports/types.js'
 
 export interface CsvBootstrapInput {
@@ -29,20 +30,8 @@ export class CsvBootstrapProvider implements BootstrapMetadataProvider {
         `CSV bootstrap requires at least one header line in '${this.input.filePath}'`
       )
     }
-    const fields: SourceField[] = columns.map(name => ({
-      name,
-      label: name,
-      type: 'Text' as const,
-      origin: 'reader' as const,
-    }))
-    for (const augKey of Object.keys(this.input.augmentColumns)) {
-      fields.push({
-        name: augKey,
-        label: augKey,
-        type: 'Text',
-        origin: 'augment',
-      })
-    }
+    const fields = columns.map(readerTextField)
+    appendAugmentFields(fields, this.input.augmentColumns)
     return {
       datasetName: this.input.datasetName,
       label: this.input.datasetName,

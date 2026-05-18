@@ -3,6 +3,7 @@ import {
   type SourceField,
   type SourceSchema,
 } from '../../domain/metadata-types.js'
+import { appendAugmentFields } from '../../domain/source-schema-builder.js'
 import type {
   BootstrapMetadataProvider,
   DescribeField,
@@ -38,14 +39,7 @@ export class SObjectBootstrapProvider implements BootstrapMetadataProvider {
     for (const path of this.input.fields) {
       fields.push(await this.resolveField(path))
     }
-    for (const augKey of Object.keys(this.input.augmentColumns)) {
-      fields.push({
-        name: augKey,
-        label: augKey,
-        type: 'Text',
-        origin: 'augment',
-      })
-    }
+    appendAugmentFields(fields, this.input.augmentColumns)
     return {
       datasetName: this.input.datasetName,
       label: this.input.datasetName,

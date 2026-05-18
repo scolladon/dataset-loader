@@ -43,7 +43,7 @@ export interface SourceSchema {
 // accepts more (canBeIndexed, isMultiValue, multiValueSeparator,
 // fiscalMonthOffset, etc.) but those are not required for a bootstrap and can
 // be added incrementally without breaking the wire format.
-export interface CrmaFileFormat {
+interface CrmaFileFormat {
   readonly charsetName: 'UTF-8'
   readonly fieldsDelimitedBy: ','
   readonly fieldsEnclosedBy: '"'

@@ -1,8 +1,9 @@
 import { parseCsvHeader } from '../../domain/column-name.js'
+import { type SourceSchema } from '../../domain/metadata-types.js'
 import {
-  type SourceField,
-  type SourceSchema,
-} from '../../domain/metadata-types.js'
+  appendAugmentFields,
+  readerTextField,
+} from '../../domain/source-schema-builder.js'
 import type {
   BootstrapMetadataProvider,
   QueryResult,
@@ -39,20 +40,8 @@ export class ElfBootstrapProvider implements BootstrapMetadataProvider {
       )
     }
     const columns = parseCsvHeader(header)
-    const fields: SourceField[] = columns.map(name => ({
-      name,
-      label: name,
-      type: 'Text' as const,
-      origin: 'reader' as const,
-    }))
-    for (const augKey of Object.keys(this.input.augmentColumns)) {
-      fields.push({
-        name: augKey,
-        label: augKey,
-        type: 'Text',
-        origin: 'augment',
-      })
-    }
+    const fields = columns.map(readerTextField)
+    appendAugmentFields(fields, this.input.augmentColumns)
     return {
       datasetName: this.input.datasetName,
       label: this.input.datasetName,

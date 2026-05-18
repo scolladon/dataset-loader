@@ -36,10 +36,15 @@ export const schemaAlignment: AuditCheckStrategy = {
   select: selectByDataset,
   label: (org, key) => `${org}: dataset '${key}' schema alignment`,
   evaluate: async (sfPort, key, entry, ctx) => {
-    const datasetFields = await resolveDatasetFields(sfPort, key, entry, ctx)
-    if (!datasetFields.ok) return datasetFields.outcome
+    // Order matters: providedFields-first lets ELF (no prior log) and CSV
+    // (missing file) short-circuit to their precise WARN/FAIL before we
+    // attempt synthesis. Otherwise the bootstrap path would throw
+    // `ELF bootstrap requires …` and surface as a generic synthesis FAIL,
+    // losing the original audit's actionable message.
     const providedFields = await requireProvidedFields(entry, ctx)
     if (!providedFields.ok) return providedFields.outcome
+    const datasetFields = await resolveDatasetFields(sfPort, key, entry, ctx)
+    if (!datasetFields.ok) return datasetFields.outcome
     return runSchemaChecks(
       entry,
       key,
