@@ -36,9 +36,7 @@ export const schemaAlignment: AuditCheckStrategy = {
   select: selectByDataset,
   label: (org, key) => `${org}: dataset '${key}' schema alignment`,
   evaluate: async (sfPort, key, entry, ctx) => {
-    const metadata = await requireMetadata(sfPort, key)
-    if (!metadata.ok) return metadata.outcome
-    const datasetFields = requireDatasetFields(metadata.value, key)
+    const datasetFields = await resolveDatasetFields(sfPort, key, entry, ctx)
     if (!datasetFields.ok) return datasetFields.outcome
     const providedFields = await requireProvidedFields(entry, ctx)
     if (!providedFields.ok) return providedFields.outcome
@@ -51,15 +49,49 @@ export const schemaAlignment: AuditCheckStrategy = {
   },
 }
 
-async function requireMetadata(
+// Decision matrix (mirrors `docs/design/2026-05-18-bootstrap-new-dataset-upload.md`
+// §Audit integration):
+//
+//   metadata absent  | any override   → synthesised
+//   metadata present | override=false → existing  (current behaviour)
+//   metadata present | override=true  → synthesised
+//
+// Graceful degradation: if no provider is wired into the audit context (e.g.
+// legacy callers, audit-only tests), the synthesised branch returns pass() so
+// the audit silently steps aside — the writer's own resolveMetadata chain
+// remains the source of truth for the load itself.
+async function resolveDatasetFields(
   sfPort: SalesforcePort,
-  key: string
-): Promise<StageResult<string>> {
+  key: string,
+  entry: AuditEntry,
+  ctx: AuditContext
+): Promise<StageResult<readonly string[]>> {
   const metadata = await fetchMetadata(sfPort, key)
-  // datasetReady has already FAILed if metadata is missing; nothing to compare
-  // against, so treat as pass and let datasetReady speak for itself.
-  if (!metadata) return halt(pass())
-  return stage(metadata)
+  const useSynthesised = !metadata || entry.overrideMetadata === true
+  if (useSynthesised) {
+    return resolveSynthesisedDatasetFields(entry, ctx, key)
+  }
+  return requireDatasetFields(metadata as string, key)
+}
+
+async function resolveSynthesisedDatasetFields(
+  entry: AuditEntry,
+  ctx: AuditContext,
+  key: string
+): Promise<StageResult<readonly string[]>> {
+  if (!ctx.bootstrapProviderFor) return halt(pass())
+  try {
+    const schema = await ctx.bootstrapProviderFor(entry).buildSourceSchema()
+    return stage(schema.fields.map(f => f.name))
+  } catch (err: unknown) {
+    /* v8 ignore next -- providers throw Error subclasses only; defensive */
+    const message = err instanceof Error ? err.message : String(err)
+    return halt(
+      fail(
+        `Bootstrap synthesis failed for dataset '${key}' (audit pre-flight): ${message}`
+      )
+    )
+  }
 }
 
 function requireDatasetFields(

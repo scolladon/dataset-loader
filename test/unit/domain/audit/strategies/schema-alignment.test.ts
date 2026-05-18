@@ -975,6 +975,166 @@ describe('schemaAlignment strategy', () => {
     expect(sut.kind).toBe('pass')
   })
 
+  it('given metadata absent AND a bootstrap provider, when running schema check, then audit consults the synthesised schema and passes when source fields match', async () => {
+    // Arrange — bootstrap path: dataset doesn't exist yet; audit asks the
+    // injected provider for the synthesised schema and compares against it.
+    const entries: AuditEntry[] = [
+      {
+        readerKind: 'sobject',
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'DS_New',
+        sObject: 'User',
+        readerFields: ['Id'],
+        augmentColumns: {},
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', metadataPort({})],
+      ['ana', metadataPort({ metadataJson: null })], // 0 records → bootstrap
+    ])
+    const providerSpy = vi.fn(async () => ({
+      datasetName: 'DS_New',
+      label: 'DS_New',
+      fields: [
+        {
+          name: 'Id',
+          label: 'Id',
+          type: 'Text' as const,
+          origin: 'reader' as const,
+        },
+      ],
+    }))
+    const factory = () => ({ buildSourceSchema: providerSpy })
+
+    // Act
+    const sut = await findSchemaCheck(
+      buildAuditChecks(entries, sfPorts, factory),
+      'DS_New'
+    ).execute()
+
+    // Assert
+    expect(providerSpy).toHaveBeenCalledTimes(1)
+    expect(sut).toEqual({ kind: 'pass' })
+  })
+
+  it('given metadata present AND overrideMetadata:true, when running schema check, then synthesised schema is used (existing metadata ignored)', async () => {
+    // Arrange — override path: existing dataset's schema is bypassed in favour
+    // of the synthesised one. Useful when the user is intentionally evolving
+    // the dataset (paired with Operation:Overwrite at runtime).
+    const entries: AuditEntry[] = [
+      {
+        readerKind: 'sobject',
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'DS_Evolve',
+        sObject: 'User',
+        readerFields: ['Id', 'NewField'],
+        augmentColumns: {},
+        overrideMetadata: true,
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', metadataPort({})],
+      // existing metadata has only [OldField] — synthesised must override
+      ['ana', metadataPort({ metadataJson: fields('OldField') })],
+    ])
+    const providerSpy = vi.fn(async () => ({
+      datasetName: 'DS_Evolve',
+      label: 'DS_Evolve',
+      fields: [
+        {
+          name: 'Id',
+          label: 'Id',
+          type: 'Text' as const,
+          origin: 'reader' as const,
+        },
+        {
+          name: 'NewField',
+          label: 'NewField',
+          type: 'Text' as const,
+          origin: 'reader' as const,
+        },
+      ],
+    }))
+    const factory = () => ({ buildSourceSchema: providerSpy })
+
+    // Act
+    const sut = await findSchemaCheck(
+      buildAuditChecks(entries, sfPorts, factory),
+      'DS_Evolve'
+    ).execute()
+
+    // Assert — provider invoked + audit passes (synthesised matches readerFields)
+    expect(providerSpy).toHaveBeenCalledTimes(1)
+    expect(sut).toEqual({ kind: 'pass' })
+  })
+
+  it('given metadata absent AND the provider throws, when running schema check, then FAIL surfaces the synthesis error', async () => {
+    // Arrange
+    const entries: AuditEntry[] = [
+      {
+        readerKind: 'sobject',
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'DS_Boom',
+        sObject: 'User',
+        readerFields: ['Id'],
+        augmentColumns: {},
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', metadataPort({})],
+      ['ana', metadataPort({ metadataJson: null })],
+    ])
+    const factory = () => ({
+      buildSourceSchema: vi.fn(async () => {
+        throw new Error('Describe failed: INVALID_TYPE')
+      }),
+    })
+
+    // Act
+    const sut = await findSchemaCheck(
+      buildAuditChecks(entries, sfPorts, factory),
+      'DS_Boom'
+    ).execute()
+
+    // Assert
+    expect(sut.kind).toBe('fail')
+    if (sut.kind === 'fail') {
+      expect(sut.message).toMatch(/Bootstrap synthesis failed/)
+      expect(sut.message).toMatch(/INVALID_TYPE/)
+    }
+  })
+
+  it('given metadata absent AND NO bootstrap factory wired, when running schema check, then passes (graceful degradation; writer is source of truth)', async () => {
+    // Arrange — legacy caller path
+    const entries: AuditEntry[] = [
+      {
+        readerKind: 'sobject',
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'DS_Legacy',
+        sObject: 'User',
+        readerFields: ['Id'],
+        augmentColumns: {},
+      },
+    ]
+    const sfPorts = new Map([
+      ['src', metadataPort({})],
+      ['ana', metadataPort({ metadataJson: null })],
+    ])
+
+    // Act — no third arg to buildAuditChecks → ctx.bootstrapProviderFor undefined
+    const sut = await findSchemaCheck(
+      buildAuditChecks(entries, sfPorts),
+      'DS_Legacy'
+    ).execute()
+
+    // Assert
+    expect(sut).toEqual({ kind: 'pass' })
+  })
+
   it('given config matching dataset case-sensitively, when running schema check, then PASS without casing diff warning', async () => {
     // Arrange
     const entries: AuditEntry[] = [
