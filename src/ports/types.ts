@@ -1,5 +1,6 @@
 import { type Readable, type Writable } from 'node:stream'
 import { type DatasetKey } from '../domain/dataset-key.js'
+import { type SourceSchema } from '../domain/metadata-types.js'
 import { type Watermark } from '../domain/watermark.js'
 import { type WatermarkKey } from '../domain/watermark-key.js'
 import { type WatermarkStore } from '../domain/watermark-store.js'
@@ -138,6 +139,15 @@ export class SkipDatasetError extends Error {
     super(message)
     this.name = 'SkipDatasetError'
   }
+}
+
+// Builds a SourceSchema describing the dataset's columns from whatever the
+// reader's source knows about itself: SF Describe walk for SObject,
+// `LogFileFieldNames` for ELF, header parse for CSV. The result feeds the
+// synthesiser when no prior dataset metadata exists (bootstrap) or when
+// `overrideMetadata: true` forces re-synthesis.
+export interface BootstrapMetadataProvider {
+  buildSourceSchema(): Promise<SourceSchema>
 }
 
 export interface ProjectionLayout {
