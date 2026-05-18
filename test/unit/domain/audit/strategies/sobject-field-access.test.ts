@@ -1,13 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  buildAuditChecks,
-  runAudit,
-} from '../../../../../src/domain/audit/runner.js'
-import {
-  auditEntryOf,
-  createMockLogger,
-  createMockSfPort,
-} from '../../../../fixtures/audit.js'
+import { buildAuditChecks } from '../../../../../src/domain/audit/runner.js'
+import { type SalesforcePort } from '../../../../../src/ports/types.js'
+import { auditEntryOf, createMockSfPort } from '../../../../fixtures/audit.js'
 
 describe('SObject read access check', () => {
   it('given SObject entries, when building checks, then includes check per unique (org, sObject)', () => {
@@ -71,7 +65,7 @@ describe('SObject read access check', () => {
 
     // Assert — FLS enforced + dotted relationship paths preserved
     expect(sfMock.query).toHaveBeenCalledWith(
-      'SELECT Id, Name, Owner.Profile.Name FROM Account LIMIT 1 WITH SECURITY_ENFORCED'
+      'SELECT Id, Name, Owner.Profile.Name FROM Account WITH SECURITY_ENFORCED LIMIT 1'
     )
   })
 
@@ -102,7 +96,7 @@ describe('SObject read access check', () => {
     // Assert — single check covers the union (Id, Name, Industry), no duplicates
     expect(readChecks.length).toBe(1)
     expect(sfMock.query).toHaveBeenCalledWith(
-      'SELECT Id, Name, Industry FROM Account LIMIT 1 WITH SECURITY_ENFORCED'
+      'SELECT Id, Name, Industry FROM Account WITH SECURITY_ENFORCED LIMIT 1'
     )
   })
 
@@ -191,5 +185,90 @@ describe('SObject read access check', () => {
 
     // Assert
     expect(sut.kind).toBe('fail')
+  })
+
+  it('given an entity that rejects WITH SECURITY_ENFORCED, when executing the check, then WARN after the FLS-less re-probe succeeds', async () => {
+    // Arrange — first call rejects with the SF "not allowed in this context"
+    // error; second (re-probe without FLS) succeeds.
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'SECURITY_ENFORCED not allowed in this context: {"errorCode":"MALFORMED_QUERY"}'
+        )
+      )
+      .mockResolvedValueOnce({ records: [], totalSize: 0, done: true })
+    const sfPort: SalesforcePort = {
+      apiVersion: '62.0',
+      query,
+      queryMore: vi.fn(),
+      getBlob: vi.fn(),
+      getBlobStream: vi.fn(),
+      post: vi.fn(),
+      patch: vi.fn(),
+      del: vi.fn(),
+    }
+    const entries = [
+      auditEntryOf({
+        isElf: false,
+        sourceOrg: 'src',
+        sObject: 'User',
+        readerFields: ['Id', 'Username'],
+      }),
+    ]
+    const sfPorts = new Map([['src', sfPort]])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const readCheck = checks.find(c => c.label.includes('read access'))!
+
+    // Act
+    const sut = await readCheck.execute()
+
+    // Assert — both probes executed (with and without FLS), result is WARN
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      'SELECT Id, Username FROM User WITH SECURITY_ENFORCED LIMIT 1'
+    )
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      'SELECT Id, Username FROM User LIMIT 1'
+    )
+    expect(sut.kind).toBe('warn')
+    if (sut.kind === 'warn') {
+      expect(sut.message).toMatch(/User/)
+      expect(sut.message).toMatch(/FLS not enforced/)
+    }
+  })
+
+  it('given a non-SECURITY_ENFORCED query error, when executing the check, then FAIL without a re-probe', async () => {
+    // Arrange — any other error should propagate to FAIL on the first attempt
+    const query = vi
+      .fn()
+      .mockRejectedValue(new Error('boom: unrelated SF error'))
+    const sfPort: SalesforcePort = {
+      apiVersion: '62.0',
+      query,
+      queryMore: vi.fn(),
+      getBlob: vi.fn(),
+      getBlobStream: vi.fn(),
+      post: vi.fn(),
+      patch: vi.fn(),
+      del: vi.fn(),
+    }
+    const entries = [
+      auditEntryOf({ isElf: false, sourceOrg: 'src', sObject: 'Account' }),
+    ]
+    const sfPorts = new Map([['src', sfPort]])
+    const checks = buildAuditChecks(entries, sfPorts)
+    const readCheck = checks.find(c => c.label.includes('read access'))!
+
+    // Act
+    const sut = await readCheck.execute()
+
+    // Assert
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(sut.kind).toBe('fail')
+    if (sut.kind === 'fail') {
+      expect(sut.message).toMatch(/boom/)
+    }
   })
 })
