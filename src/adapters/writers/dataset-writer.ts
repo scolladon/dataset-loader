@@ -1,12 +1,16 @@
 import { Writable } from 'node:stream'
 import { createGzip, type Gzip } from 'node:zlib'
 import { type DatasetKey } from '../../domain/dataset-key.js'
+import { synthesise } from '../../domain/metadata-synthesizer.js'
 import { checkSchemaAlignment } from '../../domain/schema-check.js'
 import { buildSObjectRowProjection } from '../../domain/sobject-row-projection.js'
 import {
   type AlignmentSpec,
+  type BootstrapMetadataProvider,
+  type BootstrapSpec,
   type CreateWriterPort,
   type HeaderProvider,
+  type LoggerPort,
   type Operation,
   type ProgressListener,
   type SalesforcePort,
@@ -355,7 +359,10 @@ export class DatasetWriter implements Writer {
     dataset: DatasetKey,
     private readonly operation: Operation,
     private readonly listener?: ProgressListener,
-    private readonly alignment?: AlignmentSpec
+    private readonly alignment?: AlignmentSpec,
+    private readonly bootstrapProvider?: BootstrapMetadataProvider,
+    private readonly overrideMetadata: boolean = false,
+    private readonly logger?: LoggerPort
   ) {
     this.basePath = `/services/data/v${sfPort.apiVersion}/sobjects`
     this.datasetName = dataset.name
@@ -365,13 +372,16 @@ export class DatasetWriter implements Writer {
   }
 
   async init(): Promise<WriterInitResult> {
-    const metadata = await this.queryExistingMetadata()
-    if (!metadata) {
-      throw new SkipDatasetError(
-        `No existing metadata for dataset '${this.datasetName}', skipping`
+    const resolved = await this.resolveMetadata()
+    const { patched, parsed } = this.parseMetadata(resolved.json)
+    if (resolved.source === 'synthesised') {
+      this.logger?.info(
+        `Bootstrapping new dataset '${this.datasetName}' (synthesised metadata)`
+      )
+      this.logger?.debug(
+        `Synthesised MetadataJson for '${this.datasetName}': ${resolved.json}`
       )
     }
-    const { patched, parsed } = this.parseMetadata(metadata)
     // Dataset fields are extracted lazily — only when alignment actually
     // requires them (SObject always; ELF/CSV only with non-empty
     // providedFields). Legacy metadata without a `fields` array is still
@@ -534,6 +544,29 @@ export class DatasetWriter implements Writer {
     return names
   }
 
+  // Strategy chain: prefer existing metadata when present and overrideMetadata
+  // is not set, otherwise synthesise from the bootstrap provider. With
+  // bootstrap always-on (per design §Writer integration), the only path that
+  // throws SkipDatasetError is "no existing AND no provider" — which happens
+  // when the caller (factory) declined to construct a provider (e.g. unknown
+  // entry kind). That's a programming error, not a user error.
+  private async resolveMetadata(): Promise<{
+    json: string
+    source: 'existing' | 'synthesised'
+  }> {
+    if (!this.overrideMetadata) {
+      const existing = await this.queryExistingMetadata()
+      if (existing) return { json: existing, source: 'existing' }
+    }
+    if (!this.bootstrapProvider) {
+      throw new SkipDatasetError(
+        `No existing metadata for dataset '${this.datasetName}' and no bootstrap provider configured`
+      )
+    }
+    const schema = await this.bootstrapProvider.buildSourceSchema()
+    return { json: synthesise(schema), source: 'synthesised' }
+  }
+
   private async queryExistingMetadata(): Promise<string | null> {
     const result = await this.sfPort.query<{
       MetadataJson: string | null
@@ -549,21 +582,28 @@ export class DatasetWriter implements Writer {
 }
 
 export class DatasetWriterFactory implements CreateWriterPort {
-  constructor(private readonly sfPort: SalesforcePort) {}
+  constructor(
+    private readonly sfPort: SalesforcePort,
+    private readonly logger?: LoggerPort
+  ) {}
 
   create(
     dataset: DatasetKey,
     operation: Operation,
     listener: ProgressListener,
     _headerProvider: HeaderProvider,
-    alignment?: AlignmentSpec
+    alignment?: AlignmentSpec,
+    bootstrap?: BootstrapSpec
   ): Writer {
     return new DatasetWriter(
       this.sfPort,
       dataset,
       operation,
       listener,
-      alignment
+      alignment,
+      bootstrap?.provider,
+      bootstrap?.overrideMetadata ?? false,
+      this.logger
     )
   }
 }

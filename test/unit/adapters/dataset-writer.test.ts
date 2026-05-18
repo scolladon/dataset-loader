@@ -10,6 +10,7 @@ import {
 } from '../../../src/adapters/writers/dataset-writer.js'
 import { DatasetKey } from '../../../src/domain/dataset-key.js'
 import {
+  type BootstrapMetadataProvider,
   type ProgressListener,
   type SalesforcePort,
   SkipDatasetError,
@@ -1378,5 +1379,149 @@ describe('DatasetWriter.init with alignment', () => {
 
     // Act / Assert
     await expect(sut.init()).rejects.toBeInstanceOf(SkipDatasetError)
+  })
+})
+
+describe('DatasetWriter.resolveMetadata (bootstrap chain)', () => {
+  type ProviderSpy = BootstrapMetadataProvider & {
+    buildSourceSchema: ReturnType<typeof vi.fn>
+  }
+  function bootstrapProvider(
+    fields: Array<{ name: string; type: 'Text' }>
+  ): ProviderSpy {
+    return {
+      buildSourceSchema: vi.fn(async () => ({
+        datasetName: 'TestDS',
+        label: 'TestDS',
+        fields: fields.map(f => ({
+          name: f.name,
+          label: f.name,
+          type: f.type,
+          origin: 'reader' as const,
+        })),
+      })),
+    } as ProviderSpy
+  }
+
+  it('given prior metadata present and overrideMetadata=false, when init, then uses existing branch (provider not invoked)', async () => {
+    // Arrange
+    const provider = bootstrapProvider([{ name: 'A', type: 'Text' }])
+    const sfPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ MetadataJson: '/blob/url' }],
+      }),
+      getBlob: vi.fn().mockResolvedValue('{"objects":[{"fields":[]}]}'),
+    })
+    const sut = new DatasetWriter(
+      sfPort,
+      dsKey,
+      'Append',
+      undefined,
+      undefined,
+      provider,
+      false,
+      undefined
+    )
+
+    // Act
+    await sut.init()
+
+    // Assert
+    expect(provider.buildSourceSchema).not.toHaveBeenCalled()
+  })
+
+  it('given no prior metadata and a bootstrap provider, when init, then synthesises and logs info + debug', async () => {
+    // Arrange
+    const provider = bootstrapProvider([{ name: 'A', type: 'Text' }])
+    const sfPort = makeSfPort() // default query returns 0 records
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
+    const sut = new DatasetWriter(
+      sfPort,
+      dsKey,
+      'Append',
+      undefined,
+      undefined,
+      provider,
+      false,
+      logger
+    )
+
+    // Act
+    await sut.init()
+
+    // Assert
+    expect(provider.buildSourceSchema).toHaveBeenCalledTimes(1)
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(/Bootstrapping new dataset/)
+    )
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('Synthesised MetadataJson')
+    )
+  })
+
+  it('given overrideMetadata=true, when init, then existing-metadata SOQL is skipped entirely', async () => {
+    // Arrange — provider is needed for synthesis; query spy must NOT be called
+    const provider = bootstrapProvider([{ name: 'A', type: 'Text' }])
+    const querySpy = vi.fn()
+    const sfPort = makeSfPort({ query: querySpy })
+    const sut = new DatasetWriter(
+      sfPort,
+      dsKey,
+      'Overwrite',
+      undefined,
+      undefined,
+      provider,
+      true,
+      undefined
+    )
+
+    // Act
+    await sut.init()
+
+    // Assert — no SOQL fired; synthesised path taken straight away
+    expect(querySpy).not.toHaveBeenCalled()
+    expect(provider.buildSourceSchema).toHaveBeenCalledTimes(1)
+  })
+
+  it('given no prior metadata AND no bootstrap provider, when init, then throws SkipDatasetError naming the configured-provider gap', async () => {
+    // Arrange
+    const sfPort = makeSfPort() // default 0-records query
+    const sut = new DatasetWriter(sfPort, dsKey, 'Append') // no bootstrap, no override
+
+    // Act / Assert
+    await expect(sut.init()).rejects.toThrow(/no bootstrap provider/)
+    await expect(sut.init()).rejects.toBeInstanceOf(SkipDatasetError)
+  })
+
+  it('given factory is constructed with a logger and bootstrap is passed to create, when create returns a writer that synthesises, then the factory-supplied logger sees the bootstrap message', async () => {
+    // Arrange
+    const provider = bootstrapProvider([{ name: 'A', type: 'Text' }])
+    const sfPort = makeSfPort() // 0-record query → triggers synthesis
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
+    const factory = new DatasetWriterFactory(sfPort, logger)
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
+    }
+    const headerProvider = { resolveHeader: vi.fn() }
+
+    // Act
+    const writer = factory.create(
+      dsKey,
+      'Append',
+      listener,
+      headerProvider,
+      undefined,
+      { provider, overrideMetadata: false }
+    )
+    await writer.init()
+
+    // Assert
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(/Bootstrapping new dataset/)
+    )
   })
 })

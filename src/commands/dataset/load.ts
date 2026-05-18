@@ -103,7 +103,7 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
     return new PipelineRunner({
       logger,
       messages: messagesPort,
-      createWriter: this.createWriterFactory(sfPorts),
+      createWriter: this.createWriterFactory(sfPorts, logger),
       progress: new ProgressReporter(),
     }).run(filtered, sfPorts, watermarks, state, inputs.bounds)
   }
@@ -183,10 +183,18 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
   }
 
   private createWriterFactory(
-    sfPorts: Map<string, SalesforcePort>
+    sfPorts: Map<string, SalesforcePort>,
+    logger: LoggerPort
   ): CreateWriterPort {
     return {
-      create(dataset, operation, listener, headerProvider, alignment) {
+      create(
+        dataset,
+        operation,
+        listener,
+        headerProvider,
+        alignment,
+        bootstrap
+      ) {
         if (dataset.org) {
           const sfPort = sfPorts.get(dataset.org)
           if (!sfPort) {
@@ -194,12 +202,13 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
               messagesPort.getError('no-target-port', dataset.org)
             )
           }
-          return new DatasetWriterFactory(sfPort).create(
+          return new DatasetWriterFactory(sfPort, logger).create(
             dataset,
             operation,
             listener,
             headerProvider,
-            alignment
+            alignment,
+            bootstrap
           )
         }
         return new FileWriterFactory().create(
@@ -207,7 +216,8 @@ export default class DatasetLoad extends SfCommand<DatasetLoadResult> {
           operation,
           listener,
           headerProvider,
-          alignment
+          alignment,
+          bootstrap
         )
       },
     }

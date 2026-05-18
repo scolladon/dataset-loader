@@ -166,13 +166,19 @@ export interface HeaderProvider {
   resolveHeader(): Promise<string>
 }
 
+export interface BootstrapSpec {
+  readonly provider: BootstrapMetadataProvider
+  readonly overrideMetadata: boolean
+}
+
 export interface CreateWriterPort {
   create(
     dataset: DatasetKey,
     operation: Operation,
     listener: ProgressListener,
     headerProvider: HeaderProvider,
-    alignment?: AlignmentSpec
+    alignment?: AlignmentSpec,
+    bootstrap?: BootstrapSpec
   ): Writer
 }
 

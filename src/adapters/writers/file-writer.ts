@@ -11,6 +11,7 @@ import { Writable } from 'node:stream'
 import { type DatasetKey } from '../../domain/dataset-key.js'
 import {
   type AlignmentSpec,
+  type BootstrapSpec,
   type CreateWriterPort,
   type HeaderProvider,
   type Operation,
@@ -112,10 +113,11 @@ export class FileWriterFactory implements CreateWriterPort {
     operation: Operation,
     listener: ProgressListener,
     headerProvider: HeaderProvider,
-    _alignment?: AlignmentSpec
+    _alignment?: AlignmentSpec,
+    _bootstrap?: BootstrapSpec
   ): Writer {
-    // FileWriter ignores alignment — files preserve the source order;
-    // the dataset metadata contract does not apply to file targets.
+    // FileWriter ignores alignment and bootstrap — files preserve the source
+    // order and don't carry a CRMA metadata contract.
     return new FileWriter(dataset.name, operation, headerProvider, listener)
   }
 }

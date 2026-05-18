@@ -19,6 +19,7 @@ export const sobjectEntry: SObjectEntry = {
   fields: ['Id'],
   dateField: 'LastModifiedDate',
   name: 'accounts',
+  overrideMetadata: false,
 }
 
 export const sobjectEntryOverwrite: SObjectEntry = {
@@ -34,6 +35,7 @@ export const elfEntry: ElfEntry = {
   eventLog: 'Login',
   interval: 'Daily',
   name: 'logins',
+  overrideMetadata: false,
 }
 
 export const csvEntry: CsvEntry = {
@@ -42,6 +44,7 @@ export const csvEntry: CsvEntry = {
   operation: 'Append',
   csvFile: './fake.csv',
   name: 'csv-only',
+  overrideMetadata: false,
 }
 
 export function resolvedOf(
