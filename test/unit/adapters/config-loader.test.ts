@@ -31,6 +31,7 @@ function makeSfPort(
     post: vi.fn(),
     patch: vi.fn(),
     del: vi.fn(),
+    describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
     apiVersion: '62.0',
   }
 }
@@ -1688,6 +1689,7 @@ describe('ConfigLoader', () => {
         csvFile: './data/login.csv',
         targetFile: './out/login.csv',
         operation: 'Append',
+        overrideMetadata: false,
       })
 
       // Assert
@@ -1701,6 +1703,7 @@ describe('ConfigLoader', () => {
         targetFile: './out/login.csv',
         operation: 'Append',
         name: 'login-data',
+        overrideMetadata: false,
       })
 
       // Assert
@@ -1716,6 +1719,7 @@ describe('ConfigLoader', () => {
         targetOrg: 'my-org',
         targetDataset: 'LoginEvents',
         operation: 'Append',
+        overrideMetadata: false,
       })
 
       // Assert
@@ -1732,6 +1736,7 @@ describe('ConfigLoader', () => {
         targetOrg: 'my-org',
         targetDataset: 'Accounts',
         operation: 'Append',
+        overrideMetadata: false,
       })
 
       // Assert
@@ -2118,6 +2123,208 @@ describe('ConfigLoader', () => {
       // Act & Assert — same fields [Name, Id], just in different order → should succeed
       const sut = await parseConfig('config.json')
       expect(sut.entries).toHaveLength(2)
+    })
+  })
+
+  describe('overrideMetadata', () => {
+    it('given a config without overrideMetadata, when parsing, then default is false', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify(validSObjectConfig)
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0]).toMatchObject({ overrideMetadata: false })
+    })
+
+    it('given overrideMetadata:true paired with operation:Overwrite and a targetOrg, when parsing, then accepted', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              operation: 'Overwrite',
+              overrideMetadata: true,
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0]).toMatchObject({
+        overrideMetadata: true,
+        operation: 'Overwrite',
+      })
+    })
+
+    it('given overrideMetadata:true with targetFile (no targetOrg), when parsing, then rejected with target-required message', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sourceOrg: 'src',
+              targetFile: 'out.csv',
+              sObject: 'Account',
+              fields: ['Id'],
+              overrideMetadata: true,
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /overrideMetadata requires targetOrg/
+      )
+    })
+
+    it('given overrideMetadata:true paired with operation:Append, when parsing, then rejected with Overwrite-required message', async () => {
+      // Arrange — Operation default is Append, so we don't even need to set it explicitly here
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              overrideMetadata: true,
+              operation: 'Append',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /overrideMetadata: true requires operation: 'Overwrite'/
+      )
+    })
+
+    it('given overrideMetadata:true on a CSV entry with targetOrg+Overwrite, when parsing, then accepted', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              csvFile: '/abs/path/data.csv',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              operation: 'Overwrite',
+              overrideMetadata: true,
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries[0]).toMatchObject({ overrideMetadata: true })
+    })
+
+    it('given overrideMetadata:true on an ELF entry with operation:Append, when parsing, then rejected', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              eventLog: 'Login',
+              interval: 'Daily',
+              overrideMetadata: true,
+              operation: 'Append',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /overrideMetadata: true requires operation: 'Overwrite'/
+      )
+    })
+
+    it('given two entries targeting the same dataset with the same overrideMetadata value, when parsing, then accepted', async () => {
+      // Arrange
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sourceOrg: 'src1',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              operation: 'Overwrite',
+              overrideMetadata: true,
+            },
+            {
+              sourceOrg: 'src2',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              operation: 'Overwrite',
+              overrideMetadata: true,
+            },
+          ],
+        })
+      )
+
+      // Act
+      const sut = await parseConfig('config.json')
+
+      // Assert
+      expect(sut.entries).toHaveLength(2)
+    })
+
+    it('given two entries targeting the same dataset but with mismatched overrideMetadata, when parsing, then rejected with inconsistency message naming both indices', async () => {
+      // Arrange — both target DS but one has overrideMetadata:true, the other false (the default)
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({
+          entries: [
+            {
+              sourceOrg: 'src1',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              operation: 'Overwrite',
+              overrideMetadata: true,
+            },
+            {
+              sourceOrg: 'src2',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              operation: 'Overwrite',
+            },
+          ],
+        })
+      )
+
+      // Act & Assert
+      await expect(parseConfig('config.json')).rejects.toThrow(
+        /inconsistent overrideMetadata/
+      )
     })
   })
 })

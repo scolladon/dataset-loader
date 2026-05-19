@@ -97,16 +97,73 @@ sf dataset load
 
 All entry types share these output fields:
 
-| Field            | Required | Description                                                                         |
-|------------------|----------|-------------------------------------------------------------------------------------|
-| `name`           | no       | Optional entry identifier. Used as watermark key override and for --entry filtering |
-| `targetOrg`      | no       | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead        |
-| `targetDataset`  | no       | CRM Analytics dataset API name. Required when `targetOrg` is set                    |
-| `targetFile`     | no       | Local file path to write output. Required when `targetOrg` is omitted               |
-| `operation`      | no       | `"Append"` (default) or `"Overwrite"`                                               |
-| `augmentColumns` | no       | Extra columns to append to every row (see the Augment Columns details below)        |
+| Field              | Required | Description                                                                            |
+|--------------------|----------|----------------------------------------------------------------------------------------|
+| `name`             | no       | Optional entry identifier. Used as watermark key override and for --entry filtering    |
+| `targetOrg`        | no       | SF CLI alias of the CRM Analytics org. Omit to write to a local file instead           |
+| `targetDataset`    | no       | CRM Analytics dataset API name. Required when `targetOrg` is set                       |
+| `targetFile`       | no       | Local file path to write output. Required when `targetOrg` is omitted                  |
+| `operation`        | no       | `"Append"` (default) or `"Overwrite"`                                                  |
+| `augmentColumns`   | no       | Extra columns to append to every row (see the Augment Columns details below)           |
+| `overrideMetadata` | no       | `true` forces re-synthesis of the dataset's CRM Analytics metadata. Requires `operation: "Overwrite"` and `targetOrg`. Defaults to `false`. See [Bootstrapping a new dataset](#bootstrapping-a-new-dataset). |
 
 > **Type inference:** Entry type is inferred from shape — entries with `eventLog` are ELF, entries with `sObject` are SObject, entries with `csvFile` are CSV.
+
+### Bootstrapping a new dataset
+
+`sf dataset load` will **create** a CRM Analytics dataset on first
+upload when no dataset with that `targetDataset` name yet exists in
+the target org. The plugin synthesises the required `MetadataJson`
+from the source schema:
+
+| Reader  | Schema source                                                            | Column types                                                       |
+|---------|--------------------------------------------------------------------------|--------------------------------------------------------------------|
+| SObject | SF `Describe` (per-field, walking relationship hops for dotted paths)    | SF type → CRMA type (Numeric/Date/Text per the design's mapping)   |
+| ELF     | `LogFileFieldNames` from the latest `EventLogFile` row in the source org | All `Text` (matches the ELF wire format)                           |
+| CSV     | First-line header parse                                                  | All `Text` (CSV type inference is not safe for arbitrary sources)  |
+
+Dry-run output flags entries that would create a new dataset with
+a `[BOOTSTRAP]` prefix:
+
+```
+Dry run — planned entries:
+  [BOOTSTRAP] accounts → org:prod:Accounts
+    watermark: (none)
+```
+
+`[BOOTSTRAP]` is your last visible signal before commit — review it
+to catch a typo in `targetDataset` before a ghost dataset gets
+created.
+
+#### Re-bootstrapping (`overrideMetadata`)
+
+If a dataset already exists but you want to **replace its schema**
+(for example, after adding fields to an SObject entry), set
+`overrideMetadata: true` and `operation: "Overwrite"` together:
+
+```jsonc
+{
+  "sObject": "Account",
+  "fields": ["Id", "Name", "Industry", "NewField"],
+  "targetOrg": "prod",
+  "targetDataset": "Accounts",
+  "operation": "Overwrite",
+  "overrideMetadata": true
+}
+```
+
+The dry-run flags these entries with `[OVERRIDE]` (data loss
+warning — the existing rows are replaced):
+
+```
+  [OVERRIDE] accounts → org:prod:Accounts
+```
+
+**The config-loader rejects** `overrideMetadata: true` paired with
+`operation: "Append"` — CRM Analytics enforces strict schema-match
+on Append at parent-create time, so the combination would fail at
+runtime. The pre-flight rejection lets you fix the config before
+issuing any SF calls.
 
 ### ELF Entry
 

@@ -15,6 +15,7 @@ export function makeSfPort(
     post: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
     patch: vi.fn().mockResolvedValue(null),
     del: vi.fn().mockResolvedValue(undefined),
+    describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
     ...overrides,
   }
 }

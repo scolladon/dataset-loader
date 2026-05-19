@@ -9,7 +9,11 @@ import { DatasetKey } from '../domain/dataset-key.js'
 import { type DateBounds } from '../domain/date-bounds.js'
 import { WatermarkKey } from '../domain/watermark-key.js'
 import { type WatermarkStore } from '../domain/watermark-store.js'
-import { type LoggerPort } from '../ports/types.js'
+import {
+  type LoggerPort,
+  type QueryResult,
+  type SalesforcePort,
+} from '../ports/types.js'
 import { type DatasetLoadResult, EMPTY_RESULT } from './load-inputs.js'
 import { computeWarnings, dryRunAnnotation } from './warnings.js'
 
@@ -26,13 +30,21 @@ import { computeWarnings, dryRunAnnotation } from './warnings.js'
 // header so operators see them in the same terminal flow. Returns a
 // zeroed result — dry-run never processes data.
 export class DryRunRenderer {
-  constructor(private readonly logger: LoggerPort) {}
+  constructor(
+    private readonly logger: LoggerPort,
+    // Optional existence check — when provided, the renderer emits a
+    // `[BOOTSTRAP]` annotation for dataset targets without a prior completed
+    // load and `[OVERRIDE]` for entries that would replace an existing
+    // dataset via `overrideMetadata: true`. Left undefined in audit-only or
+    // unit-test paths so the renderer stays usable without an SF port.
+    private readonly sfPorts?: ReadonlyMap<string, SalesforcePort>
+  ) {}
 
-  render(
+  async render(
     entries: readonly ResolvedEntry[],
     watermarks: WatermarkStore,
     bounds: DateBounds
-  ): DatasetLoadResult {
+  ): Promise<DatasetLoadResult> {
     for (const msg of computeWarnings(entries, watermarks, bounds)) {
       this.logger.warn(msg)
     }
@@ -41,19 +53,55 @@ export class DryRunRenderer {
       this.logger.info(`Configured window: ${bounds.toString()}`)
       this.logger.info('')
     }
+    const existenceByDataset = await this.precomputeExistence(entries)
     for (const { entry } of entries) {
-      this.renderEntry(entry, watermarks, bounds)
+      await this.renderEntry(entry, watermarks, bounds, existenceByDataset)
     }
     return EMPTY_RESULT
   }
 
-  private renderEntry(
+  // Per-dataset existence check, keyed by `org datasetName`. One SOQL
+  // per unique target; entries fanning out to the same dataset share the
+  // result.
+  private async precomputeExistence(
+    entries: readonly ResolvedEntry[]
+  ): Promise<Map<string, boolean>> {
+    const out = new Map<string, boolean>()
+    if (!this.sfPorts) return out
+    const targets = new Map<string, { org: string; name: string }>()
+    for (const { entry } of entries) {
+      if (!entry.targetOrg || !entry.targetDataset) continue
+      const key = `${entry.targetOrg} ${entry.targetDataset}`
+      if (!targets.has(key)) {
+        targets.set(key, { org: entry.targetOrg, name: entry.targetDataset })
+      }
+    }
+    for (const [key, { org, name }] of targets) {
+      const port = this.sfPorts.get(org)
+      if (!port) continue
+      try {
+        const result: QueryResult<unknown> = await port.query(
+          `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${name}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
+        )
+        out.set(key, result.records.length > 0)
+      } catch {
+        /* v8 ignore next 3 — query failures here surface during audit; the
+           renderer must remain best-effort and never crash a dry-run */
+        out.set(key, false)
+      }
+    }
+    return out
+  }
+
+  private async renderEntry(
     entry: ConfigEntry,
     watermarks: WatermarkStore,
-    bounds: DateBounds
-  ): void {
+    bounds: DateBounds,
+    existence: Map<string, boolean>
+  ): Promise<void> {
     const dk = DatasetKey.fromEntry(entry)
-    this.logger.info(`  ${entryLabel(entry)} → ${dk.toString()}`)
+    const annotation = this.bootstrapAnnotation(entry, existence)
+    this.logger.info(`  ${annotation}${entryLabel(entry)} → ${dk.toString()}`)
     if (isCsvEntry(entry)) {
       this.logger.info(
         '    watermark: n/a (CSV entry — watermarks do not apply)'
@@ -70,5 +118,20 @@ export class DryRunRenderer {
     this.logger.info(
       `    effective: ${soql}${dryRunAnnotation(entry, wm, bounds)}`
     )
+  }
+
+  // [BOOTSTRAP] = no prior load: dataset will be created. Worst-case typo cost: ghost dataset.
+  // [OVERRIDE]  = existing dataset + overrideMetadata:true: schema AND data replaced. Typo cost: data loss.
+  private bootstrapAnnotation(
+    entry: ConfigEntry,
+    existence: Map<string, boolean>
+  ): string {
+    if (!entry.targetOrg || !entry.targetDataset) return ''
+    const key = `${entry.targetOrg} ${entry.targetDataset}`
+    const exists = existence.get(key)
+    if (exists === undefined) return ''
+    if (!exists) return '[BOOTSTRAP] '
+    if (entry.overrideMetadata) return '[OVERRIDE] '
+    return ''
   }
 }

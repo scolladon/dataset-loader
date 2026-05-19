@@ -15,6 +15,7 @@ const mockSfPort: SalesforcePort = {
   post: () => Promise.resolve({} as never),
   patch: () => Promise.resolve({} as never),
   del: () => Promise.resolve(),
+  describe: () => Promise.resolve({ name: 'Unknown', fields: [] }),
 }
 
 const sizes = ['small', 'medium', 'large'] as const

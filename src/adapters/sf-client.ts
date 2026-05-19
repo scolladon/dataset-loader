@@ -2,7 +2,12 @@ import { Readable } from 'node:stream'
 
 import { type Connection } from '@salesforce/core'
 import pLimit from 'p-limit'
-import { type QueryResult, type SalesforcePort } from '../ports/types.js'
+import {
+  type DescribeField,
+  type QueryResult,
+  type SalesforcePort,
+  type SObjectDescribe,
+} from '../ports/types.js'
 
 interface SalesforceClientOptions {
   readonly concurrency?: number
@@ -58,10 +63,31 @@ async function withRetry<T>(
   throw formatError(lastError)
 }
 
+// Raw SF Describe response shape — much wider than we consume. We project
+// down to the narrow `DescribeField` at the adapter boundary so the
+// synthesiser never sees attributes it doesn't care about.
+interface RawDescribeField {
+  readonly name: string
+  readonly label: string
+  readonly type: string
+  readonly precision?: number
+  readonly scale?: number
+  readonly referenceTo?: readonly string[]
+  readonly relationshipName?: string | null
+}
+
+interface RawSObjectDescribe {
+  readonly name: string
+  readonly fields: readonly RawDescribeField[]
+}
+
 export class SalesforceClient implements SalesforcePort {
   readonly apiVersion: string
   private readonly limiter: ReturnType<typeof pLimit>
   private readonly baseDelay: number
+  // Promise-valued cache so concurrent callers share one in-flight request.
+  // Failures evict their slot to avoid memoising transient errors.
+  private readonly describeCache = new Map<string, Promise<SObjectDescribe>>()
 
   constructor(
     private readonly connection: Connection,
@@ -70,6 +96,31 @@ export class SalesforceClient implements SalesforcePort {
     this.apiVersion = connection.version
     this.limiter = pLimit(options.concurrency ?? DEFAULT_CONCURRENCY)
     this.baseDelay = options.retryBaseDelayMs ?? DEFAULT_BASE_DELAY_MS
+  }
+
+  describe(sobjectName: string): Promise<SObjectDescribe> {
+    const cached = this.describeCache.get(sobjectName)
+    if (cached) return cached
+    const inflight = this.fetchDescribe(sobjectName).catch((err: unknown) => {
+      this.describeCache.delete(sobjectName)
+      throw err
+    })
+    this.describeCache.set(sobjectName, inflight)
+    return inflight
+  }
+
+  private fetchDescribe(sobjectName: string): Promise<SObjectDescribe> {
+    return this.limiter(() =>
+      withRetry(
+        () =>
+          this.connection.request<RawSObjectDescribe>({
+            method: 'GET',
+            url: `/services/data/v${this.connection.version}/sobjects/${sobjectName}/describe`,
+            headers: { 'Accept-Encoding': 'gzip' },
+          }),
+        this.baseDelay
+      ).then(projectDescribe)
+    )
   }
 
   query<T>(soql: string): Promise<QueryResult<T>> {
@@ -233,5 +284,24 @@ export class SalesforceClient implements SalesforcePort {
         this.baseDelay
       )
     )
+  }
+}
+
+function projectDescribe(raw: RawSObjectDescribe): SObjectDescribe {
+  return {
+    name: raw.name,
+    fields: raw.fields.map(projectField),
+  }
+}
+
+function projectField(raw: RawDescribeField): DescribeField {
+  return {
+    name: raw.name,
+    label: raw.label,
+    type: raw.type,
+    precision: raw.precision,
+    scale: raw.scale,
+    referenceTo: raw.referenceTo,
+    relationshipName: raw.relationshipName,
   }
 }

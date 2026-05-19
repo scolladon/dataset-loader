@@ -213,6 +213,46 @@ Done: 3 processed, 1 skipped, 0 failed, 2 groups uploaded
 - **Cause**: Invalid JSON, missing required fields, or conflicting operations in a group.
 - **Resolution**: Check the error message — Zod provides specific validation details. Ensure entries targeting the same `(targetOrg, targetDataset)` or `targetFile` use the same `operation`.
 
+### Bootstrap and override troubleshooting
+
+**`[BOOTSTRAP]` appears for an entry you didn't expect**
+
+- **Symptom**: Dry-run output shows `[BOOTSTRAP] entryName → org:prod:DatasetName` for a dataset you thought already existed.
+- **Cause**: Either the dataset name is typo'd, or the dataset has no prior `Completed` / `CompletedWithWarnings` load (only `Failed` / `InProgress` rows). The next run will **create** a new dataset.
+- **Resolution**: Verify the `targetDataset` spelling. To check existence manually:
+  ```bash
+  sf data:query -o <targetOrg> -q "SELECT Id, EdgemartAlias, Status, CreatedDate FROM InsightsExternalData WHERE EdgemartAlias = 'YourDataset' ORDER BY CreatedDate DESC LIMIT 5"
+  ```
+- **CI safety**: A `WARN`-only audit outcome does **not** block non-interactive runs. Treat unexpected `[BOOTSTRAP]` annotations in pipeline output as a failure signal in your CI scripts.
+
+**`overrideMetadata: true requires operation: 'Overwrite'`**
+
+- **Symptom**: `parseConfig` rejects the config with this exact message.
+- **Cause**: CRM Analytics rejects schema changes on `Append` at parent-create time with `FIELD_INTEGRITY_EXCEPTION`. The config-loader catches the combination pre-flight.
+- **Resolution**: Pair `overrideMetadata: true` with `operation: "Overwrite"`. Be aware that Overwrite **drops all existing rows** in the dataset before re-uploading.
+
+**Deleting a ghost dataset (typo recovery)**
+
+If a typo caused a ghost dataset to be created, delete it via the Analytics REST API:
+
+```bash
+# Look up the dataset's id
+sf org:open -o <targetOrg>            # then navigate Analytics Studio
+# OR query directly:
+sf api:request:rest -o <targetOrg> "/services/data/v62.0/wave/datasets/YourGhostName"
+
+# Delete by id
+sf api:request:rest -o <targetOrg> -m DELETE "/services/data/v62.0/wave/datasets/<id>"
+```
+
+The Analytics REST API returns `errorCode: 201 "Edgemart not found"` when a dataset is genuinely absent (distinct from a 404).
+
+**SF `Describe` permission errors during SObject bootstrap**
+
+- **Symptom**: Bootstrap of an SObject entry fails with `INVALID_TYPE: sObject type 'X' is not supported`.
+- **Cause**: The running user lacks permission to describe the SObject, OR the API name is wrong (custom objects need the `__c` suffix).
+- **Resolution**: The `sobjectFieldAccess` pre-flight audit catches this — run `sf dataset load --audit` first to see the precise diagnostic.
+
 ### Auth Errors (401/403)
 
 - **Symptom**: Fetch or upload fails with HTTP 401 or 403.

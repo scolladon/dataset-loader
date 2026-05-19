@@ -61,9 +61,10 @@ const STRATEGIES: readonly ChecksBuilder[] = [
 
 export function buildAuditChecks(
   entries: readonly AuditEntry[],
-  sfPorts: ReadonlyMap<string, SalesforcePort>
+  sfPorts: ReadonlyMap<string, SalesforcePort>,
+  bootstrapProviderFor?: AuditContext['bootstrapProviderFor']
 ): readonly AuditCheck[] {
-  const ctx: AuditContext = { sfPorts }
+  const ctx: AuditContext = { sfPorts, bootstrapProviderFor }
   return STRATEGIES.flatMap(build => build(entries, sfPorts, ctx))
 }
 

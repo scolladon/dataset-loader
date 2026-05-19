@@ -1,5 +1,6 @@
 import {
   type AuditOutcome,
+  type BootstrapMetadataProvider,
   type ReaderKind,
   type SalesforcePort,
 } from '../../ports/types.js'
@@ -21,6 +22,7 @@ export interface AuditEntry {
   readonly eventType?: string
   readonly interval?: string
   readonly csvFile?: string
+  readonly overrideMetadata?: boolean
 }
 
 export interface AuditContext {
@@ -28,6 +30,14 @@ export interface AuditContext {
   // (e.g. schemaAlignment runs against the target org but ELF metadata lives
   // on the source org). Strategies look up the right port from this map.
   readonly sfPorts: ReadonlyMap<string, SalesforcePort>
+  // Construct a bootstrap provider for a given audit entry. Injected from
+  // the application layer (`audit-runner`) because the providers live in
+  // `src/adapters/` and the domain layer cannot import adapters. The audit
+  // calls this only when the strategy actually needs to synthesise a schema
+  // (metadata absent or overrideMetadata true).
+  readonly bootstrapProviderFor?: (
+    entry: AuditEntry
+  ) => BootstrapMetadataProvider
 }
 
 interface AuditCheckStrategyBase<Payload> {

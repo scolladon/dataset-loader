@@ -102,6 +102,81 @@ describe('AuditRunner', () => {
     expect(auditEntries[0].sourceOrg).toBe('<csv>')
   })
 
+  it('given an SObject entry, when running, then the bootstrapProviderFor factory yields an SObject provider whose schema reflects the entry fields', async () => {
+    // Arrange
+    vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
+    const { logger } = makeLogger()
+    const sut = new AuditRunner(logger)
+    const srcPort = makeSfPort({
+      describe: vi.fn().mockResolvedValue({
+        name: 'Account',
+        fields: [{ name: 'Id', label: 'Id', type: 'id' }],
+      }),
+    })
+
+    // Act
+    await sut.run([resolved(sobject)], new Map([['src', srcPort]]))
+
+    // Assert — the third buildAuditChecks arg is the factory; ask it for a
+    // provider, drive buildSourceSchema, and check the resulting fields.
+    const factory = vi.mocked(buildAuditChecks).mock.calls[0][2]!
+    const auditEntries = vi.mocked(buildAuditChecks).mock.calls[0][0]
+    const provider = factory(auditEntries[0])
+    const schema = await provider.buildSourceSchema()
+    expect(schema.fields.map(f => f.name)).toEqual(['Id'])
+  })
+
+  it('given an ELF entry, when running, then the bootstrapProviderFor factory yields an ELF provider that queries LogFileFieldNames', async () => {
+    // Arrange
+    vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
+    const { logger } = makeLogger()
+    const sut = new AuditRunner(logger)
+    const srcPort = makeSfPort({
+      query: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [{ LogFileFieldNames: 'A,B' }],
+      }),
+    })
+
+    // Act
+    await sut.run([resolved(elf)], new Map([['src', srcPort]]))
+
+    // Assert
+    const factory = vi.mocked(buildAuditChecks).mock.calls[0][2]!
+    const auditEntries = vi.mocked(buildAuditChecks).mock.calls[0][0]
+    const provider = factory(auditEntries[0])
+    const schema = await provider.buildSourceSchema()
+    expect(schema.fields.map(f => f.name)).toEqual(['A', 'B'])
+  })
+
+  it('given a CSV entry, when running, then the bootstrapProviderFor factory yields a CSV provider that reads the local header', async () => {
+    // Arrange — drop a header-only file on disk and point the entry at it
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'audit-csv-'))
+    const csvPath = join(dir, 'data.csv')
+    writeFileSync(csvPath, 'colA,colB\n', 'utf-8')
+    try {
+      vi.mocked(runAudit).mockResolvedValueOnce({ passed: true })
+      const { logger } = makeLogger()
+      const sut = new AuditRunner(logger)
+
+      // Act
+      await sut.run([resolved({ ...csv, csvFile: csvPath })], new Map())
+
+      // Assert
+      const factory = vi.mocked(buildAuditChecks).mock.calls[0][2]!
+      const auditEntries = vi.mocked(buildAuditChecks).mock.calls[0][0]
+      const provider = factory(auditEntries[0])
+      const schema = await provider.buildSourceSchema()
+      expect(schema.fields.map(f => f.name)).toEqual(['colA', 'colB'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('given empty entries, when running, then runAudit is still invoked with an empty list and result reports no failures', async () => {
     // Arrange — Zod guarantees entries.length >= 1 at the command layer,
     // but AuditRunner itself must behave sanely if fed an empty slice

@@ -1,15 +1,20 @@
 import {
+  type ConfigEntry,
   type ElfEntry,
   entryKind,
   entryLabel,
   isCsvEntry,
   isElfEntry,
+  isSObjectEntry,
   type ResolvedEntry,
   type SObjectEntry,
 } from '../adapters/config-loader.js'
 import { buildAugmentHeaderSuffix } from '../adapters/pipeline/augment-transform.js'
+import { CsvBootstrapProvider } from '../adapters/readers/csv-bootstrap-provider.js'
 import { CsvReader } from '../adapters/readers/csv-reader.js'
+import { ElfBootstrapProvider } from '../adapters/readers/elf-bootstrap-provider.js'
 import { ElfReader } from '../adapters/readers/elf-reader.js'
+import { SObjectBootstrapProvider } from '../adapters/readers/sobject-bootstrap-provider.js'
 import { SObjectReader } from '../adapters/readers/sobject-reader.js'
 import { DatasetKey } from '../domain/dataset-key.js'
 import { type DateBounds } from '../domain/date-bounds.js'
@@ -22,6 +27,8 @@ import { type WatermarkStore } from '../domain/watermark-store.js'
 import { type MessagesPort } from '../ports/messages.js'
 import {
   type AlignmentSpec,
+  type BootstrapMetadataProvider,
+  type BootstrapSpec,
   type CreateWriterPort,
   type LoggerPort,
   type ProgressPort,
@@ -162,25 +169,95 @@ export class PipelineRunner {
     const { entry } = resolvedEntry
     const providedFields = await resolveProvidedFields(entry, fetcher, sfPorts)
     const label = entryLabel(entry)
+    const datasetKey = DatasetKey.fromEntry(entry)
     const alignment: AlignmentSpec = {
       readerKind: entryKind(entry),
       entryLabel: label,
       providedFields,
       augmentColumns,
     }
+    const bootstrap = this.buildBootstrapSpec(
+      entry,
+      sfPorts,
+      augmentColumns,
+      datasetKey.name
+    )
     return {
       index,
       label,
       readerKey,
       watermarkKey: WatermarkKey.fromEntry(entry),
-      datasetKey: DatasetKey.fromEntry(entry),
+      datasetKey,
       operation: entry.operation,
       augmentColumns,
       fetcher,
       alignment,
+      bootstrap,
       header: async () =>
         (await fetcher.header()) + buildAugmentHeaderSuffix(augmentColumns),
     }
+  }
+
+  // Build the bootstrap spec per entry. Returned undefined for file targets:
+  // FileWriter ignores bootstrap, and the source-org SF port may not even be
+  // available (CSV→file target needs no SF connection).
+  private buildBootstrapSpec(
+    entry: ConfigEntry,
+    sfPorts: ReadonlyMap<string, SalesforcePort>,
+    augmentColumns: Record<string, string>,
+    datasetName: string
+  ): BootstrapSpec | undefined {
+    if (!entry.targetOrg) return undefined
+    const provider = this.buildBootstrapProvider(
+      entry,
+      sfPorts,
+      augmentColumns,
+      datasetName
+    )
+    return { provider, overrideMetadata: entry.overrideMetadata }
+  }
+
+  private buildBootstrapProvider(
+    entry: ConfigEntry,
+    sfPorts: ReadonlyMap<string, SalesforcePort>,
+    augmentColumns: Record<string, string>,
+    datasetName: string
+  ): BootstrapMetadataProvider {
+    if (isCsvEntry(entry)) {
+      return new CsvBootstrapProvider({
+        filePath: entry.csvFile,
+        datasetName,
+        augmentColumns,
+      })
+    }
+    const srcPort = sfPorts.get(entry.sourceOrg)
+    /* v8 ignore next 5 — defensive: buildPipelineEntryStatic already
+       validates sourceOrg port presence before resolveAlignment runs */
+    if (!srcPort) {
+      throw new Error(
+        this.deps.messages.getError('no-source-port', entry.sourceOrg)
+      )
+    }
+    if (isElfEntry(entry)) {
+      return new ElfBootstrapProvider(srcPort, {
+        eventType: entry.eventLog,
+        interval: entry.interval,
+        datasetName,
+        augmentColumns,
+      })
+    }
+    /* v8 ignore next 5 — exhaustive: entry is narrowed to SObjectEntry here */
+    if (!isSObjectEntry(entry)) {
+      throw new Error(
+        `Unsupported entry kind for bootstrap: ${entryKind(entry)}`
+      )
+    }
+    return new SObjectBootstrapProvider(srcPort, {
+      sobject: entry.sObject,
+      fields: entry.fields,
+      datasetName,
+      augmentColumns,
+    })
   }
 
   // Entries sharing the same readerKey share one ReaderPort instance so that

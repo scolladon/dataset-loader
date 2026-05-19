@@ -127,8 +127,9 @@ describe('Dataset ready check', () => {
     expect(sut.kind).toBe('pass')
   })
 
-  it('given dataset query returns 0 records, when executing check, then returns false', async () => {
-    // Arrange
+  it('given dataset query returns 0 records, when executing check, then warns with a will-be-created message naming the dataset (bootstrap-on-missing)', async () => {
+    // Arrange — bootstrap is always on, so a missing dataset is no longer a
+    // hard FAIL: it surfaces as a visible WARN with the dataset name.
     const entries = [
       auditEntryOf({
         isElf: false,
@@ -148,7 +149,11 @@ describe('Dataset ready check', () => {
     const sut = await datasetCheck.execute()
 
     // Assert
-    expect(sut.kind).toBe('fail')
+    expect(sut.kind).toBe('warn')
+    if (sut.kind === 'warn') {
+      expect(sut.message).toContain('MyDataset')
+      expect(sut.message).toMatch(/will be created/i)
+    }
   })
 
   it('given dataset query throws, when executing check, then returns false', async () => {

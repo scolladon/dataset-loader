@@ -1,5 +1,6 @@
 import {
   type AlignmentSpec,
+  type BootstrapSpec,
   type HeaderProvider,
   type Operation,
   type ReaderPort,
@@ -20,6 +21,10 @@ export interface PipelineEntry {
   readonly augmentColumns: Record<string, string>
   readonly fetcher: ReaderPort
   readonly alignment: AlignmentSpec
+  // Per-entry bootstrap wiring. Optional only because legacy tests construct
+  // PipelineEntry literals without it; runtime always sets it for dataset
+  // targets (file targets are unaffected — FileWriter ignores the spec).
+  readonly bootstrap?: BootstrapSpec
   header(): Promise<string>
 }
 

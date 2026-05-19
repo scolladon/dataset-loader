@@ -54,6 +54,7 @@ function makeFakePort(opts: {
     }),
     patch: vi.fn(async () => ({})),
     del: vi.fn(),
+    describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
   }
 }
 

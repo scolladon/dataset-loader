@@ -65,7 +65,8 @@ export async function executePipeline(
       group.operation,
       listener,
       createHeaderProvider(group.entries),
-      group.entries[0].alignment
+      group.entries[0].alignment,
+      group.entries[0].bootstrap
     )
     try {
       const { chunker, datasetFields } = await writer.init()

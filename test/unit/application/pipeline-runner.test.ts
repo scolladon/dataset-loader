@@ -300,6 +300,57 @@ describe('PipelineRunner', () => {
     }
   })
 
+  it('given a CSV entry with a file target (no targetOrg), when running, then PipelineEntry.bootstrap is undefined (file targets bypass bootstrap)', async () => {
+    // Arrange — CSV → file target: no SF describe to do, no bootstrap needed
+    const { runner } = makeRunner()
+    const csvPath = join(os.tmpdir(), `pipeline-${randomUUID()}.csv`)
+    writeFileSync(csvPath, 'col1,col2\nv1,v2\n', 'utf-8')
+    try {
+      const fileTargetEntry = {
+        ...csv,
+        csvFile: csvPath,
+        targetOrg: undefined,
+        targetDataset: undefined,
+        targetFile: csvPath,
+      }
+      await runner.run(
+        [resolved(fileTargetEntry)],
+        new Map(),
+        WatermarkStore.empty(),
+        state,
+        DateBounds.from('2026-01-01T00:00:00.000Z', undefined)
+      )
+
+      // Assert
+      const call = vi.mocked(executePipeline).mock.calls[0][0]
+      const entries = call.entries as readonly PipelineEntry[]
+      expect(entries[0].bootstrap).toBeUndefined()
+    } finally {
+      rmSync(csvPath, { force: true })
+    }
+  })
+
+  it('given an SObject entry with a dataset target, when running, then PipelineEntry.bootstrap carries an SObject provider and the entry overrideMetadata flag', async () => {
+    // Arrange
+    const { runner } = makeRunner()
+    await runner.run(
+      [resolved(sobject)],
+      new Map([['src', makeSfPort()]]),
+      WatermarkStore.empty(),
+      state,
+      DateBounds.from('2026-01-01T00:00:00.000Z', undefined)
+    )
+
+    // Assert
+    const call = vi.mocked(executePipeline).mock.calls[0][0]
+    const entries = call.entries as readonly PipelineEntry[]
+    expect(entries[0].bootstrap).toBeDefined()
+    expect(entries[0].bootstrap?.overrideMetadata).toBe(false)
+    expect(entries[0].bootstrap?.provider.buildSourceSchema).toBeInstanceOf(
+      Function
+    )
+  })
+
   it('given ELF entry, when running, then readerKey is an elf-kind key', async () => {
     // Arrange — symmetric kill for the same ConditionalExpression mutant.
     const { runner } = makeRunner()
