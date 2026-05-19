@@ -314,7 +314,7 @@ A dataset whose `EdgemartAlias` has no `Completed` / `CompletedWithWarnings` pri
 
 ### Two-layer translation
 
-```
+```text
                 source-specific                       wire-shape
   Reader  ──▶  BootstrapProvider ──▶ SourceSchema ──▶ synthesise() ──▶ CrmaMetadataJson ──▶ CRMA
               (SObject/ELF/CSV)                                              │
@@ -342,7 +342,7 @@ The per-entry `overrideMetadata: boolean` flag forces re-synthesis on subsequent
 
 `DatasetWriter.resolveMetadata` is a two-branch chain:
 
-```
+```text
 overrideMetadata=true  → synthesise via injected BootstrapMetadataProvider
 overrideMetadata=false → fetch existing metadata; on miss, fall through to synthesise
 ```
