@@ -1,6 +1,18 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [1.5.0](https://github.com/scolladon/dataset-loader/compare/v1.4.1...v1.5.0) (2026-05-19)
+
+
+### Features
+
+* bootstrap upload to a dataset with no prior completed load ([#45](https://github.com/scolladon/dataset-loader/issues/45)) ([76a4a71](https://github.com/scolladon/dataset-loader/commit/76a4a71a92789b3e565030171c230d92b55c3d3c))
+
+
+### Bug Fixes
+
+* **audit:** correct SOQL clause order and gracefully degrade FLS probe ([#43](https://github.com/scolladon/dataset-loader/issues/43)) ([508c2d5](https://github.com/scolladon/dataset-loader/commit/508c2d5cf31695c7f1142acdfc3a0b0f82761a29))
+
 ## [1.4.1](https://github.com/scolladon/dataset-loader/compare/v1.4.0...v1.4.1) (2026-05-04)
 
 
