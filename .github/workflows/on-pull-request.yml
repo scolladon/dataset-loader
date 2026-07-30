@@ -63,8 +63,11 @@ jobs:
       - name: Setup dependencies, cache and install
         uses: ./.github/actions/install
 
+      # Informational: @types/node is intentionally held at the engines.node
+      # floor so the compiler rejects APIs newer than the oldest supported
+      # runtime. It will always report as outdated.
       - name: Check outdated dependencies
-        run: npm outdated
+        run: npm outdated || true
 
       - name: Audit dependencies
         run: npm audit || true
