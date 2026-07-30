@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [2.0.1](https://github.com/scolladon/dataset-loader/compare/v2.0.0...v2.0.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **release:** replace removed npm shrinkwrap command in prepublishOnly ([#53](https://github.com/scolladon/dataset-loader/issues/53)) ([c821d29](https://github.com/scolladon/dataset-loader/commit/c821d2926d2a30537f6442e13db4f7168168a4df))
+
 ## [2.0.0](https://github.com/scolladon/dataset-loader/compare/v1.5.0...v2.0.0) (2026-07-30)
 
 
