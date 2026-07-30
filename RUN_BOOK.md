@@ -25,7 +25,7 @@ The Dataset Loader is an SF CLI plugin that extracts Salesforce Event Log Files 
 | Tool   | Purpose                             | Version Check    |
 |--------|-------------------------------------|------------------|
 | `sf`   | Salesforce CLI — org authentication | `sf --version`   |
-| `node` | Node.js runtime (>= 18)             | `node --version` |
+| `node` | Node.js runtime (>= 22.19)          | `node --version` |
 
 ### Installation
 

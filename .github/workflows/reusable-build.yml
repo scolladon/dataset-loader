@@ -5,6 +5,11 @@ on:
 
 jobs:
   source:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    name: source (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
@@ -13,7 +18,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
 
       - uses: google/wireit@setup-github-actions-caching/v2
 
@@ -34,5 +39,5 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: coverage-test-report
+          name: coverage-test-report-node-${{ matrix.node }}
           path: coverage

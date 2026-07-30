@@ -1,6 +1,7 @@
 {
   "threshold": 0,
   "reporters": ["html", "markdown"],
+  "format": ["typescript", "javascript"],
   "ignore": [
     "**/node_modules/**",
     "**/.git/**",

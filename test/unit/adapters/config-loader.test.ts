@@ -348,29 +348,34 @@ describe('ConfigLoader', () => {
         /unbalanced parentheses/,
       ],
       ['unclosed open paren', "(Industry = 'Tech'", /unbalanced parentheses/],
-    ])('given sobject entry with forbidden %s in where, when parsing, then rejects with the specific error message', async (_name, badWhere, expectedMessage) => {
-      // Arrange — each row asserts the precise Zod error message, which
-      // kills string-literal mutants on the refine messages (L224, L227,
-      // L231) AND the ObjectLiteral → `{}` mutants (L222, L226, L229) that
-      // would erase the message entirely.
-      const config = {
-        entries: [
-          {
-            sourceOrg: 'src',
-            targetOrg: 'ana',
-            targetDataset: 'DS',
-            sObject: 'Account',
-            fields: ['Id'],
-            where: badWhere,
-          },
-        ],
-      }
-      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+    ])(
+      'given sobject entry with forbidden %s in where, when parsing, then rejects with the specific error message',
+      async (_name, badWhere, expectedMessage) => {
+        // Arrange — each row asserts the precise Zod error message, which
+        // kills string-literal mutants on the refine messages (L224, L227,
+        // L231) AND the ObjectLiteral → `{}` mutants (L222, L226, L229) that
+        // would erase the message entirely.
+        const config = {
+          entries: [
+            {
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              where: badWhere,
+            },
+          ],
+        }
+        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
 
-      // Act & Assert — both wrapper + specific message
-      await expect(parseConfig('config.json')).rejects.toThrow(/where/i)
-      await expect(parseConfig('config.json')).rejects.toThrow(expectedMessage)
-    })
+        // Act & Assert — both wrapper + specific message
+        await expect(parseConfig('config.json')).rejects.toThrow(/where/i)
+        await expect(parseConfig('config.json')).rejects.toThrow(
+          expectedMessage
+        )
+      }
+    )
 
     it.each([
       ['unmatched close paren in string', "Name = 'foo)bar'"],
@@ -389,29 +394,32 @@ describe('ConfigLoader', () => {
         'escape prevents the string from closing early',
         "Name = 'foo\\' bar) (baz'",
       ],
-    ])('given sobject entry with %s in where, when parsing, then accepts (string-aware balance)', async (_name, goodWhere) => {
-      // Arrange — legitimate SOQL whose inside-string parens must not trip
-      // the balance check.
-      const config = {
-        entries: [
-          {
-            sourceOrg: 'src',
-            targetOrg: 'ana',
-            targetDataset: 'DS',
-            sObject: 'Account',
-            fields: ['Id'],
-            where: goodWhere,
-          },
-        ],
+    ])(
+      'given sobject entry with %s in where, when parsing, then accepts (string-aware balance)',
+      async (_name, goodWhere) => {
+        // Arrange — legitimate SOQL whose inside-string parens must not trip
+        // the balance check.
+        const config = {
+          entries: [
+            {
+              sourceOrg: 'src',
+              targetOrg: 'ana',
+              targetDataset: 'DS',
+              sObject: 'Account',
+              fields: ['Id'],
+              where: goodWhere,
+            },
+          ],
+        }
+        vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
+
+        // Act
+        const sut = await parseConfig('config.json')
+
+        // Assert
+        expect(sut.entries).toHaveLength(1)
       }
-      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config))
-
-      // Act
-      const sut = await parseConfig('config.json')
-
-      // Assert
-      expect(sut.entries).toHaveLength(1)
-    })
+    )
 
     it('given entry with multiple discriminator fields, when loading, then throws ambiguity error', async () => {
       // Arrange

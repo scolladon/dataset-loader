@@ -30,7 +30,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: ".nvmrc"
 
       - name: Setup dependencies, cache and install
         uses: ./.github/actions/install
@@ -58,19 +58,25 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: ".nvmrc"
 
       - name: Setup dependencies, cache and install
         uses: ./.github/actions/install
 
+      # Informational: @types/node is intentionally held at the engines.node
+      # floor so the compiler rejects APIs newer than the oldest supported
+      # runtime. It will always report as outdated.
       - name: Check outdated dependencies
-        run: npm outdated
+        run: npm outdated || true
 
       - name: Audit dependencies
         run: npm audit || true
 
       - name: Lint dependencies
         run: npm run lint:dependencies
+
+      - name: Check dependencies node engines
+        run: npm run lint:engine
 
   megalinter:
     runs-on: ubuntu-latest

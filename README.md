@@ -23,7 +23,7 @@ SF CLI plugin that loads Salesforce [Event Log Files](https://developer.salesfor
 ## Prerequisites
 
 - [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli) (`sf`) with authenticated orgs
-- Node.js >= 18
+- Node.js >= 22.19
 
 <details>
 <summary>Required Permissions</summary>

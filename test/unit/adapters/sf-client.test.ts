@@ -108,20 +108,23 @@ describe('SalesforceClient', () => {
       ['protocol-relative', '//attacker.example.com/steal-token'],
       ['empty string', ''],
       ['malformed URL', 'https://['],
-    ])('given %s nextRecordsUrl, when querying more, then throws without making a request', (_name, badUrl) => {
-      // Arrange — defend against malicious server redirecting next page to an attacker host
-      const client = new SalesforceClient(
-        mockConnection({
-          request: requestSpy,
-          instanceUrl: 'https://my-org.my.salesforce.com',
-        }) as never,
-        { retryBaseDelayMs: 0 }
-      )
+    ])(
+      'given %s nextRecordsUrl, when querying more, then throws without making a request',
+      (_name, badUrl) => {
+        // Arrange — defend against malicious server redirecting next page to an attacker host
+        const client = new SalesforceClient(
+          mockConnection({
+            request: requestSpy,
+            instanceUrl: 'https://my-org.my.salesforce.com',
+          }) as never,
+          { retryBaseDelayMs: 0 }
+        )
 
-      // Act & Assert — validation throws synchronously before the request is made
-      expect(() => client.queryMore(badUrl)).toThrow(/Refusing|empty/)
-      expect(requestSpy).not.toHaveBeenCalled()
-    })
+        // Act & Assert — validation throws synchronously before the request is made
+        expect(() => client.queryMore(badUrl)).toThrow(/Refusing|empty/)
+        expect(requestSpy).not.toHaveBeenCalled()
+      }
+    )
 
     it('given uppercased-host nextRecordsUrl matching instanceUrl origin, when querying more, then allows the request', async () => {
       // Arrange — URL.origin normalises the host to lowercase, so this is safe to follow

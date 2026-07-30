@@ -45,13 +45,16 @@ describe('buildAugmentSuffix', () => {
     ['|', "|cmd'/c calc'!A0"],
     ['\\t', '\tevil'],
     ['\\r', '\revil'],
-  ])('given value starting with formula character %s, when building suffix, then prefixes TAB to defuse formula evaluation', (_label, payload) => {
-    // Arrange / Act
-    const sut = buildAugmentSuffix({ Col: payload })
+  ])(
+    'given value starting with formula character %s, when building suffix, then prefixes TAB to defuse formula evaluation',
+    (_label, payload) => {
+      // Arrange / Act
+      const sut = buildAugmentSuffix({ Col: payload })
 
-    // Assert
-    expect(sut).toBe(`,"\t${payload.replaceAll('"', '""')}"`)
-  })
+      // Assert
+      expect(sut).toBe(`,"\t${payload.replaceAll('"', '""')}"`)
+    }
+  )
 })
 
 describe('buildAugmentHeaderSuffix', () => {
