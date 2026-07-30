@@ -3,6 +3,8 @@ lib/
 coverage/
 *.tsbuildinfo
 *.tgz
+npm-shrinkwrap.json
+oclif.manifest.json
 .wireit
 .worktrees/
 spike/
