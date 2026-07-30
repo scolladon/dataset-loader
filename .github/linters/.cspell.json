@@ -48,6 +48,7 @@
         "multibar",
         "Nonoctal",
         "npmjs",
+        "nvmrc",
         "oclif",
         "onwrite",
         "optimisations",
