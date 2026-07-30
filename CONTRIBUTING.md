@@ -3,7 +3,7 @@
 
 ## Prerequisites
 
-- **Node.js** >= 18
+- **Node.js** >= 22.13 (see `.nvmrc`)
 - **Salesforce CLI** (`sf`)
 
 ```bash

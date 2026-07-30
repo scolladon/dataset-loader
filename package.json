@@ -55,6 +55,7 @@
     "lint:staged": "wireit",
     "lint:dependencies": "wireit",
     "lint:duplicates": "wireit",
+    "lint:engine": "wireit",
     "postpack": "shx rm -f oclif.manifest.json && shx sed -i 'blob/v[^/]*/' 'blob/main/' README.md",
     "prepack": "wireit",
     "prepare": "husky",
@@ -173,6 +174,14 @@
         "lint"
       ]
     },
+    "lint:engine": {
+      "command": "ls-engines --no-current --no-dev --mode=virtual",
+      "files": [
+        "package.json",
+        "package-lock.json"
+      ],
+      "output": []
+    },
     "prepack": {
       "command": "oclif manifest && oclif readme",
       "files": [
@@ -285,11 +294,12 @@
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/cli-progress": "^3.11.6",
-    "@types/node": "^25.9.0",
+    "@types/node": "^22.19.2",
     "@vitest/coverage-v8": "^4.1.6",
     "husky": "^9.1.7",
     "jscpd": "^4.2.3",
     "knip": "^6.14.1",
+    "ls-engines": "^0.10.1",
     "oclif": "^4.23.7",
     "shx": "^0.4.0",
     "sinon": "^22.0.0",
@@ -305,6 +315,6 @@
     "/oclif.lock"
   ],
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.13.0"
   }
 }

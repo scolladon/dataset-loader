@@ -30,7 +30,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: ".nvmrc"
 
       - name: Setup dependencies, cache and install
         uses: ./.github/actions/install
@@ -58,7 +58,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: ".nvmrc"
 
       - name: Setup dependencies, cache and install
         uses: ./.github/actions/install
@@ -71,6 +71,9 @@ jobs:
 
       - name: Lint dependencies
         run: npm run lint:dependencies
+
+      - name: Check dependencies node engines
+        run: npm run lint:engine
 
   megalinter:
     runs-on: ubuntu-latest
