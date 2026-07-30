@@ -1,6 +1,17 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [2.0.0](https://github.com/scolladon/dataset-loader/compare/v1.5.0...v2.0.0) (2026-07-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* requires Node.js >= 22.19.0; Node 18 and 20 are no longer supported.
+
+### Features
+
+* migrate to node 22+ with matrix testing and engine lint harness ([#51](https://github.com/scolladon/dataset-loader/issues/51)) ([f8557aa](https://github.com/scolladon/dataset-loader/commit/f8557aa6a38c7ae405cde3834f0b46749ea81938))
+
 ## [1.5.0](https://github.com/scolladon/dataset-loader/compare/v1.4.1...v1.5.0) (2026-05-19)
 
 
