@@ -717,26 +717,29 @@ describe('DatasetWriter', () => {
       '{"objects": null}',
       /metadata\.objects must be an array/,
     ],
-  ])('given %s in existing metadata, when init called, then rejects with dataset name and specific inner message', async (_name, badMeta, innerMessage) => {
-    // Arrange — kills L400 (null-check), L404/L408 (error message literals),
-    // and partial try/catch mutations in normalizeMetadata
-    const sfPort = makeSfPort({
-      query: vi.fn().mockResolvedValue({
-        totalSize: 1,
-        done: true,
-        records: [{ MetadataJson: '/blob/url' }],
-      }),
-      getBlob: vi.fn().mockResolvedValue(badMeta),
-    })
-    const sut = new DatasetWriter(sfPort, dsKey, 'Append')
+  ])(
+    'given %s in existing metadata, when init called, then rejects with dataset name and specific inner message',
+    async (_name, badMeta, innerMessage) => {
+      // Arrange — kills L400 (null-check), L404/L408 (error message literals),
+      // and partial try/catch mutations in normalizeMetadata
+      const sfPort = makeSfPort({
+        query: vi.fn().mockResolvedValue({
+          totalSize: 1,
+          done: true,
+          records: [{ MetadataJson: '/blob/url' }],
+        }),
+        getBlob: vi.fn().mockResolvedValue(badMeta),
+      })
+      const sut = new DatasetWriter(sfPort, dsKey, 'Append')
 
-    // Act & Assert — outer wrap carries dataset name AND inner diagnostic
-    await expect(sut.init()).rejects.toThrow(
-      /Failed to parse metadata for dataset/
-    )
-    await expect(sut.init()).rejects.toThrow(dsKey.name)
-    await expect(sut.init()).rejects.toThrow(innerMessage)
-  })
+      // Act & Assert — outer wrap carries dataset name AND inner diagnostic
+      await expect(sut.init()).rejects.toThrow(
+        /Failed to parse metadata for dataset/
+      )
+      await expect(sut.init()).rejects.toThrow(dsKey.name)
+      await expect(sut.init()).rejects.toThrow(innerMessage)
+    }
+  )
 
   it('given no existing metadata, when init called, then throws SkipDatasetError', async () => {
     // Arrange

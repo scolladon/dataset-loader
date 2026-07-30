@@ -44,10 +44,13 @@ describe('MessagesPort (SfMessages adapter)', () => {
     ['entry', 'entry'],
     ['start-date', 'ISO-8601'],
     ['end-date', 'ISO-8601'],
-  ])('given flag key %s, when getFlagSummary, then surfaces a distinctive substring', (key, marker) => {
-    const sut = loadDatasetLoadMessages()
-    expect(sut.getFlagSummary(key)).toContain(marker)
-  })
+  ])(
+    'given flag key %s, when getFlagSummary, then surfaces a distinctive substring',
+    (key, marker) => {
+      const sut = loadDatasetLoadMessages()
+      expect(sut.getFlagSummary(key)).toContain(marker)
+    }
+  )
 
   // Parameterized coverage of every ErrorKey. Validates both the bundle
   // lookup and the %s substitution path.
@@ -57,13 +60,16 @@ describe('MessagesPort (SfMessages adapter)', () => {
     ['entry-not-found.hint-missing-names', [], ['"name" field']],
     ['no-source-port', ['prod'], ["'prod'", 'No SF connection']],
     ['no-target-port', ['analytic'], ["'analytic'", 'target org']],
-  ])('given error key %s, when getError, then renders the template with substitutions', (key, subs, markers) => {
-    const sut = loadDatasetLoadMessages()
-    const msg = sut.getError(key, ...subs)
-    for (const marker of markers) {
-      expect(msg).toContain(marker)
+  ])(
+    'given error key %s, when getError, then renders the template with substitutions',
+    (key, subs, markers) => {
+      const sut = loadDatasetLoadMessages()
+      const msg = sut.getError(key, ...subs)
+      for (const marker of markers) {
+        expect(msg).toContain(marker)
+      }
+      // No un-interpolated placeholders remain.
+      expect(msg).not.toContain('%s')
     }
-    // No un-interpolated placeholders remain.
-    expect(msg).not.toContain('%s')
-  })
+  )
 })

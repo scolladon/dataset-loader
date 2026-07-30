@@ -182,9 +182,12 @@ describe('ReaderKey', () => {
         ReaderKey.forElf('prod', 'Login', 'Daily', none()),
         ReaderKey.forElf('prod', 'Logout', 'Daily', none()),
       ],
-    ])('given two ELF keys that differ only by %s, when comparing, then they differ', (_axis, a, b) => {
-      expect(a.toString()).not.toBe(b.toString())
-    })
+    ])(
+      'given two ELF keys that differ only by %s, when comparing, then they differ',
+      (_axis, a, b) => {
+        expect(a.toString()).not.toBe(b.toString())
+      }
+    )
 
     it.each([
       [
@@ -292,8 +295,11 @@ describe('ReaderKey', () => {
           none()
         ),
       ],
-    ])('given two SObject keys that differ only by %s, when comparing, then they differ', (_axis, a, b) => {
-      expect(a.toString()).not.toBe(b.toString())
-    })
+    ])(
+      'given two SObject keys that differ only by %s, when comparing, then they differ',
+      (_axis, a, b) => {
+        expect(a.toString()).not.toBe(b.toString())
+      }
+    )
   })
 })

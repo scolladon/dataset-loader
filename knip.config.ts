@@ -8,5 +8,4 @@ export default {
   ],
   project: ['**/*.{ts,js,json,yml}'],
   ignoreDependencies: ['sinon'],
-  ignoreBinaries: ['npm-check-updates'],
 }

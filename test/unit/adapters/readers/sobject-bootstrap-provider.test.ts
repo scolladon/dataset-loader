@@ -215,34 +215,37 @@ describe('SObjectBootstrapProvider', () => {
     ['date', 'Date'],
     ['datetime', 'Date'],
     ['unknownfuturetype', 'Text'],
-  ])('given SF type %s, when build, then maps to CRMA type %s', async (sfType, crmaType) => {
-    // Arrange — synthesise a single-field describe response for the input type
-    const port = describePort({
-      Custom__c: {
-        name: 'Custom__c',
-        fields: [
-          field({
-            name: 'F',
-            type: sfType,
-            precision: sfType === 'int' ? 9 : undefined,
-            scale: sfType === 'int' ? 0 : undefined,
-          }),
-        ],
-      },
-    })
-    const sut = new SObjectBootstrapProvider(port, {
-      sobject: 'Custom__c',
-      fields: ['F'],
-      datasetName: 'X',
-      augmentColumns: {},
-    })
+  ])(
+    'given SF type %s, when build, then maps to CRMA type %s',
+    async (sfType, crmaType) => {
+      // Arrange — synthesise a single-field describe response for the input type
+      const port = describePort({
+        Custom__c: {
+          name: 'Custom__c',
+          fields: [
+            field({
+              name: 'F',
+              type: sfType,
+              precision: sfType === 'int' ? 9 : undefined,
+              scale: sfType === 'int' ? 0 : undefined,
+            }),
+          ],
+        },
+      })
+      const sut = new SObjectBootstrapProvider(port, {
+        sobject: 'Custom__c',
+        fields: ['F'],
+        datasetName: 'X',
+        augmentColumns: {},
+      })
 
-    // Act
-    const result = await sut.buildSourceSchema()
+      // Act
+      const result = await sut.buildSourceSchema()
 
-    // Assert
-    expect(result.fields[0].type).toBe(crmaType)
-  })
+      // Assert
+      expect(result.fields[0].type).toBe(crmaType)
+    }
+  )
 
   it('given SF date field, when build, then format is yyyy-MM-dd (date-only)', async () => {
     // Arrange

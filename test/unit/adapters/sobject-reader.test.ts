@@ -796,35 +796,38 @@ describe('SObjectReader', () => {
   it.each([
     ['number', 42, '"42"'],
     ['boolean', true, '"true"'],
-  ])('given %s field value, when fetching, then coerces via String() and CSV-quotes', async (_name, payload, expected) => {
-    // Arrange — kills the typeof === 'string' short-circuit branch
-    const sfPort = makeSfPort({
-      query: vi.fn().mockResolvedValue({
-        totalSize: 1,
-        done: true,
-        records: [
-          {
-            Id: '001',
-            NumField: payload,
-            LastModifiedDate: '2026-03-01T00:00:00.000Z',
-          },
-        ],
-      }),
-    })
-    const sut = new SObjectReader(sfPort, {
-      sobject: 'Account',
-      fields: ['Id', 'NumField'],
-      dateField: 'LastModifiedDate',
-      bounds: DateBounds.none(),
-    })
+  ])(
+    'given %s field value, when fetching, then coerces via String() and CSV-quotes',
+    async (_name, payload, expected) => {
+      // Arrange — kills the typeof === 'string' short-circuit branch
+      const sfPort = makeSfPort({
+        query: vi.fn().mockResolvedValue({
+          totalSize: 1,
+          done: true,
+          records: [
+            {
+              Id: '001',
+              NumField: payload,
+              LastModifiedDate: '2026-03-01T00:00:00.000Z',
+            },
+          ],
+        }),
+      })
+      const sut = new SObjectReader(sfPort, {
+        sobject: 'Account',
+        fields: ['Id', 'NumField'],
+        dateField: 'LastModifiedDate',
+        bounds: DateBounds.none(),
+      })
 
-    // Act
-    const result = await sut.fetch()
-    const lines = await collectLines(result.lines)
+      // Act
+      const result = await sut.fetch()
+      const lines = await collectLines(result.lines)
 
-    // Assert
-    expect(lines[0]).toContain(expected as string)
-  })
+      // Assert
+      expect(lines[0]).toContain(expected as string)
+    }
+  )
 
   it.each([
     ['equals formula', '=HYPERLINK("http://evil","click")'],
@@ -834,37 +837,40 @@ describe('SObjectReader', () => {
     ['leading pipe', "|cmd'/c calc'!A0"],
     ['tab-prefixed', '\texisting tab'],
     ['cr-prefixed', '\rcarriage'],
-  ])('given field value starting with %s, when fetching, then prefixes with TAB to defuse spreadsheet formula evaluation', async (_name, payload) => {
-    // Arrange
-    const sfPort = makeSfPort({
-      query: vi.fn().mockResolvedValue({
-        totalSize: 1,
-        done: true,
-        records: [
-          {
-            Id: '001',
-            Name: payload,
-            LastModifiedDate: '2026-03-01T00:00:00.000Z',
-          },
-        ],
-      }),
-    })
-    const sut = new SObjectReader(sfPort, {
-      sobject: 'Account',
-      fields: ['Id', 'Name'],
-      dateField: 'LastModifiedDate',
-      bounds: DateBounds.none(),
-    })
+  ])(
+    'given field value starting with %s, when fetching, then prefixes with TAB to defuse spreadsheet formula evaluation',
+    async (_name, payload) => {
+      // Arrange
+      const sfPort = makeSfPort({
+        query: vi.fn().mockResolvedValue({
+          totalSize: 1,
+          done: true,
+          records: [
+            {
+              Id: '001',
+              Name: payload,
+              LastModifiedDate: '2026-03-01T00:00:00.000Z',
+            },
+          ],
+        }),
+      })
+      const sut = new SObjectReader(sfPort, {
+        sobject: 'Account',
+        fields: ['Id', 'Name'],
+        dateField: 'LastModifiedDate',
+        bounds: DateBounds.none(),
+      })
 
-    // Act
-    const result = await sut.fetch()
-    const lines = await collectLines(result.lines)
+      // Act
+      const result = await sut.fetch()
+      const lines = await collectLines(result.lines)
 
-    // Assert — field is wrapped in quotes AND prefixed with a TAB (with
-    // any embedded " doubled per CSV escaping)
-    const expected = `"\t${payload.split('"').join('""')}"`
-    expect(lines[0]).toContain(expected)
-  })
+      // Assert — field is wrapped in quotes AND prefixed with a TAB (with
+      // any embedded " doubled per CSV escaping)
+      const expected = `"\t${payload.split('"').join('""')}"`
+      expect(lines[0]).toContain(expected)
+    }
+  )
 })
 
 describe('SObjectReader.project', () => {
