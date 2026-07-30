@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779175764864,
+  "lastUpdate": 1785419680840,
   "repoUrl": "https://github.com/scolladon/dataset-loader",
   "entries": {
     "Memory Benchmark": [
@@ -2185,6 +2185,162 @@ window.BENCHMARK_DATA = {
             "name": "throughput-channel-push-consume-10k",
             "value": 1.4275,
             "range": "±1.18%",
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "colladonsebastien@gmail.com",
+            "name": "Sebastien",
+            "username": "scolladon"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f8557aa6a38c7ae405cde3834f0b46749ea81938",
+          "message": "feat!: migrate to node 22+ with matrix testing and engine lint harness (#51)\n\nBREAKING CHANGE: requires Node.js >= 22.19.0; Node 18 and 20 are no longer supported.",
+          "timestamp": "2026-07-30T15:51:58+02:00",
+          "tree_id": "5ee756786a88849167848ffec72c841c124812bd",
+          "url": "https://github.com/scolladon/dataset-loader/commit/f8557aa6a38c7ae405cde3834f0b46749ea81938"
+        },
+        "date": 1785419680815,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "watermark-parse-valid",
+            "value": 0.0001,
+            "range": "±0.14%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-to-soql",
+            "value": 0.0001,
+            "range": "±0.10%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-create-5",
+            "value": 0.001,
+            "range": "±0.27%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-get-5",
+            "value": 0.0001,
+            "range": "±0.11%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-set-5",
+            "value": 0.0004,
+            "range": "±1.94%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-create-20",
+            "value": 0.0055,
+            "range": "±1.59%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-get-20",
+            "value": 0.0001,
+            "range": "±0.11%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-set-20",
+            "value": 0.0012,
+            "range": "±0.38%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-create-50",
+            "value": 0.0128,
+            "range": "±0.30%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-get-50",
+            "value": 0.0001,
+            "range": "±0.11%",
+            "unit": "ms"
+          },
+          {
+            "name": "watermark-store-set-50",
+            "value": 0.0026,
+            "range": "±0.39%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-gzip-chunking-small",
+            "value": 0.4836,
+            "range": "±1.46%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-gzip-chunking-medium",
+            "value": 4.2181,
+            "range": "±4.02%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-gzip-chunking-large",
+            "value": 104.4075,
+            "range": "±4.55%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-fanout-1-channels",
+            "value": 0.073,
+            "range": "±13.55%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-fanout-3-channels",
+            "value": 0.0615,
+            "range": "±11.87%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-fanout-5-channels",
+            "value": 0.0684,
+            "range": "±14.37%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-augment-small",
+            "value": 0.0024,
+            "range": "±0.11%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-augment-medium",
+            "value": 0.0232,
+            "range": "±0.12%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-augment-large",
+            "value": 0.2456,
+            "range": "±0.14%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-channel-push-consume-1k",
+            "value": 0.1792,
+            "range": "±0.39%",
+            "unit": "ms"
+          },
+          {
+            "name": "throughput-channel-push-consume-10k",
+            "value": 1.7531,
+            "range": "±0.31%",
             "unit": "ms"
           }
         ]
