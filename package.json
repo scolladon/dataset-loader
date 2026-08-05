@@ -270,17 +270,17 @@
     }
   },
   "dependencies": {
-    "@salesforce/core": "^9.0.0",
-    "@salesforce/sf-plugins-core": "^13.0.0",
-    "cli-progress": "^3.12.0",
-    "p-limit": "^7.3.1",
-    "zod": "^4.4.3"
+    "@salesforce/core": "9.1.0",
+    "@salesforce/sf-plugins-core": "13.0.0",
+    "cli-progress": "3.12.0",
+    "p-limit": "7.3.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.6",
+    "@biomejs/biome": "^2.5.7",
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
-    "@oclif/plugin-help": "^6.2.55",
+    "@oclif/plugin-help": "^6.2.56",
     "@salesforce/ts-types": "^3.0.1",
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/vitest-runner": "^9.6.1",
@@ -289,7 +289,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "husky": "^9.1.7",
     "jscpd": "^5.0.14",
-    "knip": "^6.29.0",
+    "knip": "^6.31.0",
     "ls-engines": "^0.10.1",
     "oclif": "^4.23.29",
     "shx": "^0.4.0",
