@@ -82,6 +82,32 @@ npx vitest run test/unit/domain/watermark.test.ts
 npx vitest run -t "watermark"
 ```
 
+## Preview Builds
+
+Every pull request publishes a preview build of the plugin and comments the command to
+install it:
+
+```bash
+sf plugins install https://pkg.pr.new/dataset-loader@<short-sha>
+```
+
+The end-to-end job installs that same preview on Node 22, 24 and 26, so a pull request is
+tested as a real plugin install rather than only as a source build. Previews expire after
+a few weeks; they are for review, never for production use.
+
+Pull requests from forks get a preview too — the publish step holds no token and needs no
+secret. A maintainer has to approve the workflow run first.
+
+Two repository settings this depends on, for maintainers:
+
+- The [pkg.pr.new GitHub App](https://github.com/apps/pkg-pr-new) must stay installed on
+  the repository. Without it the preview job fails on a `Check failed (404)`.
+- **Settings → Actions → General → Fork pull request workflows** must require approval for
+  **all external collaborators**. A fork's build publishes under this project's package
+  name, and this setting is the only control over who can trigger that. The GitHub default
+  gates first-time contributors only, which would let a returning contributor publish
+  unattended.
+
 ## Writing Tests
 
 Tests use [Vitest](https://vitest.dev/). Coverage target is 100% (excluding `ports/types.ts`).
