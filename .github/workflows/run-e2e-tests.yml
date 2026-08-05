@@ -5,9 +5,12 @@ on:
   workflow_call:
     inputs:
       channel:
-        description: npm channel to install the plugin from
+        description: npm spec or tarball url to install the plugin from
         required: true
         type: string
+
+permissions:
+  contents: read
 
 jobs:
   e2e:
@@ -18,12 +21,19 @@ jobs:
     name: e2e (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     steps:
+      # The input is required with no default, so an omitted value is already a
+      # workflow error. This catches the empty and whitespace-only string a caller
+      # can still pass, and keeps a future default from substituting silently.
       - name: Guard channel input
         env:
           CHANNEL: ${{ inputs.channel }}
         run: |
-          if [ -z "$CHANNEL" ]; then
+          if [ -z "${CHANNEL//[[:space:]]/}" ]; then
             echo "::error::channel input is empty" >&2
+            exit 1
+          fi
+          if [ "$CHANNEL" != "${CHANNEL#*[[:space:]]}" ]; then
+            echo "::error::channel input holds more than one install target: $CHANNEL" >&2
             exit 1
           fi
 
@@ -36,7 +46,14 @@ jobs:
         run: npm install -g @salesforce/cli
 
       - name: Install plugin
-        run: echo y | sf plugins install ${{ inputs.channel }}
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: echo y | sf plugins install "$CHANNEL"
 
       - name: Verify plugin installation
         run: sf dataset load --help
+
+      # A green --help only proves something installed. Assert it is this plugin,
+      # so a stale registry version can never pass for the build under test.
+      - name: Verify installed plugin identity
+        run: sf plugins inspect dataset-loader

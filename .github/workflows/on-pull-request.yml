@@ -106,9 +106,7 @@ jobs:
 
   build:
     uses: ./.github/workflows/reusable-build.yml
-    secrets: inherit
 
   perf:
     needs: [build]
     uses: ./.github/workflows/reusable-perf.yml
-    secrets: inherit
