@@ -18,6 +18,15 @@ jobs:
     name: e2e (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     steps:
+      - name: Guard channel input
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [ -z "$CHANNEL" ]; then
+            echo "::error::channel input is empty" >&2
+            exit 1
+          fi
+
       - name: Setup node
         uses: actions/setup-node@v6
         with:
