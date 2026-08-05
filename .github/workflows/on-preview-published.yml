@@ -1,0 +1,67 @@
+---
+name: Preview Comment
+
+on:
+  workflow_run:
+    workflows: ["NPM Service"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  comment:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Download preview metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: preview-metadata
+          path: preview
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve pull request number
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          NUMBER=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[0].number // empty')
+          if [ -z "$NUMBER" ]; then
+            echo "no open pull request for $HEAD_SHA - skipping"
+          fi
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Read preview url
+        id: preview
+        if: steps.pr.outputs.number != ''
+        env:
+          PREVIEW_PREFIX: https://pkg.pr.new/
+        run: |
+          URL=$(head -n 1 preview/url | tr -dc 'A-Za-z0-9:/@._-')
+          if [ "${URL#"$PREVIEW_PREFIX"}" = "$URL" ]; then
+            echo "::error::unexpected preview url" >&2
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview install command
+        if: steps.preview.outputs.url != ''
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          pr-number: ${{ steps.pr.outputs.number }}
+          message: |
+            Preview build for this pull request:
+            ```sh
+            sf plugins install ${{ steps.preview.outputs.url }}
+            ```
+          comment-tag: dev-publish
+          mode: recreate
