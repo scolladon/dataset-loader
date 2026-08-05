@@ -9,6 +9,11 @@ updates:
       prefix: "build"
     groups:
       github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
         patterns:
           - "*"
 
@@ -27,10 +32,24 @@ updates:
           - "version-update:semver-major"
     groups:
       runtime-dependencies:
+        applies-to: version-updates
         dependency-type: "production"
         patterns:
           - "*"
       development-dependencies:
+        applies-to: version-updates
+        dependency-type: "development"
+        patterns:
+          - "*"
+      # Security updates ignore version-update groups and would otherwise open one
+      # ungrouped, off-schedule pull request each.
+      runtime-dependencies-security:
+        applies-to: security-updates
+        dependency-type: "production"
+        patterns:
+          - "*"
+      development-dependencies-security:
+        applies-to: security-updates
         dependency-type: "development"
         patterns:
           - "*"
