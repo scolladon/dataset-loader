@@ -9,7 +9,7 @@ on:
       - "**.md"
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 # Manage concurrency to stop running jobs and start new ones in case of new commit pushed
