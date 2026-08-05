@@ -57,8 +57,11 @@ jobs:
         with:
           node-version-file: ".nvmrc"
       - uses: ./.github/actions/install
-        with:
-          cache: restore
+
+      # pkg-pr-new packs via npm pack, whose prepack hook builds. Building first
+      # keeps a lint or compile failure legible instead of surfacing as a pack error.
+      - name: Build plugin
+        run: npm run build
 
       - name: Publish preview
         id: publish-preview
@@ -67,11 +70,9 @@ jobs:
       - name: Record preview metadata
         env:
           PREVIEW_URL: ${{ steps.publish-preview.outputs.urls }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           mkdir -p preview
           printf '%s\n' "$PREVIEW_URL" > preview/url
-          printf '%s\n' "$PR_NUMBER" > preview/pr-number
 
       - name: Upload preview metadata
         uses: actions/upload-artifact@v7

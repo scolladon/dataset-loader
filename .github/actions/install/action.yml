@@ -2,12 +2,6 @@
 name: Install
 description: Install dependencies
 
-inputs:
-  cache:
-    description: Cache behaviour - "read-write" (default) or "restore" for restore-only
-    required: false
-    default: read-write
-
 runs:
   using: composite
   steps:
@@ -16,14 +10,7 @@ runs:
       run: echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
       shell: bash
 
-    - if: inputs.cache != 'restore'
-      uses: actions/cache@v6
-      with:
-        path: ${{ steps.cache-dir.outputs.dir }}
-        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-
-    - if: inputs.cache == 'restore'
-      uses: actions/cache/restore@v6
+    - uses: actions/cache@v6
       with:
         path: ${{ steps.cache-dir.outputs.dir }}
         key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
