@@ -1,33 +1,54 @@
 ---
-name: E2E Tests
-
+name: E2E Tests a published version
 on:
   workflow_call:
     inputs:
       channel:
-        description: npm channel to install the plugin from
-        required: true
+        description: npm spec or tarball url to install the plugin from
         type: string
+        required: true
+
+permissions:
+  contents: read
 
 jobs:
-  e2e:
+  e2e-test:
     strategy:
       fail-fast: false
       matrix:
-        node: [22, 24, 26]
-    name: e2e (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+        os: [macos-latest, windows-latest, ubuntu-latest]
+        # Floating: previous LTS, active LTS, current. These shift when a new
+        # LTS is cut (Oct), so engines.node must move with them or CI stops
+        # testing a version the manifest still promises.
+        node: ['lts/-1', 'lts/*', 'latest']
+    runs-on: ${{ matrix.os }}
+    # Two different shells run here. `shell:` governs the run: block, where the
+    # windows default (pwsh) makes `>> "$GITHUB_ENV"` silently ineffective;
+    # npm_config_script_shell governs the bodies npm spawns for `npm run`, whose
+    # windows default is cmd.exe, not pwsh.
+    defaults:
+      run:
+        shell: bash
+    env:
+      npm_config_script_shell: bash
     steps:
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
 
-      - name: Install Salesforce CLI
+      - name: Set environment variables
+        run: |
+          echo "SF_DISABLE_AUTOUPDATE=true" >> "$GITHUB_ENV"
+          echo "SF_DISABLE_TELEMETRY=true" >> "$GITHUB_ENV"
+
+      - name: Install cli
         run: npm install -g @salesforce/cli
 
-      - name: Install plugin
-        run: echo y | sf plugins install ${{ inputs.channel }}
+      - name: Install new plugin version
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: echo y | sf plugins install "$CHANNEL"
 
-      - name: Verify plugin installation
+      - name: Test new plugin version installation
         run: sf dataset load --help

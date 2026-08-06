@@ -1,4 +1,0 @@
-[[IgnoredVulns]]
-id = "GHSA-f886-m6hf-6m8v"
-ignoreUntil = 2026-12-31
-reason = "brace-expansion is a transitive dev-only dep of wireit; upstream fix pending. Re-evaluate after wireit publishes a release on a patched brace-expansion."

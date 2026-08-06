@@ -51,7 +51,6 @@
     "postpack": "shx rm -f oclif.manifest.json && shx sed -i 'blob/v[^/]*/' 'blob/main/' README.md",
     "prepack": "wireit",
     "prepare": "husky",
-    "prepublishOnly": "shx cp package-lock.json npm-shrinkwrap.json",
     "test": "wireit",
     "test:build": "wireit",
     "test:unit": "wireit",
@@ -60,7 +59,9 @@
     "test:mutation": "wireit",
     "test:watch": "vitest",
     "dependencies:upgrade": "npx npm-check-updates -u ; npm install ; npm audit fix",
-    "test:perf": "wireit"
+    "test:perf": "wireit",
+    "preview:publish": "pkg-pr-new publish --comment=off",
+    "test:mutation:incremental": "wireit"
   },
   "wireit": {
     "build": {
@@ -268,45 +269,64 @@
       "output": [
         "reports/mutation/**"
       ]
+    },
+    "test:mutation:incremental": {
+      "command": "FILES=$(git --no-pager diff --name-only --diff-filter=AM --merge-base origin/main src | grep '.ts$' | paste -sd ',' -) && [ -n \"$FILES\" ] && stryker run --mutate \"$FILES\" || echo 'No source files changed — skipping mutation testing'",
+      "dependencies": [
+        "lint"
+      ],
+      "files": [
+        "src/**/*.ts",
+        "test/unit/**/*.test.ts",
+        "vitest.config.ts",
+        "stryker.config.mjs",
+        "tsconfig.json"
+      ],
+      "output": [
+        "reports/mutation/**"
+      ]
     }
   },
   "dependencies": {
-    "@salesforce/core": "^9.0.0",
-    "@salesforce/sf-plugins-core": "^13.0.0",
-    "cli-progress": "^3.12.0",
-    "p-limit": "^7.3.1",
-    "zod": "^4.4.3"
+    "@salesforce/core": "9.1.0",
+    "@salesforce/sf-plugins-core": "13.0.0",
+    "cli-progress": "3.12.0",
+    "p-limit": "7.3.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.6",
-    "@commitlint/cli": "^21.2.1",
-    "@commitlint/config-conventional": "^21.2.0",
-    "@oclif/plugin-help": "^6.2.55",
-    "@salesforce/ts-types": "^3.0.1",
-    "@stryker-mutator/core": "^9.6.1",
-    "@stryker-mutator/vitest-runner": "^9.6.1",
-    "@types/cli-progress": "^3.11.6",
-    "@types/node": "^22.19.2",
-    "@vitest/coverage-v8": "^4.1.10",
-    "husky": "^9.1.7",
-    "jscpd": "^5.0.14",
-    "knip": "^6.29.0",
-    "ls-engines": "^0.10.1",
-    "oclif": "^4.23.29",
-    "shx": "^0.4.0",
-    "sinon": "^22.1.0",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "wireit": "^0.14.13"
+    "@biomejs/biome": "2.5.7",
+    "@commitlint/cli": "21.2.1",
+    "@commitlint/config-conventional": "21.2.0",
+    "@oclif/plugin-help": "6.2.56",
+    "@salesforce/ts-types": "3.0.1",
+    "@stryker-mutator/core": "9.6.1",
+    "@stryker-mutator/vitest-runner": "9.6.1",
+    "@types/cli-progress": "3.11.6",
+    "@types/node": "26.1.2",
+    "@vitest/coverage-v8": "4.1.10",
+    "husky": "9.1.7",
+    "jscpd": "5.0.14",
+    "knip": "6.32.0",
+    "ls-engines": "0.10.1",
+    "oclif": "4.23.30",
+    "pkg-pr-new": "0.0.87",
+    "shx": "0.4.0",
+    "sinon": "22.1.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "wireit": "0.14.13"
+  },
+  "overrides": {
+    "qs": "6.15.3"
   },
   "files": [
     "/lib",
     "/messages",
-    "/oclif.manifest.json",
-    "/npm-shrinkwrap.json",
-    "/oclif.lock"
+    "/oclif.manifest.json"
   ],
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "npm": ">=12"
   }
 }

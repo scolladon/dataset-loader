@@ -3,7 +3,8 @@
 
 ## Prerequisites
 
-- **Node.js** >= 22.19 (see `.nvmrc`)
+- **Node.js** >= 22.19 (see `engines.node` in `package.json`)
+- **npm** >= 12 (see `engines.npm`)
 - **Salesforce CLI** (`sf`)
 
 ```bash
@@ -81,6 +82,62 @@ npx vitest run test/unit/domain/watermark.test.ts
 # Filter by name
 npx vitest run -t "watermark"
 ```
+
+## Dependency policy
+
+This repository is kept aligned with its three sibling plugins (`sfdx-git-delta`,
+`apex-mutation-testing`, `sf-git-merge-driver`, `dataset-loader`), so the rules below are
+identical in all four.
+
+- **Every dependency is pinned exactly** — runtime and dev alike. No `^`, no `~`, no ranges.
+  A range in a runtime dependency becomes non-determinism for consumers, and a range in a dev
+  dependency becomes drift between the four repositories.
+- **`.npmrc` sets `save-exact=true`**, so `npm install <package>` records an exact version by
+  default. This is the only mechanism enforcing the rule — keep the file. `save-exact` cannot
+  be expressed in `package.json`: npm reads it from `.npmrc` or the `npm_config_save_exact`
+  environment variable, and `publishConfig` applies at publish time only.
+- **Pins track current latest.** Dependabot moves them; its `versioning-strategy: increase`
+  raises a pinned requirement in place rather than widening it, so grouped updates stay exact.
+- **npm 12 is required** (`engines.npm: ">=12"`), and **no shrinkwrap is shipped**. npm 12
+  excludes `npm-shrinkwrap.json` from `npm pack` even when it is listed in `files`, silently
+  and with exit 0, so the mechanism is inert rather than merely unused.
+- **There is deliberately no lint for this.** `npm outdated` runs as a blocking check in CI
+  and catches a pin that has fallen behind latest, but it cannot see a range that still
+  resolves to latest. Adding a hand-edited range is caught in review, not by tooling.
+
+What the pinning does and does not buy: it caps only the direct dependencies a consumer
+resolves. The transitive majority still floats, and capping those would mean declaring the
+whole chain directly.
+
+## Preview Builds
+
+Every pull request publishes a preview build of the plugin and comments the command to
+install it:
+
+```bash
+sf plugins install https://pkg.pr.new/dataset-loader@<short-sha>
+```
+
+The end-to-end job installs that same preview on Node 22, 24 and 26, so a pull request is
+tested as a real plugin install rather than only as a source build. Previews expire after
+a few weeks; they are for review, never for production use.
+
+Pull requests from forks get a preview and the same end-to-end run — the publish step holds
+no token and needs no secret. A maintainer has to approve the workflow run first.
+
+The install command is only **commented** on pull requests raised from a branch of this
+repository. A fork's token is read-only, so the comment step is skipped for forks; the
+preview URL is in the `preview` job's log, under `Publish preview`.
+
+Two repository settings this depends on, for maintainers:
+
+- The [pkg.pr.new GitHub App](https://github.com/apps/pkg-pr-new) must stay installed on
+  the repository. Without it the preview job fails on a `Check failed (404)`.
+- **Settings → Actions → General → Fork pull request workflows** must require approval for
+  **all external collaborators**. A fork's build publishes under this project's package
+  name, and this setting is the only control over who can trigger that. The GitHub default
+  gates first-time contributors only, which would let a returning contributor publish
+  unattended.
 
 ## Writing Tests
 
