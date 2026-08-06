@@ -4,15 +4,10 @@ name: NPM Service
 on:
   release:
     types: [published]
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-    paths-ignore:
-      - "**.md"
 
+# Least-privilege default; the publish job escalates explicitly.
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
@@ -20,7 +15,6 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.publish.outputs.channel }}
@@ -29,9 +23,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version-file: ".nvmrc"
+          node-version: 'lts/*'
           registry-url: "https://registry.npmjs.org"
       - run: npm install -g npm@latest
       - uses: ./.github/actions/install
@@ -44,50 +40,8 @@ jobs:
           npm publish --provenance --access public --tag "latest-rc"
           echo "channel=dataset-loader@$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
-  preview:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    outputs:
-      channel: ${{ steps.publish-preview.outputs.urls }}
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: ".nvmrc"
-      - uses: ./.github/actions/install
-
-      # pkg-pr-new packs via npm pack, whose prepack hook builds. Building first
-      # keeps a lint or compile failure legible instead of surfacing as a pack error.
-      - name: Build plugin
-        run: npm run build
-
-      # --comment=off because the built-in comment says "npm i <url>", which does
-      # not install an sf plugin and cannot be reworded.
-      - name: Publish preview
-        id: publish-preview
-        run: npx --yes pkg-pr-new@0.0.86 publish --comment=off
-
-      # A fork pull request's token is read-only whatever this job declares, so the
-      # comment would 403 and fail the job, taking the e2e matrix down with it.
-      # Forks still get the preview and the full e2e run - only the comment is skipped.
-      - name: Comment preview install command
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: thollander/actions-comment-pull-request@v3
-        with:
-          message: |
-            Preview build for this pull request:
-            ```sh
-            sf plugins install ${{ steps.publish-preview.outputs.urls }}
-            ```
-          comment-tag: dev-publish
-          mode: recreate
-
   e2e-tests:
-    needs: [publish, preview]
-    if: "!cancelled() && (needs.publish.result == 'success' || needs.preview.result == 'success')"
+    needs: [publish]
     uses: ./.github/workflows/run-e2e-tests.yml
     with:
-      channel: ${{ needs.publish.outputs.channel || needs.preview.outputs.channel }}
+      channel: ${{ needs.publish.outputs.channel }}

@@ -8,7 +8,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [22, 24, 26]
+        # Floating: previous LTS, active LTS, current. These shift when a new
+        # LTS is cut (Oct), so engines.node must move with them or CI stops
+        # testing a version the manifest still promises.
+        node: ['lts/-1', 'lts/*', 'latest']
     name: source (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     steps:
@@ -37,7 +40,10 @@ jobs:
       - name: Integration test
         run: npm run test:integration
 
+      # Once, from the active-LTS leg: upload-artifact rejects '/' and '*' in a
+      # name, and the matrix values now contain both.
       - uses: actions/upload-artifact@v7
+        if: matrix.node == 'lts/*'
         with:
-          name: coverage-test-report-node-${{ matrix.node }}
+          name: coverage-test-report
           path: coverage
