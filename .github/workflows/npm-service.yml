@@ -51,6 +51,7 @@ jobs:
       channel: ${{ steps.publish-preview.outputs.urls }}
     permissions:
       contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -63,22 +64,26 @@ jobs:
       - name: Build plugin
         run: npm run build
 
+      # --comment=off because the built-in comment says "npm i <url>", which does
+      # not install an sf plugin and cannot be reworded.
       - name: Publish preview
         id: publish-preview
         run: npx --yes pkg-pr-new@0.0.86 publish --comment=off
 
-      - name: Record preview metadata
-        env:
-          PREVIEW_URL: ${{ steps.publish-preview.outputs.urls }}
-        run: |
-          mkdir -p preview
-          printf '%s\n' "$PREVIEW_URL" > preview/url
-
-      - name: Upload preview metadata
-        uses: actions/upload-artifact@v7
+      # A fork pull request's token is read-only whatever this job declares, so the
+      # comment would 403 and fail the job, taking the e2e matrix down with it.
+      # Forks still get the preview and the full e2e run - only the comment is skipped.
+      - name: Comment preview install command
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: thollander/actions-comment-pull-request@v3
         with:
-          name: preview-metadata
-          path: preview
+          message: |
+            Preview build for this pull request:
+            ```sh
+            sf plugins install ${{ steps.publish-preview.outputs.urls }}
+            ```
+          comment-tag: dev-publish
+          mode: recreate
 
   e2e-tests:
     needs: [publish, preview]

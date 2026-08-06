@@ -95,8 +95,12 @@ The end-to-end job installs that same preview on Node 22, 24 and 26, so a pull r
 tested as a real plugin install rather than only as a source build. Previews expire after
 a few weeks; they are for review, never for production use.
 
-Pull requests from forks get a preview too — the publish step holds no token and needs no
-secret. A maintainer has to approve the workflow run first.
+Pull requests from forks get a preview and the same end-to-end run — the publish step holds
+no token and needs no secret. A maintainer has to approve the workflow run first.
+
+The install command is only **commented** on pull requests raised from a branch of this
+repository. A fork's token is read-only, so the comment step is skipped for forks; the
+preview URL is in the `preview` job's log, under `Publish preview`.
 
 Two repository settings this depends on, for maintainers:
 
