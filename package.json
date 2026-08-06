@@ -58,7 +58,6 @@
     "test:integration": "wireit",
     "test:mutation": "wireit",
     "test:watch": "vitest",
-    "dependencies:upgrade": "npx npm-check-updates -u ; npm install ; npm audit fix",
     "test:perf": "wireit"
   },
   "wireit": {
