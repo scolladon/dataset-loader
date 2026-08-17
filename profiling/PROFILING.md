@@ -18,20 +18,20 @@ CPU/heap profile outputs go in `profiles/` (git-ignored, created on demand). The
 
 ## Scenario
 
-**8 entries**, 3 source orgs (`alm-xrmru`, `alm-prod`, `alm-dev`), 1 target CRM Analytics org (`alm-devops`).
+**8 entries**, 3 source orgs (`source-org-a`, `source-org-b`, `source-org-c`), 1 target CRM Analytics org (`analytics-org`).
 
 **Reader bundles** (grouped by ReaderKey + watermark):
 
-| Bundle                         | Source   | Type                        | Watermark              | Fan-out                                                        |
-|--------------------------------|----------|-----------------------------|------------------------|----------------------------------------------------------------|
-| pageviews-xrmru                | alm-xrmru | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
-| pageviews-prod                 | alm-prod | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
-| pageviews-prod-all + prod-file | alm-prod | ELF LightningPageView Daily | none                   | fan-out → AllLightningPageView.csv + ProdLightningPageView.csv |
-| pageviews-xrmru-all            | alm-xrmru | ELF LightningPageView Daily | none                   | solo → AllLightningPageView.csv                                |
-| users-xrmru + xrmru-file       | alm-xrmru | SObject User                | none                   | fan-out → Test_User + XrmruUser.csv                            |
-| users-dev                      | alm-dev  | SObject User                | none                   | solo → Test_User                                               |
+| Bundle                         | Source       | Type                        | Watermark              | Fan-out                                                        |
+|--------------------------------|--------------|-----------------------------|------------------------|----------------------------------------------------------------|
+| pageviews-xrmru                | source-org-a | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
+| pageviews-prod                 | source-org-b | ELF LightningPageView Daily | (today − 7d) @ 00:00 UTC | solo → Test_LightningPageView                                  |
+| pageviews-prod-all + prod-file | source-org-b | ELF LightningPageView Daily | none                   | fan-out → AllLightningPageView.csv + ProdLightningPageView.csv |
+| pageviews-xrmru-all            | source-org-a | ELF LightningPageView Daily | none                   | solo → AllLightningPageView.csv                                |
+| users-xrmru + xrmru-file       | source-org-a | SObject User                | none                   | fan-out → Test_User + XrmruUser.csv                            |
+| users-dev                      | source-org-c | SObject User                | none                   | solo → Test_User                                               |
 
-**Bottleneck bundle**: `alm-prod ELF LightningPageView Daily wm=(today−7d)` → 7 days of incremental data. At 2026-03-27 the fixed 2026-03-15 baseline covered ~12 days / 1.84M lines / ~42 parts; at a 7-day window that is roughly 1.1M lines / ~25 parts, which keeps the fast path exercised without inflating runtime.
+**Bottleneck bundle**: `source-org-b ELF LightningPageView Daily wm=(today−7d)` → 7 days of incremental data. At 2026-03-27 the fixed 2026-03-15 baseline covered ~12 days / 1.84M lines / ~42 parts; at a 7-day window that is roughly 1.1M lines / ~25 parts, which keeps the fast path exercised without inflating runtime.
 
 ---
 
@@ -281,7 +281,7 @@ Remove after use. Do not commit.
 | Phase 2 (bundle processing)            | ~56s   | 96% |
 | Phase 3 (PATCH Action:Process)         | ~300ms | <1% |
 
-Phase 2 is dominated by one bundle: **alm-prod ELF LightningPageView wm=2026-03-15** (50–56s, 98% of Phase 2). All other bundles complete in under 1s.
+Phase 2 is dominated by one bundle: **source-org-b ELF LightningPageView wm=2026-03-15** (50–56s, 98% of Phase 2). All other bundles complete in under 1s.
 
 ### CPU profile summary
 
@@ -299,7 +299,7 @@ Active CPU breakdown:
 
 ### Memory observations
 
-- Peak RSS: **667MB** during Phase 2 (alm-prod bundle processing)
+- Peak RSS: **667MB** during Phase 2 (source-org-b bundle processing)
 - Final RSS after finalize: **192MB**
 - No permanent leak — buffers released after `Promise.all(uploadPromises)` drains
 - 46 upload promises accumulated at `_final` for 40 parts (minor double-counting from flush boundary)

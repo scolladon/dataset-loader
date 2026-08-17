@@ -171,7 +171,7 @@ issuing any SF calls.
 {
   "sourceOrg": "source-org-alias",
   "targetOrg": "analytic-org-alias",
-  "targetDataset": "ALM_LightningPageView",
+  "targetDataset": "LightningPageView",
   "eventLog": "LightningPageView",
   "interval": "Daily",
   "augmentColumns": { "OrgId": "{{sourceOrg.Id}}" }
@@ -190,7 +190,7 @@ issuing any SF calls.
 {
   "sourceOrg": "source-org-alias",
   "targetOrg": "analytic-org-alias",
-  "targetDataset": "ALM_Accounts",
+  "targetDataset": "Accounts",
   "sObject": "Account",
   "fields": ["Id", "Name", "Industry", "CreatedDate"],
   "where": "Industry != null",
@@ -213,7 +213,7 @@ issuing any SF calls.
 {
   "csvFile": "./data/accounts-export.csv",
   "targetOrg": "analytic-org-alias",
-  "targetDataset": "ALM_ImportedAccounts",
+  "targetDataset": "ImportedAccounts",
   "augmentColumns": { "Source": "ManualExport" }
 }
 ```

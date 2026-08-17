@@ -106,7 +106,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
       sfPort,
       DatasetKey.fromEntry({
         targetOrg: 'ana',
-        targetDataset: 'ALM_UserLogin',
+        targetDataset: 'Test_UserLogin',
       }),
       'Append',
       undefined,
@@ -115,7 +115,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
     const { chunker, datasetFields } = await writer.init()
     expect(datasetFields).toBeDefined()
     const layout = buildSObjectRowProjection({
-      datasetName: 'ALM_UserLogin',
+      datasetName: 'Test_UserLogin',
       entryLabel: alignment.entryLabel,
       readerFields: alignment.providedFields,
       augmentColumns: alignment.augmentColumns,
@@ -175,7 +175,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
       'UserId',
     ]
     const xrmruLayout = buildSObjectRowProjection({
-      datasetName: 'ALM_UserLogin',
+      datasetName: 'Test_UserLogin',
       entryLabel: 'userslogin-xrmru',
       readerFields: [
         'UserId',
@@ -187,7 +187,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
       datasetFields,
     })
     const prodLayout = buildSObjectRowProjection({
-      datasetName: 'ALM_UserLogin',
+      datasetName: 'Test_UserLogin',
       entryLabel: 'userslogin-prod',
       readerFields: [
         'UserId',

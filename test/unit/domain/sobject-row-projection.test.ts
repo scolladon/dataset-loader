@@ -3,7 +3,7 @@ import { buildSObjectRowProjection } from '../../../src/domain/sobject-row-proje
 import { SkipDatasetError } from '../../../src/ports/types.js'
 
 const baseInput = {
-  datasetName: 'ALM_X',
+  datasetName: 'Test_X',
   entryLabel: 'entry-1',
 }
 
@@ -156,7 +156,7 @@ describe('buildSObjectRowProjection', () => {
     // Arrange / Act / Assert
     try {
       buildSObjectRowProjection({
-        datasetName: 'ALM_USERS',
+        datasetName: 'Test_USERS',
         entryLabel: 'users-prod',
         readerFields: ['A'],
         augmentColumns: {},
@@ -165,7 +165,7 @@ describe('buildSObjectRowProjection', () => {
       throw new Error('expected throw')
     } catch (err) {
       expect(err).toBeInstanceOf(SkipDatasetError)
-      expect((err as Error).message).toContain('ALM_USERS')
+      expect((err as Error).message).toContain('Test_USERS')
       expect((err as Error).message).toContain('users-prod')
     }
   })
@@ -173,7 +173,7 @@ describe('buildSObjectRowProjection', () => {
   it('given reproduction of supervision.config.json userslogin scenario, when building, then outputIndex matches alphabetical dataset order', () => {
     // Arrange / Act
     const sut = buildSObjectRowProjection({
-      datasetName: 'ALM_UserLogin',
+      datasetName: 'Test_UserLogin',
       entryLabel: 'userslogin-prod',
       readerFields: [
         'UserId',
