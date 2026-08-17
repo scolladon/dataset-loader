@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { checkSchemaAlignment } from '../../../src/domain/schema-check.js'
 
 const baseInput = {
-  datasetName: 'ALM_X',
+  datasetName: 'Test_X',
   entryLabel: 'entry-1',
 }
 
@@ -125,7 +125,7 @@ describe('checkSchemaAlignment', () => {
   it('given dataset name and entry label, when failing, then both appear in the reason', () => {
     // Arrange / Act
     const sut = checkSchemaAlignment({
-      datasetName: 'ALM_USERS',
+      datasetName: 'Test_USERS',
       entryLabel: 'users-prod',
       expected: ['A'],
       provided: ['B'],
@@ -135,7 +135,7 @@ describe('checkSchemaAlignment', () => {
     // Assert
     expect(sut.ok).toBe(false)
     if (!sut.ok) {
-      expect(sut.reason).toContain('ALM_USERS')
+      expect(sut.reason).toContain('Test_USERS')
       expect(sut.reason).toContain('users-prod')
     }
   })

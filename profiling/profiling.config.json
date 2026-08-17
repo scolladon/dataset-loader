@@ -5,8 +5,8 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "alm-xrmru",
-      "targetOrg": "alm-devops",
+      "sourceOrg": "source-org-a",
+      "targetOrg": "analytics-org",
       "targetDataset": "Test_LightningPageView"
     },
     {
@@ -14,8 +14,8 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "alm-prod",
-      "targetOrg": "alm-devops",
+      "sourceOrg": "source-org-b",
+      "targetOrg": "analytics-org",
       "targetDataset": "Test_LightningPageView"
     },
     {
@@ -23,7 +23,7 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "alm-prod",
+      "sourceOrg": "source-org-b",
       "targetFile": "AllLightningPageView.csv"
     },
     {
@@ -31,7 +31,7 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "alm-xrmru",
+      "sourceOrg": "source-org-a",
       "targetFile": "AllLightningPageView.csv"
     },
     {
@@ -39,7 +39,7 @@
       "eventLog": "LightningPageView",
       "interval": "Daily",
       "operation": "Overwrite",
-      "sourceOrg": "alm-prod",
+      "sourceOrg": "source-org-b",
       "targetFile": "ProdLightningPageView.csv"
     },
     {
@@ -47,8 +47,8 @@
       "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
-      "sourceOrg": "alm-xrmru",
-      "targetOrg": "alm-devops",
+      "sourceOrg": "source-org-a",
+      "targetOrg": "analytics-org",
       "targetDataset": "Test_User",
       "augmentColumns": {
         "ORGANIZATION_ID": "{{sourceOrg.Id}}"
@@ -59,8 +59,8 @@
       "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
-      "sourceOrg": "alm-dev",
-      "targetOrg": "alm-devops",
+      "sourceOrg": "source-org-c",
+      "targetOrg": "analytics-org",
       "targetDataset": "Test_User",
       "augmentColumns": {
         "ORGANIZATION_ID": "{{sourceOrg.Id}}"
@@ -71,7 +71,7 @@
       "sObject": "User",
       "fields": ["Id", "Name", "Username"],
       "operation": "Overwrite",
-      "sourceOrg": "alm-xrmru",
+      "sourceOrg": "source-org-a",
       "targetFile": "XrmruUser.csv",
       "augmentColumns": {
         "ORGANIZATION_ID": "{{sourceOrg.Id}}"
