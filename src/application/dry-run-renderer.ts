@@ -66,31 +66,14 @@ export class DryRunRenderer {
   private async precomputeExistence(
     entries: readonly ResolvedEntry[]
   ): Promise<Map<string, boolean>> {
-    const out = new Map<string, boolean>()
-    if (!this.sfPorts) return out
-    const targets = new Map<string, { org: string; name: string }>()
-    for (const { entry } of entries) {
-      if (!entry.targetOrg || !entry.targetDataset) continue
-      const key = `${entry.targetOrg} ${entry.targetDataset}`
-      if (!targets.has(key)) {
-        targets.set(key, { org: entry.targetOrg, name: entry.targetDataset })
-      }
-    }
-    for (const [key, { org, name }] of targets) {
-      const port = this.sfPorts.get(org)
-      if (!port) continue
-      try {
-        const result: QueryResult<unknown> = await port.query(
-          `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${name}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
-        )
-        out.set(key, result.records.length > 0)
-      } catch {
-        /* v8 ignore next 3 — query failures here surface during audit; the
-           renderer must remain best-effort and never crash a dry-run */
-        out.set(key, false)
-      }
-    }
-    return out
+    if (!this.sfPorts) return new Map()
+    const ports = this.sfPorts
+    const checks = await Promise.all(
+      [...uniqueTargets(entries)].map(([key, { org, name }]) =>
+        existenceOf(ports.get(org), key, name)
+      )
+    )
+    return new Map(checks.filter(check => check !== undefined))
   }
 
   private async renderEntry(
@@ -133,5 +116,35 @@ export class DryRunRenderer {
     if (!exists) return '[BOOTSTRAP] '
     if (entry.overrideMetadata) return '[OVERRIDE] '
     return ''
+  }
+}
+
+function uniqueTargets(
+  entries: readonly ResolvedEntry[]
+): Map<string, { org: string; name: string }> {
+  const targets = new Map<string, { org: string; name: string }>()
+  for (const { entry } of entries) {
+    if (!entry.targetOrg || !entry.targetDataset) continue
+    const key = `${entry.targetOrg} ${entry.targetDataset}`
+    targets.set(key, { org: entry.targetOrg, name: entry.targetDataset })
+  }
+  return targets
+}
+
+async function existenceOf(
+  port: SalesforcePort | undefined,
+  key: string,
+  name: string
+): Promise<readonly [string, boolean] | undefined> {
+  if (!port) return undefined
+  try {
+    const result: QueryResult<unknown> = await port.query(
+      `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${name}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
+    )
+    return [key, result.records.length > 0]
+  } catch {
+    // A failed existence check must never crash a dry run; the audit reports
+    // query failures, so the dataset is treated as absent here.
+    return [key, false]
   }
 }

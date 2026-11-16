@@ -2,11 +2,14 @@ import { FanInStream } from '../adapters/pipeline/fan-in-stream.js'
 import {
   type CreateWriterPort,
   formatErrorMessage,
+  type GroupTracker,
   type LoggerPort,
+  type PhaseProgress,
   type ProgressListener,
   type ProgressPort,
   SkipDatasetError,
   type StatePort,
+  type Writer,
 } from '../ports/types.js'
 import {
   finalizeSlot,
@@ -16,9 +19,11 @@ import {
 } from './bundle-runner.js'
 import {
   createHeaderProvider,
+  type DatasetGroup,
   groupByDataset,
   groupByReader,
   type PipelineEntry,
+  type ReaderBundle,
 } from './pipeline-groups.js'
 import { type WatermarkStore } from './watermark-store.js'
 
@@ -39,6 +44,21 @@ interface PipelineResult {
   readonly exitCode: number
 }
 
+interface PreparedGroup {
+  readonly group: DatasetGroup
+  readonly tracker: GroupTracker
+  readonly writer: Writer
+}
+
+type InitOutcome =
+  | { readonly kind: 'slot'; readonly slot: WriterSlot }
+  | { readonly kind: 'skip'; readonly result: GroupResult }
+
+interface InitialisedWriters {
+  readonly slots: Map<string, WriterSlot>
+  readonly skipResults: readonly GroupResult[]
+}
+
 export async function executePipeline(
   input: PipelineInput
 ): Promise<PipelineResult> {
@@ -46,69 +66,49 @@ export async function executePipeline(
   const bundles = groupByReader(input.entries, input.watermarks)
   const phase = input.progress.create('Processing', input.entries.length)
 
-  // Phase 1: initialise one writer slot per DatasetGroup
-  const slots = new Map<string, WriterSlot>()
-  const skipResults: GroupResult[] = []
+  const { slots, skipResults } = await initWriters(groups, input, phase)
+  await processBundles(bundles, slots, input, phase)
+  const groupResults = await Promise.all(
+    [...slots.values()].map(slot => finalizeSlot(slot, input))
+  )
 
-  for (const group of groups) {
-    const tracker = phase.trackGroup(
-      group.datasetKey.name,
-      group.datasetKey.org !== undefined
-    )
-    const listener: ProgressListener = {
-      onSinkReady: (id: string) => tracker.updateParentId(id),
-      onChunkWritten: () => tracker.incrementParts(),
-      onRowsWritten: (count: number) => tracker.addRows(count),
-    }
-    const writer = input.createWriter.create(
-      group.datasetKey,
-      group.operation,
-      listener,
-      createHeaderProvider(group.entries),
-      group.entries[0].alignment,
-      group.entries[0].bootstrap
-    )
-    try {
-      const { chunker, datasetFields } = await writer.init()
-      slots.set(group.key, {
-        writer,
-        chunker,
-        datasetFields,
-        fanIn: new FanInStream(chunker, group.entries.length),
-        group,
-        tracker,
-        entryResults: [],
-      })
-    } catch (error) {
-      tracker.stop()
-      if (error instanceof SkipDatasetError) {
-        input.logger.warn(error.message)
-        skipResults.push({
-          processed: 0,
-          skipped: group.entries.length,
-          failed: 0,
-          watermarks: [],
-        })
-      } else {
-        input.logger.warn(
-          `Writer init failed for '${group.datasetKey.name}': ${formatErrorMessage(error)}`
-        )
-        await writer
-          .abort()
-          .catch((e: unknown) =>
-            input.logger.debug(`abort failed: ${formatErrorMessage(e)}`)
-          )
-        skipResults.push({
-          processed: 0,
-          skipped: 0,
-          failed: group.entries.length,
-          watermarks: [],
-        })
-      }
-    }
-  }
+  const { store, pipelineResult } = aggregateResults(
+    [...skipResults, ...groupResults],
+    input.watermarks
+  )
+  phase.stop()
+  await input.state.write(store)
 
-  // Phase 2: process reader bundles (solo or fan-out) concurrently
+  return pipelineResult
+}
+
+// Writers are created in group order, then initialised concurrently; slots and
+// skip results keep group order whatever order the inits settle in.
+async function initWriters(
+  groups: readonly DatasetGroup[],
+  input: PipelineInput,
+  phase: PhaseProgress
+): Promise<InitialisedWriters> {
+  const prepared = groups.map(group => prepareGroup(group, input, phase))
+  const outcomes = await Promise.all(prepared.map(p => initGroup(p, input)))
+  const slots = new Map<string, WriterSlot>(
+    outcomes.flatMap(o =>
+      o.kind === 'slot' ? [[o.slot.group.key, o.slot] as const] : []
+    )
+  )
+  const skipResults = outcomes.flatMap(o =>
+    o.kind === 'skip' ? [o.result] : []
+  )
+  return { slots, skipResults }
+}
+
+// Reader bundles (solo or fan-out) run concurrently.
+async function processBundles(
+  bundles: readonly ReaderBundle[],
+  slots: Map<string, WriterSlot>,
+  input: PipelineInput,
+  phase: PhaseProgress
+): Promise<void> {
   await Promise.all(
     bundles
       .filter(bundle =>
@@ -122,20 +122,82 @@ export async function executePipeline(
         )
       )
   )
+}
 
-  // Phase 3: finalize all writer slots
-  const groupResults = await Promise.all(
-    [...slots.values()].map(slot => finalizeSlot(slot, input))
+function prepareGroup(
+  group: DatasetGroup,
+  input: PipelineInput,
+  phase: PhaseProgress
+): PreparedGroup {
+  const tracker = phase.trackGroup(
+    group.datasetKey.name,
+    group.datasetKey.org !== undefined
   )
-
-  const { store, pipelineResult } = aggregateResults(
-    [...skipResults, ...groupResults],
-    input.watermarks
+  const listener: ProgressListener = {
+    onSinkReady: (id: string) => tracker.updateParentId(id),
+    onChunkWritten: () => tracker.incrementParts(),
+    onRowsWritten: (count: number) => tracker.addRows(count),
+  }
+  const writer = input.createWriter.create(
+    group.datasetKey,
+    group.operation,
+    listener,
+    createHeaderProvider(group.entries),
+    group.entries[0].alignment,
+    group.entries[0].bootstrap
   )
-  phase.stop()
-  await input.state.write(store)
+  return { group, tracker, writer }
+}
 
-  return pipelineResult
+async function initGroup(
+  prepared: PreparedGroup,
+  input: PipelineInput
+): Promise<InitOutcome> {
+  const { group, tracker, writer } = prepared
+  try {
+    const { chunker, datasetFields } = await writer.init()
+    const slot: WriterSlot = {
+      writer,
+      chunker,
+      datasetFields,
+      fanIn: new FanInStream(chunker, group.entries.length),
+      group,
+      tracker,
+      // Stryker disable next-line ArrayDeclaration: equivalent mutant — entryResults is only read through status/watermark filters, which ignore a non-result element
+      entryResults: [],
+    }
+    return { kind: 'slot', slot }
+  } catch (error) {
+    return initFailure(error, prepared, input)
+  }
+}
+
+async function initFailure(
+  error: unknown,
+  { group, tracker, writer }: PreparedGroup,
+  input: PipelineInput
+): Promise<InitOutcome> {
+  tracker.stop()
+  const entryCount = group.entries.length
+  if (error instanceof SkipDatasetError) {
+    input.logger.warn(error.message)
+    return skipOutcome({ skipped: entryCount, failed: 0 })
+  }
+  input.logger.warn(
+    `Writer init failed for '${group.datasetKey.name}': ${formatErrorMessage(error)}`
+  )
+  await writer
+    .abort()
+    .catch((e: unknown) =>
+      input.logger.debug(`abort failed: ${formatErrorMessage(e)}`)
+    )
+  return skipOutcome({ skipped: 0, failed: entryCount })
+}
+
+function skipOutcome(
+  counts: Pick<GroupResult, 'skipped' | 'failed'>
+): InitOutcome {
+  return { kind: 'skip', result: { processed: 0, ...counts, watermarks: [] } }
 }
 
 function aggregateResults(
