@@ -16,13 +16,14 @@ import { DateBounds } from '../../src/domain/date-bounds.js'
 import { buildSObjectRowProjection } from '../../src/domain/sobject-row-projection.js'
 import {
   type AlignmentSpec,
+  type MultipartBody,
   type SalesforcePort,
 } from '../../src/ports/types.js'
 
 function makeFakePort(opts: {
   metadataJson: string
   records: Record<string, unknown>[]
-  capturedParts: { dataFile: string }[]
+  capturedParts: { data: Buffer }[]
 }): SalesforcePort {
   return {
     apiVersion: '62.0',
@@ -46,10 +47,9 @@ function makeFakePort(opts: {
     queryMore: vi.fn(),
     getBlob: vi.fn(async () => opts.metadataJson),
     getBlobStream: vi.fn(),
-    post: vi.fn(async (path: string, body: Record<string, unknown>) => {
-      if (path.endsWith('InsightsExternalDataPart')) {
-        opts.capturedParts.push({ dataFile: body.DataFile as string })
-      }
+    post: vi.fn(async () => ({ id: '06V0000000000A0' })),
+    postMultipart: vi.fn(async (_path: string, body: MultipartBody) => {
+      opts.capturedParts.push({ data: body.data })
       return { id: '06V0000000000A0' }
     }),
     patch: vi.fn(async () => ({})),
@@ -84,7 +84,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
         LastModifiedDate: '2020-11-06T14:55:51.000+0000',
       },
     ]
-    const captured: { dataFile: string }[] = []
+    const captured: { data: Buffer }[] = []
     const sfPort = makeFakePort({
       metadataJson: datasetMetadata,
       records,
@@ -143,9 +143,7 @@ describe('Dataset column alignment regression (supervision.config.json)', () => 
 
     // Assert
     expect(captured.length).toBeGreaterThan(0)
-    const decoded = gunzipSync(
-      Buffer.from(captured[0].dataFile, 'base64')
-    ).toString()
+    const decoded = gunzipSync(captured[0].data).toString()
     const rows = decoded.trim().split('\n')
     expect(rows).toHaveLength(1)
     const cells = rows[0].split(',')

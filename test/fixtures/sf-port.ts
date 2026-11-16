@@ -13,6 +13,7 @@ export function makeSfPort(
     getBlob: vi.fn().mockResolvedValue(''),
     getBlobStream: vi.fn(),
     post: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
+    postMultipart: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
     patch: vi.fn().mockResolvedValue(null),
     del: vi.fn().mockResolvedValue(undefined),
     describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),

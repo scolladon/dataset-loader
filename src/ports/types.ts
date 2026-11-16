@@ -200,6 +200,14 @@ export interface SObjectDescribe {
   readonly fields: readonly DescribeField[]
 }
 
+export interface MultipartBody {
+  readonly entityField: string
+  readonly entity: Record<string, unknown>
+  readonly fileField: string
+  readonly fileName: string
+  readonly data: Buffer
+}
+
 export interface SalesforcePort {
   readonly apiVersion: string
   query<T>(soql: string): Promise<QueryResult<T>>
@@ -208,6 +216,7 @@ export interface SalesforcePort {
   // The caller must consume or destroy the stream: the client holds a request slot until it closes.
   getBlobStream(path: string): Promise<Readable>
   post<T>(path: string, body: Record<string, unknown>): Promise<T>
+  postMultipart<T>(path: string, body: MultipartBody): Promise<T>
   patch<T>(path: string, body: Record<string, unknown>): Promise<T>
   del(path: string): Promise<void>
   describe(sobjectName: string): Promise<SObjectDescribe>

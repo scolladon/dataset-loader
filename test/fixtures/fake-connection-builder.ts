@@ -1,12 +1,12 @@
 export type RequestHandler = (
   url: string,
   method: string,
-  body?: string
+  body?: string | Buffer
 ) => unknown
 
 interface Route {
   match: (url: string, method: string) => boolean
-  handle: (url: string, method: string, body?: string) => unknown
+  handle: (url: string, method: string, body?: string | Buffer) => unknown
 }
 
 const DEFAULT_FALLBACK = { totalSize: 0, done: true, records: [] }
@@ -138,7 +138,7 @@ export class FakeConnectionBuilder {
     const routes = [...this.routes]
     const fallback = this.fallbackResponse
 
-    return (url: string, method: string, body?: string): unknown => {
+    return (url: string, method: string, body?: string | Buffer): unknown => {
       for (const route of routes) {
         if (route.match(url, method)) {
           return route.handle(url, method, body)

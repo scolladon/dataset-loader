@@ -16,6 +16,7 @@ const mockSfPort: SalesforcePort = {
   getBlob: () => Promise.resolve({}),
   getBlobStream: () => Promise.resolve(new Readable()),
   post: () => Promise.resolve({} as never),
+  postMultipart: () => Promise.resolve({} as never),
   patch: () => Promise.resolve({} as never),
   del: () => Promise.resolve(),
   describe: () => Promise.resolve({ name: 'Unknown', fields: [] }),

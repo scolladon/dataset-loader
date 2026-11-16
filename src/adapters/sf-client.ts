@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 
 import { type Connection } from '@salesforce/core'
 import pLimit from 'p-limit'
 import {
   type DescribeField,
+  type MultipartBody,
   type QueryResult,
   type SalesforcePort,
   type SObjectDescribe,
@@ -18,6 +20,8 @@ export const DEFAULT_CONCURRENCY = 25
 // Slots downloads never take once concurrency exceeds it, so posts and queries always progress.
 const RESERVED_SLOTS = 5
 const MAX_RETRIES = 3
+const CRLF = '\r\n'
+const MULTIPART_BOUNDARY_PREFIX = 'dataset-loader-'
 const DEFAULT_BASE_DELAY_MS = 1000
 
 function isHttpError(err: unknown): err is { statusCode?: number } {
@@ -67,6 +71,36 @@ async function withRetry<T>(
 
 function closed(stream: Readable): Promise<void> {
   return new Promise<void>(resolve => stream.once('close', () => resolve()))
+}
+
+function multipartHead(boundary: string, body: MultipartBody): string {
+  return [
+    `--${boundary}`,
+    `Content-Disposition: form-data; name="${body.entityField}"`,
+    'Content-Type: application/json',
+    '',
+    JSON.stringify(body.entity),
+    `--${boundary}`,
+    'Content-Type: application/octet-stream',
+    `Content-Disposition: form-data; name="${body.fileField}"; filename="${body.fileName}"`,
+    '',
+    '',
+  ].join(CRLF)
+}
+
+function encodeMultipart(body: MultipartBody): {
+  readonly contentType: string
+  readonly payload: Buffer
+} {
+  const boundary = `${MULTIPART_BOUNDARY_PREFIX}${randomUUID()}`
+  return {
+    contentType: `multipart/form-data; boundary="${boundary}"`,
+    payload: Buffer.concat([
+      Buffer.from(multipartHead(boundary, body)),
+      body.data,
+      Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+    ]),
+  }
 }
 
 // Raw SF Describe response shape — much wider than we consume. We project
@@ -274,6 +308,25 @@ export class SalesforceClient implements SalesforcePort {
               'Accept-Encoding': 'gzip',
             },
             body: JSON.stringify(body),
+          }),
+        this.baseDelay
+      )
+    )
+  }
+
+  postMultipart<T>(path: string, body: MultipartBody): Promise<T> {
+    const { contentType, payload } = encodeMultipart(body)
+    return this.limiter(() =>
+      withRetry(
+        () =>
+          this.connection.request<T>({
+            method: 'POST',
+            url: path,
+            headers: {
+              'Content-Type': contentType,
+              'Accept-Encoding': 'gzip',
+            },
+            body: payload,
           }),
         this.baseDelay
       )

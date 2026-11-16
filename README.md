@@ -455,7 +455,7 @@ See [RUN_BOOK.md](RUN_BOOK.md) for operational recipes: scheduling with cron, re
 2. **Resolve** — authenticate orgs, resolve mustache tokens in augmentColumns
 3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access, and dataset **schema alignment** (source columns match the target dataset's metadata)
 4. **Execute pipeline** — group entries by dataset, stream through Reader → Projection (SObject, reorders to dataset column order) → Augment (ELF/CSV) → Writer. A per-dataset progress sub-bar tracks the reader's natural workload unit (ELF: files, CSV: bytes, SObject: rows) live as data flows. See [RUN_BOOK.md](RUN_BOOK.md#progress-bars) for the display format.
-5. **Write** — CRM Analytics: gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API. File: stream rows directly to a local CSV
+5. **Write** — CRM Analytics: gzip-compress, split into parts of at most 7.8 MB, upload as multipart binary via InsightsExternalData API. File: stream rows directly to a local CSV
 6. **Update watermarks** — only for entries whose group uploaded successfully
 
 </details>

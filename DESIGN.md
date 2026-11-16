@@ -18,7 +18,7 @@ Organizations need to load Salesforce Event Log Files (ELF) and SObject data int
 | Concern                  | SFDMU Limitation                                                                                                                                                                                                 |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **ELF blob access**      | Cannot download `EventLogFile.LogFile` blobs — the Add-On API has no mechanism for arbitrary blob field access                                                                                                   |
-| **CRM Analytics upload** | InsightsExternalData lifecycle (header + compressed base64 parts + process trigger) is not a CRUD operation and cannot be expressed as SFDMU object operations                                                   |
+| **CRM Analytics upload** | InsightsExternalData lifecycle (header + compressed binary parts + process trigger) is not a CRUD operation and cannot be expressed as SFDMU object operations                                                   |
 | **Org model**            | Strictly 2-org (source → target). This project requires N orgs (multiple sources + multiple analytics per entry)                                                                                                 |
 | **Add-On API surface**   | No authenticated Salesforce connection exposed to add-on code — arbitrary REST/SOQL calls require managing your own auth ([GitHub issue #787](https://github.com/forcedotcom/SFDX-Data-Move-Utility/issues/787)) |
 | **Concurrency control**  | SFDMU controls its own parallelism internally; per-org `p-limit(25)` semaphores are not possible                                                                                                                 |
@@ -267,10 +267,9 @@ Error isolation: a failed entry aborts the entire group (sink is aborted, all en
    ├── EdgemartAlias, Format=Csv, Operation, MetadataJson (base64)
    └── Action='None'
 
-2. POST InsightsExternalDataPart (one per 10 MB base64 chunk)
-   ├── InsightsExternalDataId (parent reference)
-   ├── PartNumber (sequential)
-   └── DataFile (base64-encoded gzip)
+2. POST InsightsExternalDataPart (multipart/form-data, one per part of at most 7,864,317 raw bytes)
+   ├── entity_part (JSON): InsightsExternalDataId (parent reference), PartNumber (sequential)
+   └── DataFile (binary gzip, filename part.gz)
 
 3. PATCH InsightsExternalData
    ├── Action='Process' (triggers CRM Analytics ingestion)

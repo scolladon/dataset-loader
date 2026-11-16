@@ -276,7 +276,7 @@ describe('DatasetLoad NUT', () => {
       const reqMap = ensureJsonMap(request)
       const url = ensureString(reqMap.url)
       const method = ensureString(reqMap.method ?? 'GET')
-      const body = reqMap.body as string | undefined
+      const body = reqMap.body as string | Buffer | undefined
       const value = handler(url, method, body)
       return Promise.resolve(value) as ReturnType<
         typeof $$.fakeConnectionRequest

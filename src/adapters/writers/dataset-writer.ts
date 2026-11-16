@@ -52,8 +52,11 @@ export const UPLOAD_HIGH_WATER = DEFAULT_CONCURRENCY
 const BASE64_GROUP_CHARS = 4
 const BASE64_GROUP_BYTES = 3
 const NEWLINE = 0x0a
+const PART_ENTITY_FIELD = 'entity_part'
+const PART_FILE_FIELD = 'DataFile'
+const PART_FILE_NAME = 'part.gz'
 
-// Largest raw byte count whose base64 form stays strictly under the part budget.
+// Capacity kept at the base64-era budget (7,864,317 raw bytes) although parts now travel as binary.
 function partCapacity(partMaxBytes: number): number {
   return (
     Math.floor((partMaxBytes - 1) / BASE64_GROUP_CHARS) * BASE64_GROUP_BYTES
@@ -236,13 +239,21 @@ export class GzipChunkingWritable extends Writable {
   }
 
   private uploadPart(compressed: Buffer): Promise<void> {
-    const pn = ++this.partNumber
+    const partNumber = ++this.partNumber
     return this.sfPort
-      .post<CreateResponse>(`${this.basePath}/InsightsExternalDataPart`, {
-        InsightsExternalDataId: this.parentId,
-        PartNumber: pn,
-        DataFile: compressed.toString('base64'),
-      })
+      .postMultipart<CreateResponse>(
+        `${this.basePath}/InsightsExternalDataPart`,
+        {
+          entityField: PART_ENTITY_FIELD,
+          entity: {
+            InsightsExternalDataId: this.parentId,
+            PartNumber: partNumber,
+          },
+          fileField: PART_FILE_FIELD,
+          fileName: PART_FILE_NAME,
+          data: compressed,
+        }
+      )
       .then(() => {
         this.listener?.onChunkWritten()
       })

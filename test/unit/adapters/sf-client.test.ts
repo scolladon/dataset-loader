@@ -5,6 +5,7 @@ import {
   SalesforceClient,
 } from '../../../src/adapters/sf-client.js'
 import {
+  type MultipartBody,
   type QueryResult,
   type SalesforcePort,
 } from '../../../src/ports/types.js'
@@ -422,6 +423,169 @@ describe('SalesforceClient', () => {
         body: JSON.stringify(body),
       })
       expect(result).toEqual({ id: '06V' })
+    })
+  })
+
+  describe('postMultipart', () => {
+    const PATH = '/services/data/v62.0/sobjects/InsightsExternalDataPart'
+    const BOUNDARY_HEADER = /^multipart\/form-data; boundary="(.+)"$/
+
+    function multipartBody(data: Buffer): MultipartBody {
+      return {
+        entityField: 'entity_part',
+        entity: { InsightsExternalDataId: '06V000000000001', PartNumber: 1 },
+        fileField: 'DataFile',
+        fileName: 'part.gz',
+        data,
+      }
+    }
+
+    function expectedHead(boundary: string): string {
+      return [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="entity_part"',
+        'Content-Type: application/json',
+        '',
+        '{"InsightsExternalDataId":"06V000000000001","PartNumber":1}',
+        `--${boundary}`,
+        'Content-Type: application/octet-stream',
+        'Content-Disposition: form-data; name="DataFile"; filename="part.gz"',
+        '',
+        '',
+      ].join('\r\n')
+    }
+
+    function boundaryOf(call: unknown[]): string {
+      const request = call[0] as { headers: Record<string, string> }
+      return BOUNDARY_HEADER.exec(request.headers['Content-Type'])?.[1] ?? ''
+    }
+
+    it('given a body, when posting multipart, then request gets POST, the path, a quoted boundary and the pinned payload bytes', async () => {
+      // Arrange
+      const data = Buffer.from([1, 2, 3])
+      requestSpy.mockResolvedValue({ id: '06W' })
+
+      // Act
+      const result = await sut.postMultipart(PATH, multipartBody(data))
+
+      // Assert
+      const request = requestSpy.mock.calls[0][0]
+      const boundary = boundaryOf(requestSpy.mock.calls[0])
+      expect(request.method).toBe('POST')
+      expect(request.url).toBe(PATH)
+      expect(request.headers['Content-Type']).toMatch(BOUNDARY_HEADER)
+      expect(request.headers['Accept-Encoding']).toBe('gzip')
+      expect(request.body).toEqual(
+        Buffer.concat([
+          Buffer.from(expectedHead(boundary), 'utf8'),
+          data,
+          Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+        ])
+      )
+      expect(result).toEqual({ id: '06W' })
+    })
+
+    it('given a body, when posting multipart, then the boundary starts with the dataset-loader prefix', async () => {
+      // Arrange
+      requestSpy.mockResolvedValue({})
+
+      // Act
+      await sut.postMultipart(PATH, multipartBody(Buffer.from([1])))
+
+      // Assert
+      expect(boundaryOf(requestSpy.mock.calls[0])).toMatch(/^dataset-loader-/)
+    })
+
+    it('given two calls, when posting multipart, then each call uses a fresh boundary', async () => {
+      // Arrange
+      requestSpy.mockResolvedValue({})
+
+      // Act
+      await sut.postMultipart(PATH, multipartBody(Buffer.from([1])))
+      await sut.postMultipart(PATH, multipartBody(Buffer.from([1])))
+
+      // Assert
+      expect(boundaryOf(requestSpy.mock.calls[0])).not.toBe(
+        boundaryOf(requestSpy.mock.calls[1])
+      )
+    })
+
+    it('given data with 0x00, 0xff and invalid UTF-8 sequences, when posting multipart, then the data bytes are copied verbatim', async () => {
+      // Arrange
+      const data = Buffer.from([0x00, 0xff, 0xc3, 0x28, 0xfe, 0x80, 0x00])
+      requestSpy.mockResolvedValue({})
+
+      // Act
+      await sut.postMultipart(PATH, multipartBody(data))
+
+      // Assert
+      const payload = requestSpy.mock.calls[0][0].body as Buffer
+      const headLength = Buffer.byteLength(
+        expectedHead(boundaryOf(requestSpy.mock.calls[0])),
+        'utf8'
+      )
+      expect(payload.subarray(headLength, headLength + data.length)).toEqual(
+        data
+      )
+    })
+
+    it('given 429 then success, when posting multipart, then both requests carry the same Buffer instance', async () => {
+      // Arrange
+      const error429 = Object.assign(new Error('Too Many Requests'), {
+        statusCode: 429,
+      })
+      requestSpy
+        .mockRejectedValueOnce(error429)
+        .mockResolvedValueOnce({ id: '06W' })
+
+      // Act
+      await sut.postMultipart(PATH, multipartBody(Buffer.from([1, 2, 3])))
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(2)
+      expect(requestSpy.mock.calls[1][0].body).toBe(
+        requestSpy.mock.calls[0][0].body
+      )
+    })
+
+    it('given a non-429 error with data, when posting multipart, then the error is formatted', async () => {
+      // Arrange
+      const error = Object.assign(new Error('API failure'), {
+        data: [{ errorCode: 'INVALID', message: 'bad' }],
+      })
+      requestSpy.mockRejectedValue(error)
+
+      // Act & Assert
+      await expect(
+        sut.postMultipart(PATH, multipartBody(Buffer.from([1])))
+      ).rejects.toThrow('API failure: INVALID: bad')
+    })
+
+    it('given the main limiter is saturated, when posting multipart, then it waits for a free slot', async () => {
+      // Arrange
+      let release: (value: unknown) => void = () => undefined
+      requestSpy
+        .mockImplementationOnce(
+          () => new Promise(resolve => (release = resolve))
+        )
+        .mockResolvedValue({})
+      const sut = new SalesforceClient(
+        mockConnection({ request: requestSpy }) as never,
+        { concurrency: 1, retryBaseDelayMs: 0 }
+      )
+      const query = sut.query('SELECT Id FROM Account')
+
+      // Act
+      const posted = sut.postMultipart(PATH, multipartBody(Buffer.from([1])))
+      await vi.waitFor(() => expect(requestSpy).toHaveBeenCalledTimes(1))
+      await Promise.resolve()
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(1)
+      release({ totalSize: 0, done: true, records: [] })
+      await query
+      await posted
+      expect(requestSpy).toHaveBeenCalledTimes(2)
     })
   })
 
