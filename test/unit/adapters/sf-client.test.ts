@@ -1,5 +1,9 @@
+import { type Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SalesforceClient } from '../../../src/adapters/sf-client.js'
+import {
+  DEFAULT_CONCURRENCY,
+  SalesforceClient,
+} from '../../../src/adapters/sf-client.js'
 import {
   type QueryResult,
   type SalesforcePort,
@@ -937,6 +941,373 @@ describe('SalesforceClient', () => {
       const result = await sut.describe('User')
       expect(result).toEqual({ name: 'User', fields: [] })
       expect(requestSpy).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('getBlobStream slot holding', () => {
+    const instanceUrl = 'https://test.salesforce.com'
+    // The rule itself, as a literal: 20 of the 25 slots go to downloads.
+    const DOWNLOAD_SLOTS = 20
+
+    afterEach(() => vi.unstubAllGlobals())
+
+    function okResponse(text: string) {
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(text))
+            controller.close()
+          },
+        }),
+      }
+    }
+
+    function openResponse() {
+      return { ok: true, status: 200, body: new ReadableStream() }
+    }
+
+    function erroringResponse(error: Error) {
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            controller.error(error)
+          },
+        }),
+      }
+    }
+
+    async function drain(stream: Readable): Promise<string> {
+      let text = ''
+      for await (const chunk of stream) text += chunk.toString()
+      return text
+    }
+
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
+    function track(promise: Promise<unknown>) {
+      const state = { settled: false }
+      promise.then(
+        () => {
+          state.settled = true
+        },
+        () => {
+          state.settled = true
+        }
+      )
+      return state
+    }
+
+    function buildClient(
+      options: { concurrency?: number } = {},
+      overrides: Partial<MockConnection> = {}
+    ) {
+      return new SalesforceClient(
+        mockConnection({
+          instanceUrl,
+          accessToken: 't',
+          refreshAuth: vi.fn(),
+          ...overrides,
+        }) as never,
+        { retryBaseDelayMs: 0, ...options }
+      )
+    }
+
+    async function expectNextDownloadProceeds(sut: SalesforceClient) {
+      const next = await sut.getBlobStream('/blob/next')
+      expect(await drain(next)).toBe('data')
+    }
+
+    it('given one download slot and an open first body, when a second getBlobStream is issued, then it resolves only after the first body is drained', async () => {
+      // Arrange
+      const fetchSpy = vi
+        .fn()
+        .mockImplementation(() => Promise.resolve(okResponse('data')))
+      vi.stubGlobal('fetch', fetchSpy)
+      const sut = buildClient({ concurrency: 1 })
+      const first = await sut.getBlobStream('/blob/1')
+
+      // Act
+      const secondPromise = sut.getBlobStream('/blob/2')
+      const second = track(secondPromise)
+      await tick()
+
+      // Assert
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(second.settled).toBe(false)
+      await drain(first)
+      const secondStream = await secondPromise
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      await drain(secondStream)
+    })
+
+    it('given DEFAULT_CONCURRENCY plus extra downloads and queries, when all are issued, then in-flight calls never exceed DEFAULT_CONCURRENCY', async () => {
+      // Arrange
+      const downloadCount = 30
+      const queryCount = 10
+      let inFlight = 0
+      let peak = 0
+      let settled = 0
+      const streams: Readable[] = []
+      const releases: Array<() => void> = []
+      const enter = () => {
+        inFlight++
+        peak = Math.max(peak, inFlight)
+      }
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(() => {
+          enter()
+          return Promise.resolve(openResponse())
+        })
+      )
+      const request = vi.fn().mockImplementation(
+        () =>
+          new Promise(resolve => {
+            enter()
+            releases.push(() => {
+              inFlight--
+              resolve({ totalSize: 0, done: true, records: [] })
+            })
+          })
+      )
+      const sut = buildClient({}, { request })
+      const calls = [
+        ...Array.from({ length: downloadCount }, (_, i) =>
+          sut.getBlobStream(`/blob/${i}`).then(stream => streams.push(stream))
+        ),
+        ...Array.from({ length: queryCount }, () => sut.query('SELECT Id')),
+      ].map(call => call.then(() => settled++))
+
+      // Act
+      while (settled < downloadCount + queryCount) {
+        await tick()
+        const release = releases.shift()
+        if (release) release()
+        else if (streams.length > 0) {
+          inFlight--
+          streams.shift()?.destroy()
+        }
+      }
+      await Promise.all(calls)
+
+      // Assert
+      expect(peak).toBe(DEFAULT_CONCURRENCY)
+    })
+
+    describe('slot release paths at one download slot', () => {
+      it('given a body that errors, when it is consumed, then it rejects and the next download proceeds', async () => {
+        // Arrange
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValueOnce(erroringResponse(new Error('reset')))
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 })
+        const first = await sut.getBlobStream('/blob/1')
+
+        // Act & Assert
+        await expect(drain(first)).rejects.toThrow('reset')
+        await expectNextDownloadProceeds(sut)
+      })
+
+      it('given an open body, when the consumer destroys it, then the next download proceeds', async () => {
+        // Arrange
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValueOnce(openResponse())
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 })
+        const first = await sut.getBlobStream('/blob/1')
+
+        // Act
+        first.destroy()
+
+        // Assert
+        await expectNextDownloadProceeds(sut)
+      })
+
+      it('given fetch rejects, when downloading, then it rejects and the next download proceeds', async () => {
+        // Arrange
+        const fetchSpy = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('network down'))
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 })
+
+        // Act & Assert
+        await expect(sut.getBlobStream('/blob/1')).rejects.toThrow(
+          'network down'
+        )
+        await expectNextDownloadProceeds(sut)
+      })
+
+      it('given a non-ok status, when downloading, then it rejects and the next download proceeds', async () => {
+        // Arrange
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 500, body: null })
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 })
+
+        // Act & Assert
+        await expect(sut.getBlobStream('/blob/1')).rejects.toThrow('HTTP 500')
+        await expectNextDownloadProceeds(sut)
+      })
+
+      it('given a 401 then a 200, when downloading, then both fetches share one slot released after the drain', async () => {
+        // Arrange
+        const refreshAuth = vi.fn().mockResolvedValue(undefined)
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 401, body: null })
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 }, { refreshAuth })
+        const first = await sut.getBlobStream('/blob/1')
+        const secondPromise = sut.getBlobStream('/blob/2')
+        await tick()
+
+        // Act
+        const callsBeforeDrain = fetchSpy.mock.calls.length
+        await drain(first)
+        await drain(await secondPromise)
+
+        // Assert
+        expect(callsBeforeDrain).toBe(2)
+        expect(fetchSpy).toHaveBeenCalledTimes(3)
+        expect(refreshAuth).toHaveBeenCalledTimes(1)
+      })
+
+      it('given a 401 whose refresh rejects, when downloading, then it rejects and the next download proceeds', async () => {
+        // Arrange
+        const refreshAuth = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('refresh failed'))
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 401, body: null })
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 }, { refreshAuth })
+
+        // Act & Assert
+        await expect(sut.getBlobStream('/blob/1')).rejects.toThrow(
+          'refresh failed'
+        )
+        await expectNextDownloadProceeds(sut)
+      })
+
+      it('given a 429 then a 200, when downloading, then one stream is opened and the slot is released after the drain', async () => {
+        // Arrange
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 429, body: null })
+          .mockImplementation(() => Promise.resolve(okResponse('data')))
+        vi.stubGlobal('fetch', fetchSpy)
+        const sut = buildClient({ concurrency: 1 })
+        const first = await sut.getBlobStream('/blob/1')
+        const secondPromise = sut.getBlobStream('/blob/2')
+        await tick()
+
+        // Act
+        const callsBeforeDrain = fetchSpy.mock.calls.length
+        await drain(first)
+        await drain(await secondPromise)
+
+        // Assert
+        expect(callsBeforeDrain).toBe(2)
+        expect(fetchSpy).toHaveBeenCalledTimes(3)
+      })
+    })
+
+    it('given one client as source and target with DEFAULT_CONCURRENCY open blob bodies, when posting, then the post still gets a slot', async () => {
+      // Arrange
+      const fetchSpy = vi
+        .fn()
+        .mockImplementation(() => Promise.resolve(openResponse()))
+      vi.stubGlobal('fetch', fetchSpy)
+      const request = vi.fn().mockResolvedValue({ id: '0Pp000000000001' })
+      const sut = buildClient({}, { request })
+      const downloads = Array.from({ length: DEFAULT_CONCURRENCY }, (_, i) =>
+        sut.getBlobStream(`/blob/${i}`)
+      )
+      const opened = await Promise.all(downloads.slice(0, DOWNLOAD_SLOTS))
+
+      // Act
+      const result = await sut.post(
+        '/services/data/v62.0/sobjects/InsightsExternalData',
+        {}
+      )
+
+      // Assert
+      expect(result).toEqual({ id: '0Pp000000000001' })
+      expect(fetchSpy).toHaveBeenCalledTimes(DOWNLOAD_SLOTS)
+      opened.forEach(stream => stream.destroy())
+      const rest = await Promise.all(downloads.slice(DOWNLOAD_SLOTS))
+      rest.forEach(stream => stream.destroy())
+    })
+
+    it('given every download slot holds an open body, when one more getBlobStream is issued, then it waits until one body is destroyed', async () => {
+      // Arrange
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(() => Promise.resolve(openResponse()))
+      )
+      const sut = buildClient()
+      const opened = await Promise.all(
+        Array.from({ length: DOWNLOAD_SLOTS }, (_, i) =>
+          sut.getBlobStream(`/blob/${i}`)
+        )
+      )
+      const extraPromise = sut.getBlobStream('/blob/extra')
+      const extra = track(extraPromise)
+      await tick()
+
+      // Act
+      const pendingBefore = !extra.settled
+      opened[0].destroy()
+      const extraStream = await extraPromise
+
+      // Assert
+      expect(pendingBefore).toBe(true)
+      extraStream.destroy()
+      opened.slice(1).forEach(stream => stream.destroy())
+    })
+
+    it('given concurrency 2 and one open blob body, when a second getBlobStream and a query are issued, then the query resolves and the second download waits for the first to close', async () => {
+      // Arrange
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(openResponse())
+        .mockImplementation(() => Promise.resolve(openResponse()))
+      vi.stubGlobal('fetch', fetchSpy)
+      const result = { totalSize: 0, done: true, records: [] }
+      const sut = buildClient(
+        { concurrency: 2 },
+        { request: vi.fn().mockResolvedValue(result) }
+      )
+      const first = await sut.getBlobStream('/blob/1')
+      const secondPromise = sut.getBlobStream('/blob/2')
+      const second = track(secondPromise)
+
+      // Act
+      const queried = await sut.query('SELECT Id')
+      await tick()
+
+      // Assert
+      expect(queried).toEqual(result)
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(second.settled).toBe(false)
+      first.destroy()
+      const secondStream = await secondPromise
+      secondStream.destroy()
     })
   })
 })

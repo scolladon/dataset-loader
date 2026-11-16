@@ -15,6 +15,8 @@ interface SalesforceClientOptions {
 }
 
 export const DEFAULT_CONCURRENCY = 25
+// Slots downloads never take once concurrency exceeds it, so posts and queries always progress.
+const RESERVED_SLOTS = 5
 const MAX_RETRIES = 3
 const DEFAULT_BASE_DELAY_MS = 1000
 
@@ -63,6 +65,10 @@ async function withRetry<T>(
   throw formatError(lastError)
 }
 
+function closed(stream: Readable): Promise<void> {
+  return new Promise<void>(resolve => stream.once('close', () => resolve()))
+}
+
 // Raw SF Describe response shape — much wider than we consume. We project
 // down to the narrow `DescribeField` at the adapter boundary so the
 // synthesiser never sees attributes it doesn't care about.
@@ -84,6 +90,7 @@ interface RawSObjectDescribe {
 export class SalesforceClient implements SalesforcePort {
   readonly apiVersion: string
   private readonly limiter: ReturnType<typeof pLimit>
+  private readonly downloadLimiter: ReturnType<typeof pLimit>
   private readonly baseDelay: number
   // Promise-valued cache so concurrent callers share one in-flight request.
   // Failures evict their slot to avoid memoising transient errors.
@@ -94,7 +101,10 @@ export class SalesforceClient implements SalesforcePort {
     options: SalesforceClientOptions = {}
   ) {
     this.apiVersion = connection.version
-    this.limiter = pLimit(options.concurrency ?? DEFAULT_CONCURRENCY)
+    const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
+    this.limiter = pLimit(concurrency)
+    // Below RESERVED_SLOTS + 1 the reserve shrinks instead of failing: only tests build such clients.
+    this.downloadLimiter = pLimit(Math.max(1, concurrency - RESERVED_SLOTS))
     this.baseDelay = options.retryBaseDelayMs ?? DEFAULT_BASE_DELAY_MS
   }
 
@@ -202,23 +212,39 @@ export class SalesforceClient implements SalesforcePort {
   }
 
   getBlobStream(path: string): Promise<Readable> {
-    return this.limiter(() =>
-      withRetry(async () => {
-        let res = await this.fetchStream(path)
-        if (res.status === 401) {
-          await this.connection.refreshAuth()
-          res = await this.fetchStream(path)
-        }
-        if (!res.ok) {
-          throw Object.assign(new Error(`HTTP ${res.status}`), {
-            statusCode: res.status,
-          })
-        }
-        return Readable.fromWeb(
-          res.body as Parameters<typeof Readable.fromWeb>[0]
-        )
-      }, this.baseDelay)
-    )
+    return new Promise<Readable>((resolve, reject) => {
+      this.downloadLimiter(() =>
+        this.limiter(() => this.holdUntilClosed(path, resolve))
+      ).catch(reject)
+    })
+  }
+
+  // The slot outlives the returned promise: resolved at headers, released at 'close'.
+  private async holdUntilClosed(
+    path: string,
+    resolve: (stream: Readable) => void
+  ): Promise<void> {
+    const stream = await this.openBlobStream(path)
+    resolve(stream)
+    await closed(stream)
+  }
+
+  private openBlobStream(path: string): Promise<Readable> {
+    return withRetry(async () => {
+      let res = await this.fetchStream(path)
+      if (res.status === 401) {
+        await this.connection.refreshAuth()
+        res = await this.fetchStream(path)
+      }
+      if (!res.ok) {
+        throw Object.assign(new Error(`HTTP ${res.status}`), {
+          statusCode: res.status,
+        })
+      }
+      return Readable.fromWeb(
+        res.body as Parameters<typeof Readable.fromWeb>[0]
+      )
+    }, this.baseDelay)
   }
 
   private fetchStream(path: string): Promise<Response> {

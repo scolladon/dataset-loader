@@ -509,7 +509,7 @@ See the canonical table in [README.md → Warnings & gotchas](README.md#warnings
 
 | Feature             | Behavior                                                                                                                                                     |
 |---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Per-org concurrency | 25 concurrent API calls per org via `p-limit` (shared across all entries for that org)                                                                       |
+| Per-org concurrency | 25 concurrent API calls per org; a blob download holds its slot until its body closes and downloads use at most 20, leaving 5 for other calls |
 | Entry processing    | Concurrent entries within each dataset group                                                                                                                 |
 | HTTP 429 retry      | Exponential backoff, 3 attempts max (1s, 2s, 4s)                                                                                                             |
 | Partial failure     | Failed entries don't block others; watermarks only advance on success                                                                                        |

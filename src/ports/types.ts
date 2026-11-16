@@ -205,6 +205,7 @@ export interface SalesforcePort {
   query<T>(soql: string): Promise<QueryResult<T>>
   queryMore<T>(nextRecordsUrl: string): Promise<QueryResult<T>>
   getBlob(path: string): Promise<unknown>
+  // The caller must consume or destroy the stream: the client holds a request slot until it closes.
   getBlobStream(path: string): Promise<Readable>
   post<T>(path: string, body: Record<string, unknown>): Promise<T>
   patch<T>(path: string, body: Record<string, unknown>): Promise<T>
