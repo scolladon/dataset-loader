@@ -1,5 +1,5 @@
 import { Writable } from 'node:stream'
-import { createGzip, type Gzip } from 'node:zlib'
+import { constants, createGzip, type Gzip } from 'node:zlib'
 import { type DatasetKey } from '../../domain/dataset-key.js'
 import { synthesise } from '../../domain/metadata-synthesizer.js'
 import { checkSchemaAlignment } from '../../domain/schema-check.js'
@@ -49,8 +49,15 @@ interface DatasetMetadata {
 const PART_MAX_BYTES = 10 * 1024 * 1024
 export const UPLOAD_HIGH_WATER = DEFAULT_CONCURRENCY
 
-function base64Length(byteCount: number): number {
-  return Math.ceil(byteCount / 3) * 4
+const BASE64_GROUP_CHARS = 4
+const BASE64_GROUP_BYTES = 3
+const NEWLINE = 0x0a
+
+// Largest raw byte count whose base64 form stays strictly under the part budget.
+function partCapacity(partMaxBytes: number): number {
+  return (
+    Math.floor((partMaxBytes - 1) / BASE64_GROUP_CHARS) * BASE64_GROUP_BYTES
+  )
 }
 
 // Wait for gzip readable side to finish emitting all data.
@@ -70,6 +77,7 @@ export class GzipChunkingWritable extends Writable {
   private partNumber = 0
   private readonly uploadPromises: Promise<void>[] = []
   private readonly pendingUploads = new Set<Promise<void>>()
+  private readonly capacity: number
 
   constructor(
     private readonly sfPort: SalesforcePort,
@@ -77,14 +85,20 @@ export class GzipChunkingWritable extends Writable {
     private readonly parentId: string,
     private readonly listener?: ProgressListener,
     private readonly uploadHighWater = UPLOAD_HIGH_WATER,
-    private readonly partMaxBytes = PART_MAX_BYTES
+    partMaxBytes = PART_MAX_BYTES
   ) {
     super({ objectMode: true })
+    this.capacity = partCapacity(partMaxBytes)
     this.chunk = this.createChunkState()
   }
 
   get partCount(): number {
     return this.partNumber
+  }
+
+  // Pessimistic: pending bytes are counted as if they did not compress at all.
+  private get room(): number {
+    return this.capacity - this.chunk.compressedSize - this.chunk.pendingBytes
   }
 
   override _write(
@@ -98,107 +112,86 @@ export class GzipChunkingWritable extends Writable {
       return
     }
     this.listener?.onRowsWritten(batch.length)
-    // Fast path: if the whole batch fits in the current part, encode to a
-    // Buffer once and hand that single chunk to zlib. Using Buffer (not a
-    // string) avoids both (a) the extra Buffer.byteLength UTF-8 scan and
-    // (b) zlib's internal string→Buffer conversion on the hot path. Falls
-    // through to the per-line path when the batch would span a 10 MB part
-    // boundary so rotation stays line-precise.
-    if (batch.length > 0) {
-      const whole = Buffer.from(batch.join('\n') + '\n', 'utf8')
-      const wholeBytes = whole.length
-      if (!this.exceedsPartLimit(wholeBytes)) {
-        this.chunk.gz.write(whole)
-        this.chunk.pendingBytes += wholeBytes
-        callback()
-        return
-      }
+    if (batch.length === 0) {
+      callback()
+      return
     }
-    // Slow path: batch straddles a 10 MB part boundary — walk line-by-line.
-    this.writeBatch(batch, 0, callback)
+    // One Buffer per batch avoids a UTF-8 length scan and zlib's own
+    // string-to-Buffer conversion on the hot path.
+    const encoded = Buffer.from(batch.join('\n') + '\n')
+    if (encoded.length <= this.room) {
+      this.append(encoded)
+      callback()
+      return
+    }
+    this.writeAcrossBoundary(encoded).then(() => callback(), callback)
   }
 
-  private writeBatch(
-    batch: string[],
-    i: number,
-    callback: (error?: Error | null) => void
-  ): void {
-    while (i < batch.length) {
-      /* v8 ignore next 4 -- gzip errors are asynchronous; checked before each line as a guard */
-      if (this.gzError) {
-        callback(this.gzError)
-        return
+  // Cuts at the last newline byte that fits, so a quoted multi-line SObject
+  // value may span two parts.
+  private async writeAcrossBoundary(encoded: Buffer): Promise<void> {
+    let rest = encoded
+    while (rest.length > 0) {
+      await this.syncFlush()
+      const cut = this.fittingPrefix(rest)
+      if (cut === 0) {
+        await this.rotatePart()
+        continue
       }
-      const line = batch[i++]
-      const data = line + '\n'
-      const lineBytes = Buffer.byteLength(data)
-      if (this.wouldExceed(lineBytes)) {
-        this.rotateIfNeeded(line, lineBytes, batch, i, callback)
-        return
-      }
-      this.chunk.gz.write(data)
-      this.chunk.pendingBytes += lineBytes
+      this.append(rest.subarray(0, cut))
+      rest = rest.subarray(cut)
     }
-    callback()
   }
 
-  private rotateIfNeeded(
-    line: string,
-    lineBytes: number,
-    batch: string[],
-    i: number,
-    callback: (error?: Error | null) => void
-  ): void {
-    this.chunk.gz.flush(() => {
-      /* v8 ignore next 4 -- gzip errors are asynchronous; checked post-flush as a guard */
-      if (this.gzError) {
-        callback(this.gzError)
-        return
-      }
-      this.chunk.pendingBytes = 0
-      if (!this.wouldExceed(lineBytes)) {
-        this.writeLineToGz(line, lineBytes)
-        this.writeBatch(batch, i, callback)
-        return
-      }
-      this.finishAndRotate(line, lineBytes, batch, i, callback)
+  // Buffers always end with a newline, so one that fits whole is cut at its
+  // own end. An empty part takes up to the first newline, so an oversized line
+  // cannot rotate forever.
+  private fittingPrefix(buffer: Buffer): number {
+    const room = this.room
+    const lastBreak = room > 0 ? buffer.lastIndexOf(NEWLINE, room - 1) : -1
+    if (lastBreak >= 0) return lastBreak + 1
+    return this.hasData ? 0 : buffer.indexOf(NEWLINE) + 1
+  }
+
+  private syncFlush(): Promise<void> {
+    if (this.chunk.pendingBytes === 0) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      this.chunk.gz.flush(constants.Z_SYNC_FLUSH, (error?: Error | null) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        this.chunk.pendingBytes = 0
+        resolve()
+      })
     })
   }
 
-  private finishAndRotate(
-    line: string,
-    lineBytes: number,
-    batch: string[],
-    i: number,
-    callback: (error?: Error | null) => void
-  ): void {
+  private async rotatePart(): Promise<void> {
     const finished = this.chunk
-    endGzip(finished)
-      .then(async () => {
-        const compressed = Buffer.concat(finished.chunks)
-        const upload = this.uploadPart(compressed)
-        // Auto-remove from pending set on settle; suppress unhandled rejection
-        // until _final's Promise.all catches it
-        upload
-          .finally(() => this.pendingUploads.delete(upload))
-          .catch(() => {
-            // Rejection handled by Promise.all in _final
-          })
-        this.pendingUploads.add(upload)
-        this.uploadPromises.push(upload)
-        if (this.pendingUploads.size >= this.uploadHighWater) {
-          await Promise.race([...this.pendingUploads])
-        }
-        this.chunk = this.createChunkState()
-        this.writeLineToGz(line, lineBytes)
-        this.writeBatch(batch, i, callback)
-      })
-      .catch((err: Error) => callback(err))
+    await endGzip(finished)
+    this.trackUpload(this.uploadPart(Buffer.concat(finished.chunks)))
+    if (this.pendingUploads.size >= this.uploadHighWater) {
+      await Promise.race([...this.pendingUploads])
+    }
+    this.chunk = this.createChunkState()
   }
 
-  private writeLineToGz(line: string, lineBytes: number): void {
-    this.chunk.gz.write(line + '\n')
-    this.chunk.pendingBytes += lineBytes
+  private append(buffer: Buffer): void {
+    this.chunk.gz.write(buffer)
+    this.chunk.pendingBytes += buffer.length
+  }
+
+  private trackUpload(upload: Promise<void>): void {
+    // Auto-remove from pending set on settle; suppress unhandled rejection
+    // until _final's Promise.all catches it
+    upload
+      .finally(() => this.pendingUploads.delete(upload))
+      .catch(() => {
+        // Rejection handled by Promise.all in _final
+      })
+    this.pendingUploads.add(upload)
+    this.uploadPromises.push(upload)
   }
 
   override _final(callback: (error?: Error | null) => void): void {
@@ -240,23 +233,6 @@ export class GzipChunkingWritable extends Writable {
       this.destroy(err)
     })
     return state
-  }
-
-  // Pessimistic projection: `compressed + pending + additional` is the
-  // worst-case size assuming zlib produced zero compression. Monotonic in the
-  // input bytes, so if this doesn't exceed partMaxBytes (after base64) the
-  // actual emitted part can't either.
-  private exceedsPartLimit(additionalBytes: number): boolean {
-    const estimatedSize =
-      this.chunk.compressedSize + this.chunk.pendingBytes + additionalBytes
-    return base64Length(estimatedSize) >= this.partMaxBytes
-  }
-
-  // Slow-path predicate: same projection, plus a guard that says "never rotate
-  // an empty part" — otherwise an oversized first line would spin forever
-  // rotating through empty parts.
-  private wouldExceed(additionalBytes: number): boolean {
-    return this.hasData && this.exceedsPartLimit(additionalBytes)
   }
 
   private uploadPart(compressed: Buffer): Promise<void> {
