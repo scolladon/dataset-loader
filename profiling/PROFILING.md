@@ -157,9 +157,17 @@ Opens as `profiles/CPU.*.cpuprofile` — load in **Chrome DevTools → Performan
 Focus on:
 
 - `streams` — Node.js stream machinery (nextTick, clearBuffer, writeOrBuffer)
-- `zlib` — gzip compression (runs on libuv thread pool, explains >100% CPU)
+- `zlib` — runs on the libuv thread pool; its time is not attributed by `--cpu-prof` — use `process.cpuUsage()`
 - GC — heap allocation churn
 - `writeToAgg`, `writeSeq`, async iterator steps — ElfReader O(n) chain
+
+Reading the profile: `--cpu-prof` samples the main JS thread only. A sample with no JS frame lands in `(idle)` or `(program)`, and that includes the main thread waiting for libuv thread-pool callbacks (zlib, one per `gz.write`). The idle share is therefore not Salesforce latency. Combine it with event-loop utilisation and CPU time (see "Event-loop utilisation and CPU time" below):
+
+| eventLoopUtilization | cpuPerWall | reading                                                                                                                                     |
+|----------------------|------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| high                 | any        | the main thread is the bottleneck (JS plus native callbacks); `--cpu-prof` idle is not network time                                         |
+| low                  | > 1        | thread-pool bound (zlib, fs): reduce the number of pool tasks, not their size                                                               |
+| low                  | ≪ 1        | waiting on I/O; only here may wait time be attributed to Salesforce latency, and the network-timing instrumentation must confirm it         |
 
 ### Heap profile
 
@@ -261,6 +269,31 @@ post<T>(path: string, body: Record<string, unknown>): Promise<T> {
 
 Remove after use. Do not commit.
 
+### Event-loop utilisation and CPU time (temporary instrumentation — add to `src/domain/pipeline.ts`)
+
+In `executePipeline`:
+
+```typescript
+// src/domain/pipeline.ts — top of executePipeline
+import { performance } from 'node:perf_hooks'
+const elu0 = performance.eventLoopUtilization()
+const cpu0 = process.cpuUsage()
+const t0 = performance.now()
+// … just before `return pipelineResult`
+const wallMs = performance.now() - t0
+const elu = performance.eventLoopUtilization(elu0)
+const cpu = process.cpuUsage(cpu0)
+console.error(JSON.stringify({
+  wallMs: Math.round(wallMs),
+  eventLoopUtilization: +elu.utilization.toFixed(3),
+  cpuUserMs: Math.round(cpu.user / 1000),
+  cpuSystemMs: Math.round(cpu.system / 1000),
+  cpuPerWall: +((cpu.user + cpu.system) / 1000 / wallMs).toFixed(2),
+}))
+```
+
+Remove after use. Do not commit.
+
 ---
 
 ## Results — 2026-03-26
@@ -316,6 +349,8 @@ Active CPU breakdown:
 | H6 | Fan-out backpressure couples fastest to slowest            | CONFIRMED CORRECT — working as designed                             |
 | H7 | writeSeq promise chain leaks closures                      | NOT CONFIRMED — no accumulation in heap profile                     |
 | H9 | O(n) async overhead for 1.84M lines is the real bottleneck | **CONFIRMED — primary finding**                                     |
+
+> **Correction:** `--cpu-prof` idle is not network time — it includes the main thread waiting on libuv thread-pool work (zlib). Read it with event-loop utilisation and CPU time (see "Reading the profile" under CPU profile); in a later run of the same scenario `--cpu-prof` showed 60.5 % idle while event-loop utilisation was 81 % busy.
 
 ### Primary bottleneck (H9): O(n) async chain in ElfReader
 
@@ -402,6 +437,8 @@ The improvements are still **kept** because they:
 - Improve code clarity (`AsyncChannel` vs `aggStream + writeSeq`)
 
 **True bottleneck**: Salesforce API throughput for the ~40 `InsightsExternalDataPart` POST calls and the ~11 days of ELF blob downloads. No client-side optimization can overcome network latency.
+
+> **Correction:** `--cpu-prof` idle is not network time — it includes the main thread waiting on libuv thread-pool work (zlib). Read it with event-loop utilisation and CPU time (see "Reading the profile" under CPU profile); in a later run of the same scenario `--cpu-prof` showed 60.5 % idle while event-loop utilisation was 81 % busy.
 
 ---
 
@@ -541,6 +578,8 @@ Run with `--cpu-prof-interval=100` covering the full CLI invocation (wall clock 
  ~0.2s  HTTP/TLS/jsforce init              (0.6%)
  ~0.0s  zlib, streams, GC, domain code    (<0.2%)
 ```
+
+> **Correction:** `--cpu-prof` idle is not network time — it includes the main thread waiting on libuv thread-pool work (zlib). Read it with event-loop utilisation and CPU time (see "Reading the profile" under CPU profile); in a later run of the same scenario `--cpu-prof` showed 60.5 % idle while event-loop utilisation was 81 % busy.
 
 ### Pino shutdown investigation (230ms)
 
