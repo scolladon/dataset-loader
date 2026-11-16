@@ -112,6 +112,7 @@ interface RawDescribeField {
   readonly type: string
   readonly precision?: number
   readonly scale?: number
+  readonly length?: number
   readonly referenceTo?: readonly string[]
   readonly relationshipName?: string | null
 }
@@ -380,6 +381,7 @@ function projectField(raw: RawDescribeField): DescribeField {
     type: raw.type,
     precision: raw.precision,
     scale: raw.scale,
+    length: raw.length,
     referenceTo: raw.referenceTo,
     relationshipName: raw.relationshipName,
   }

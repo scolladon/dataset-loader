@@ -11,6 +11,7 @@ interface DescribeFieldInit {
   readonly type: string
   readonly precision?: number
   readonly scale?: number
+  readonly length?: number
   readonly referenceTo?: readonly string[]
   readonly relationshipName?: string | null
 }
@@ -22,6 +23,7 @@ function field(init: DescribeFieldInit): DescribeField {
     type: init.type,
     precision: init.precision,
     scale: init.scale,
+    length: init.length,
     referenceTo: init.referenceTo,
     relationshipName: init.relationshipName,
   }
@@ -293,6 +295,62 @@ describe('SObjectBootstrapProvider', () => {
       format: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
     })
   })
+
+  it.each([
+    ['a text leaf', 'string', 255],
+    ['a long text area', 'textarea', 131072],
+  ])(
+    'given %s with a Describe length, when build, then the source field carries that length',
+    async (_case, type, length) => {
+      // Arrange
+      const port = describePort({
+        Account: {
+          name: 'Account',
+          fields: [field({ name: 'Notes', type, length })],
+        },
+      })
+      const sut = new SObjectBootstrapProvider(port, {
+        sobject: 'Account',
+        fields: ['Notes'],
+        datasetName: 'Accounts',
+        augmentColumns: {},
+      })
+
+      // Act
+      const result = await sut.buildSourceSchema()
+
+      // Assert
+      expect(result.fields[0]).toMatchObject({ type: 'Text', length })
+    }
+  )
+
+  it.each([
+    ['Numeric', 'int'],
+    ['Date', 'datetime'],
+  ])(
+    'given a %s leaf with a Describe length, when build, then the source field carries no length',
+    async (_case, type) => {
+      // Arrange
+      const port = describePort({
+        Account: {
+          name: 'Account',
+          fields: [field({ name: 'Value', type, length: 18 })],
+        },
+      })
+      const sut = new SObjectBootstrapProvider(port, {
+        sobject: 'Account',
+        fields: ['Value'],
+        datasetName: 'Accounts',
+        augmentColumns: {},
+      })
+
+      // Act
+      const result = await sut.buildSourceSchema()
+
+      // Assert
+      expect(result.fields[0]).not.toHaveProperty('length')
+    }
+  )
 
   it('given a Numeric field with describe-supplied precision and scale, when build, then values are passed through to SourceSchema', async () => {
     // Arrange

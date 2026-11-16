@@ -27,6 +27,8 @@ export interface SourceField {
   readonly scale?: number
   // Date only:
   readonly format?: string
+  // Text only: maximum characters, when the source knows it
+  readonly length?: number
   // Lets a provider mark a column as derived from an augment constant, so
   // downstream consumers (dry-run renderer, audit) can distinguish reader
   // fields from augment fields without re-parsing config.

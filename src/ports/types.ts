@@ -191,6 +191,7 @@ export interface DescribeField {
   readonly type: string
   readonly precision?: number
   readonly scale?: number
+  readonly length?: number
   readonly referenceTo?: readonly string[]
   readonly relationshipName?: string | null
 }

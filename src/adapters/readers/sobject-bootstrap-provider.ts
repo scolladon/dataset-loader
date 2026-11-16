@@ -100,7 +100,7 @@ function toSourceField(path: string, f: DescribeField): SourceField {
   if (crmaType === 'Date') {
     return { ...base, format: dateFormatFor(f.type) }
   }
-  return base
+  return { ...base, length: f.length }
 }
 
 // SF type → CRMA type mapping. Conservative: any unrecognised type lands as

@@ -59,6 +59,7 @@ describe('synthesise', () => {
       fullyQualifiedName: 'Id',
       label: 'Id',
       type: 'Text',
+      precision: 32000,
     })
     expect(totalField).toEqual({
       name: 'Total',
@@ -82,8 +83,31 @@ describe('synthesise', () => {
       fullyQualifiedName: 'SourceOrg',
       label: 'SourceOrg',
       type: 'Text',
+      precision: 32000,
     })
   })
+
+  it.each([
+    ['a known length', 255, 255],
+    ['the smallest valid length', 1, 1],
+    ['a missing length', undefined, 32000],
+    ['a length above the ceiling', 131072, 32000],
+    ['a non-positive length', 0, 32000],
+  ])(
+    'given a Text field with %s (%s), when synthesise, then precision is %i',
+    (_case, length, expected) => {
+      // Arrange
+      const schema = baseSchema([
+        { name: 'Body', label: 'Body', type: 'Text', length, origin: 'reader' },
+      ])
+
+      // Act
+      const sut = JSON.parse(synthesise(schema)) as CrmaMetadataJson
+
+      // Assert
+      expect(sut.objects[0].fields[0].precision).toBe(expected)
+    }
+  )
 
   it('given Numeric with precision below CRMA minimum, when synthesise, then precision coerced to 18', () => {
     // Arrange
@@ -103,6 +127,26 @@ describe('synthesise', () => {
 
     // Assert
     expect(sut.objects[0].fields[0].precision).toBe(18)
+  })
+
+  it('given Numeric with the CRMA minimum precision, when synthesise, then precision is kept', () => {
+    // Arrange
+    const schema = baseSchema([
+      {
+        name: 'A',
+        label: 'A',
+        type: 'Numeric',
+        precision: 1,
+        scale: 0,
+        origin: 'reader',
+      },
+    ])
+
+    // Act
+    const sut = JSON.parse(synthesise(schema)) as CrmaMetadataJson
+
+    // Assert
+    expect(sut.objects[0].fields[0].precision).toBe(1)
   })
 
   it('given Numeric with precision above CRMA maximum, when synthesise, then precision coerced to 18', () => {
