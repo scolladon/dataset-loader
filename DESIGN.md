@@ -331,7 +331,7 @@ A dataset whose `EdgemartAlias` has no `Completed` / `CompletedWithWarnings` pri
 Every default in `synthesise()` is anchored to a probe that exercised the CRMA API:
 
 - **Numeric** — `precision` clamped to `[1, 18]` (SF Describe sometimes returns `precision: 0`; CRMA rejects), `scale` clamped to `≤ precision`, mandatory `defaultValue: "0"` (CRMA rejects parent-create otherwise with `FIELD_INTEGRITY_EXCEPTION`).
-- **Text** — `precision` is the source field length when known (SObject Describe `length`), capped at 32,000, and 32,000 otherwise (ELF, CSV, augment columns, non-positive length). CRM Analytics cuts a Text value at 255 characters when no `precision` is declared and refuses a `precision` above 32,000.
+- **Text** — `precision` is the source field length when known (SObject Describe `length`), capped at 32,000, and 32,000 otherwise (ELF, CSV, augment columns, non-positive length). CRM Analytics cuts a Text value at 255 characters when no `precision` is declared and refuses a `precision` above 32,000. Values are sent unchanged: one longer than 32,000 characters is left to the platform, which does not store it today (empty cell, no error, v68.0). The loader does not cut it on purpose — the limit is the platform's and may move.
 - **Date** — `defaultValue` is **not** emitted (CRMA accepts empty cells as null); default `format: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"` matches SF native datetime (`+0000` offset — CRMA's `XXX` token rejects colon-separated `+00:00` and the `Z` literal). Date-only fields use `format: "yyyy-MM-dd"`.
 
 ### Override path

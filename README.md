@@ -122,6 +122,15 @@ from the source schema:
 | ELF     | `LogFileFieldNames` from the latest `EventLogFile` row in the source org | All `Text` (matches the ELF wire format)                           |
 | CSV     | First-line header parse                                                  | All `Text` (CSV type inference is not safe for arbitrary sources)  |
 
+Text columns declare a length: the SObject field's own length, capped at
+32,000 (the CRM Analytics maximum), and 32,000 for ELF and CSV columns.
+The loader never shortens a value: every cell is sent as it is, and what
+CRM Analytics keeps is the platform's rule. As of API v68.0 a text value
+longer than 32,000 characters is not stored — the cell comes back empty,
+with no error. A dataset created without declared text lengths keeps its
+metadata and is cut at 255 characters by the platform until it is
+re-bootstrapped (see below).
+
 Dry-run output flags entries that would create a new dataset with
 a `[BOOTSTRAP]` prefix:
 

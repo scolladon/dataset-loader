@@ -247,6 +247,12 @@ sf api:request:rest -o <targetOrg> -m DELETE "/services/data/v62.0/wave/datasets
 
 The Analytics REST API returns `errorCode: 201 "Edgemart not found"` when a dataset is genuinely absent (distinct from a 404).
 
+**Text values cut at 255 characters, or long values empty**
+
+- **Symptom**: A text value in the dataset stops at 255 characters, or a very long value is empty.
+- **Cause**: CRM Analytics applies the length declared in the dataset metadata. With no declared length it cuts at 255 characters, which is the case for a dataset whose metadata declares no text length. Its maximum is 32,000: a longer value is not stored (empty cell, no error, as of API v68.0). The loader sends every value unchanged and leaves that rule to the platform.
+- **Resolution**: For the 255 cut, rebuild the metadata with `overrideMetadata: true` and `operation: "Overwrite"` — text columns are then declared at the source field length (SObject) or 32,000 (ELF, CSV). For a value over 32,000 characters there is nothing to configure: it is a platform limit.
+
 **SF `Describe` permission errors during SObject bootstrap**
 
 - **Symptom**: Bootstrap of an SObject entry fails with `INVALID_TYPE: sObject type 'X' is not supported`.
