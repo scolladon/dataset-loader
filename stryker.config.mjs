@@ -16,7 +16,7 @@ const config = {
   mutate: ['src/**/*.ts'],
   ignorePatterns: ['lib/**', 'coverage/**', 'reports/**'],
   // Shared across the four sibling plugins: high 95 / low 90 / break 90.
-  // Note the PR job mutates only the files changed against origin/main, so the
+  // Note the PR job mutates only the lines changed against origin/main, so the
   // score it reports is scoped to that subset and is not comparable to a full
   // run. That job is advisory (continue-on-error), so break never blocks it.
   thresholds: {
