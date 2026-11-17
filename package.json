@@ -262,7 +262,7 @@
       "files": [
         "src/**/*.ts",
         "test/unit/**/*.test.ts",
-        "vitest.config.ts",
+        "vitest.config.mutation.ts",
         "stryker.config.mjs",
         "tsconfig.json"
       ],
@@ -278,7 +278,7 @@
       "files": [
         "src/**/*.ts",
         "test/unit/**/*.test.ts",
-        "vitest.config.ts",
+        "vitest.config.mutation.ts",
         "stryker.config.mjs",
         "tsconfig.json"
       ],

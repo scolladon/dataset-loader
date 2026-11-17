@@ -4,7 +4,7 @@ const config = {
   reporters: ['html', 'clear-text', 'progress', 'json'],
   testRunner: 'vitest',
   vitest: {
-    configFile: 'vitest.config.ts',
+    configFile: 'vitest.config.mutation.ts',
   },
   coverageAnalysis: 'perTest',
   // Stryker rewrites tsconfig paths in its sandbox through TypeScript's JS
