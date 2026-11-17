@@ -54,10 +54,7 @@ type InitOutcome =
   | { readonly kind: 'slot'; readonly slot: WriterSlot }
   | { readonly kind: 'skip'; readonly result: GroupResult }
 
-interface InitialisedWriters {
-  readonly slots: Map<string, WriterSlot>
-  readonly skipResults: readonly GroupResult[]
-}
+type PendingInits = ReadonlyMap<string, Promise<InitOutcome>>
 
 export async function executePipeline(
   input: PipelineInput
@@ -66,14 +63,15 @@ export async function executePipeline(
   const bundles = groupByReader(input.entries, input.watermarks)
   const phase = input.progress.create('Processing', input.entries.length)
 
-  const { slots, skipResults } = await initWriters(groups, input, phase)
-  await processBundles(bundles, slots, input, phase)
+  const inits = startInits(groups, input, phase)
+  await processBundles(bundles, inits, input, phase)
+  const outcomes = await Promise.all(inits.values())
   const groupResults = await Promise.all(
-    [...slots.values()].map(slot => finalizeSlot(slot, input))
+    [...slotsOf(outcomes).values()].map(slot => finalizeSlot(slot, input))
   )
 
   const { store, pipelineResult } = aggregateResults(
-    [...skipResults, ...groupResults],
+    [...skipResultsOf(outcomes), ...groupResults],
     input.watermarks
   )
   phase.stop()
@@ -82,46 +80,67 @@ export async function executePipeline(
   return pipelineResult
 }
 
-// Writers are created in group order, then initialised concurrently; slots and
-// skip results keep group order whatever order the inits settle in.
-async function initWriters(
+// Writers are created in group order and their inits run concurrently. The map
+// keeps group order, so results stay in that order whatever order the inits
+// settle in.
+function startInits(
   groups: readonly DatasetGroup[],
   input: PipelineInput,
   phase: PhaseProgress
-): Promise<InitialisedWriters> {
+): PendingInits {
   const prepared = groups.map(group => prepareGroup(group, input, phase))
-  const outcomes = await Promise.all(prepared.map(p => initGroup(p, input)))
-  const slots = new Map<string, WriterSlot>(
-    outcomes.flatMap(o =>
-      o.kind === 'slot' ? [[o.slot.group.key, o.slot] as const] : []
-    )
-  )
-  const skipResults = outcomes.flatMap(o =>
-    o.kind === 'skip' ? [o.result] : []
-  )
-  return { slots, skipResults }
+  return new Map(prepared.map(p => [p.group.key, initGroup(p, input)] as const))
 }
 
-// Reader bundles (solo or fan-out) run concurrently.
+// Reader bundles (solo or fan-out) run concurrently, each as soon as the
+// writers it feeds are ready, so a slow init elsewhere does not hold it back.
 async function processBundles(
   bundles: readonly ReaderBundle[],
-  slots: Map<string, WriterSlot>,
+  inits: PendingInits,
   input: PipelineInput,
   phase: PhaseProgress
 ): Promise<void> {
   await Promise.all(
-    bundles
-      .filter(bundle =>
-        bundle.entries.some(e => slots.has(e.datasetKey.toString()))
-      )
-      .map(bundle =>
-        processBundle(bundle, slots, input, phase).catch(
-          /* v8 ignore next */
-          (error: unknown) =>
-            input.logger.warn(`Bundle failed: ${formatErrorMessage(error)}`)
-        )
-      )
+    bundles.map(bundle => runWhenReady(bundle, inits, input, phase))
   )
+}
+
+// A reader shared by several datasets reads its source once and therefore
+// waits for all of them.
+async function runWhenReady(
+  bundle: ReaderBundle,
+  inits: PendingInits,
+  input: PipelineInput,
+  phase: PhaseProgress
+): Promise<void> {
+  const slots = slotsOf(await Promise.all(initsFedBy(bundle, inits)))
+  // Stryker disable next-line ConditionalExpression: equivalent mutant — processBundle returns on its own when no entry has a slot
+  if (slots.size === 0) return
+  await processBundle(bundle, slots, input, phase).catch(
+    /* v8 ignore next */
+    (error: unknown) =>
+      input.logger.warn(`Bundle failed: ${formatErrorMessage(error)}`)
+  )
+}
+
+function initsFedBy(
+  bundle: ReaderBundle,
+  inits: PendingInits
+): Promise<InitOutcome>[] {
+  const keys = new Set(bundle.entries.map(e => e.datasetKey.toString()))
+  return [...inits].filter(([key]) => keys.has(key)).map(([, init]) => init)
+}
+
+function slotsOf(outcomes: readonly InitOutcome[]): Map<string, WriterSlot> {
+  return new Map(
+    outcomes.flatMap(o =>
+      o.kind === 'slot' ? [[o.slot.group.key, o.slot] as const] : []
+    )
+  )
+}
+
+function skipResultsOf(outcomes: readonly InitOutcome[]): GroupResult[] {
+  return outcomes.flatMap(o => (o.kind === 'skip' ? [o.result] : []))
 }
 
 function prepareGroup(

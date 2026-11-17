@@ -188,7 +188,7 @@ Focus on:
 
 ### Memory polling (temporary instrumentation — add to `src/domain/pipeline.ts`)
 
-Add inside `executePipeline`, before the Phase 1 loop:
+Add inside `executePipeline`, before the writer inits start:
 
 ```typescript
 let peakRss = 0
@@ -215,17 +215,22 @@ Remove after use. Do not commit.
 
 ### Phase timing (temporary instrumentation — add to `src/domain/pipeline.ts`)
 
-In `executePipeline`:
+In `executePipeline`. Writer inits and reader bundles overlap (a bundle starts as
+soon as the writers it feeds are ready), so the init figure is the slowest init,
+measured on its own, and the bundle figure includes it:
 
 ```typescript
 const t0 = performance.now()
-// ... Phase 1 loop ...
-const t1 = performance.now()
-input.logger.info(`[PIPELINE] Phase1 init: ${(t1 - t0).toFixed(0)}ms`)
+const inits = startInits(groups, input, phase)
+void Promise.all(inits.values()).then(() =>
+  input.logger.info(
+    `[PIPELINE] Phase1 init: ${(performance.now() - t0).toFixed(0)}ms`
+  )
+)
 
 // ... Phase 2 Promise.all ...
 const t2 = performance.now()
-input.logger.info(`[PIPELINE] Phase2 bundles: ${(t2 - t1).toFixed(0)}ms`)
+input.logger.info(`[PIPELINE] Phase1+2 init and bundles: ${(t2 - t0).toFixed(0)}ms`)
 
 // ... Phase 3 Promise.all ...
 const t3 = performance.now()

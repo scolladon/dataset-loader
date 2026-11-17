@@ -1415,10 +1415,11 @@ describe('executePipeline (streaming)', () => {
 
     function run(
       writers: Record<string, MockWriter>,
-      logger: LoggerPort = createMockLogger()
+      logger: LoggerPort = createMockLogger(),
+      entries: PipelineEntry[] = threeGroupEntries()
     ) {
       return executePipeline({
-        entries: threeGroupEntries(),
+        entries,
         watermarks: WatermarkStore.empty(),
         createWriter: createWriterByName(writers),
         state: createMockState(),
@@ -1426,6 +1427,112 @@ describe('executePipeline (streaming)', () => {
         logger,
       })
     }
+
+    function entryFor(
+      name: (typeof names)[number],
+      index: number,
+      fetcher: ReaderPort,
+      eventLog = `Log${name}`
+    ): PipelineEntry {
+      return createEntryWithReader(
+        ReaderKey.forElf('src', eventLog, 'Daily', DateBounds.none()),
+        {
+          index,
+          label: name,
+          fetcher,
+          watermarkKey: WatermarkKey.fromEntry({
+            sourceOrg: 'src',
+            eventLog,
+            interval: 'Daily',
+          }),
+          datasetKey: DatasetKey.fromEntry({
+            targetOrg: 'ana',
+            targetDataset: name,
+          }),
+        }
+      )
+    }
+
+    it('given two independent readers and one writer init still pending, when executing, then the ready dataset is read before that init resolves', async () => {
+      // Arrange
+      const writers = { DS_A: createMockWriter(), DS_B: createMockWriter() }
+      const pending = deferredInit(writers.DS_A)
+      writers.DS_A.init = vi.fn(() => pending.promise)
+      const pendingFetcher = mockFetcher(async () => createFetchResult(['"a"']))
+      const readyFetcher = mockFetcher(async () => createFetchResult(['"b"']))
+      const entries = [
+        entryFor('DS_A', 0, pendingFetcher),
+        entryFor('DS_B', 1, readyFetcher),
+      ]
+
+      // Act
+      const sut = run(writers, createMockLogger(), entries)
+      await vi.waitFor(() =>
+        expect(readyFetcher.fetch).toHaveBeenCalledTimes(1)
+      )
+      const pendingReadsBeforeInit = vi.mocked(pendingFetcher.fetch).mock.calls
+        .length
+      pending.resolve()
+      const result = await sut
+
+      // Assert
+      expect(pendingReadsBeforeInit).toBe(0)
+      expect(pendingFetcher.fetch).toHaveBeenCalledTimes(1)
+      expect(result.entriesProcessed).toBe(2)
+    })
+
+    it('given one reader shared by three datasets and one writer init still pending, when executing, then the reader waits for all its datasets', async () => {
+      // Arrange
+      const writers = Object.fromEntries(
+        names.map(name => [name, createMockWriter()])
+      )
+      const pending = deferredInit(writers.DS_C)
+      writers.DS_C.init = vi.fn(() => pending.promise)
+      const entries = threeGroupEntries()
+      const sharedFetcher = entries[0].fetcher
+
+      // Act
+      const sut = run(writers, createMockLogger(), entries)
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setImmediate(r))
+      const readsBeforeInit = vi.mocked(sharedFetcher.fetch).mock.calls.length
+      pending.resolve()
+      const result = await sut
+
+      // Assert
+      expect(readsBeforeInit).toBe(0)
+      expect(sharedFetcher.fetch).toHaveBeenCalledTimes(1)
+      expect(result.entriesProcessed).toBe(3)
+    })
+
+    it('given a dataset fed by two readers where one also feeds a dataset whose init is still pending, when executing, then the dataset receives the rows of both readers', async () => {
+      // Arrange
+      const writers = { DS_A: createMockWriter(), DS_B: createMockWriter() }
+      const pending = deferredInit(writers.DS_B)
+      writers.DS_B.init = vi.fn(() => pending.promise)
+      const soloFetcher = mockFetcher(async () => createFetchResult(['"solo"']))
+      const sharedFetcher = mockFetcher(async () =>
+        createFetchResult(['"shared"'])
+      )
+      const entries = [
+        entryFor('DS_A', 0, soloFetcher),
+        entryFor('DS_A', 1, sharedFetcher, 'Shared'),
+        entryFor('DS_B', 2, sharedFetcher, 'Shared'),
+      ]
+
+      // Act
+      const sut = run(writers, createMockLogger(), entries)
+      await vi.waitFor(() =>
+        expect(writers.DS_A._writtenLines).toEqual(['"solo"'])
+      )
+      pending.resolve()
+      const result = await sut
+
+      // Assert
+      expect(writers.DS_A._writtenLines).toEqual(['"solo"', '"shared"'])
+      expect(writers.DS_B._writtenLines).toEqual(['"shared"'])
+      expect(result.entriesProcessed).toBe(3)
+    })
 
     it('given three groups whose init is deferred, when executing, then all three init calls start before any resolves', async () => {
       // Arrange
