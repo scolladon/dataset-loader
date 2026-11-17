@@ -180,6 +180,7 @@ const sfPort: SalesforcePort = {
   getBlob: vi.fn().mockResolvedValue(''),
   getBlobStream: vi.fn(),
   post: vi.fn().mockResolvedValue({ id: '06V000000000001' }),
+  postMultipart: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
   patch: vi.fn().mockResolvedValue(null),
   del: vi.fn().mockResolvedValue(undefined),
 }

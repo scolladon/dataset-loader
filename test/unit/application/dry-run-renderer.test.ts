@@ -319,6 +319,56 @@ describe('DryRunRenderer', () => {
       expect(querySpy).toHaveBeenCalledTimes(1)
     })
 
+    it('given two targets with deferred queries, when rendering, then both queries are issued before either resolves', async () => {
+      // Arrange
+      const { logger } = makeLogger()
+      const resolvers: Array<() => void> = []
+      const querySpy = vi.fn(
+        () =>
+          new Promise(resolve => {
+            resolvers.push(() =>
+              resolve({ totalSize: 0, done: true, records: [] })
+            )
+          })
+      )
+      const sfPorts = new Map<string, SalesforcePort>([
+        ['ana', makeSfPort({ query: querySpy })],
+      ])
+      const sut = new DryRunRenderer(logger, sfPorts)
+
+      // Act
+      const rendering = sut.render(
+        [resolved(sobject), resolved({ ...sobject, targetDataset: 'DS2' })],
+        WatermarkStore.empty(),
+        DateBounds.none()
+      )
+      await new Promise(r => setTimeout(r, 0))
+
+      // Assert
+      expect(querySpy).toHaveBeenCalledTimes(2)
+      for (const resolve of resolvers) resolve()
+      await rendering
+    })
+
+    it('given a rejecting existence query, when rendering, then [BOOTSTRAP] is rendered', async () => {
+      // Arrange
+      const { logger, logs } = makeLogger()
+      const port = makeSfPort({
+        query: vi.fn().mockRejectedValue(new Error('boom')),
+      })
+      const sut = new DryRunRenderer(logger, new Map([['ana', port]]))
+
+      // Act
+      await sut.render(
+        [resolved(sobject)],
+        WatermarkStore.empty(),
+        DateBounds.none()
+      )
+
+      // Assert
+      expect(logs.some(l => l.startsWith('  [BOOTSTRAP] accounts'))).toBe(true)
+    })
+
     it('given a file target (no targetOrg), when rendering, then no SOQL is issued and no annotation appears', async () => {
       // Arrange
       const { logger, logs } = makeLogger()
@@ -343,6 +393,47 @@ describe('DryRunRenderer', () => {
       // Assert
       expect(querySpy).not.toHaveBeenCalled()
       expect(logs.some(l => l.includes('[BOOTSTRAP]'))).toBe(false)
+    })
+
+    it('given an entry with a target org but no target dataset, when rendering, then no SOQL is issued', async () => {
+      // Arrange
+      const { logger } = makeLogger()
+      const querySpy = vi.fn()
+      const port = makeSfPort({ query: querySpy })
+      const sut = new DryRunRenderer(logger, new Map([['ana', port]]))
+      const orgOnlyTarget = { ...sobject, targetDataset: undefined }
+
+      // Act
+      await sut.render(
+        [resolved(orgOnlyTarget)],
+        WatermarkStore.empty(),
+        DateBounds.none()
+      )
+
+      // Assert
+      expect(querySpy).not.toHaveBeenCalled()
+    })
+
+    it('given a dataset target, when rendering, then the existence query selects the latest completed metadata for its alias', async () => {
+      // Arrange
+      const { logger } = makeLogger()
+      const querySpy = vi
+        .fn()
+        .mockResolvedValue({ totalSize: 0, done: true, records: [] })
+      const port = makeSfPort({ query: querySpy })
+      const sut = new DryRunRenderer(logger, new Map([['ana', port]]))
+
+      // Act
+      await sut.render(
+        [resolved(sobject)],
+        WatermarkStore.empty(),
+        DateBounds.none()
+      )
+
+      // Assert
+      expect(querySpy).toHaveBeenCalledWith(
+        `SELECT MetadataJson FROM InsightsExternalData WHERE EdgemartAlias = '${sobject.targetDataset}' AND Status IN ('Completed', 'CompletedWithWarnings') ORDER BY CreatedDate DESC LIMIT 1`
+      )
     })
 
     it('given a target org with no sfPort wired, when rendering, then no annotation is emitted (graceful)', async () => {

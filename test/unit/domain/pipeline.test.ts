@@ -1309,6 +1309,314 @@ describe('executePipeline (streaming)', () => {
     expect(skipWriter.finalize).not.toHaveBeenCalled()
   })
 
+  it('given writer.init throws, when executing, then the group tracker is stopped', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => createFetchResult(['"data"']))
+    const writer = createMockWriter({
+      init: vi.fn(async () => {
+        throw new SkipDatasetError('No metadata for ds')
+      }),
+    })
+    const tracker = createMockGroupTracker()
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => writer) },
+      state: createMockState(),
+      progress: createMockProgress(tracker),
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(tracker.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('given entries, when executing, then the phase progress is stopped once', async () => {
+    // Arrange
+    const fetcher = mockFetcher(async () => createFetchResult(['"data"']))
+    const phaseStop = vi.fn()
+    const progress: ProgressPort = {
+      create: vi.fn(() => ({
+        tick: vi.fn(),
+        trackGroup: vi.fn(() => createMockGroupTracker()),
+        stop: phaseStop,
+      })),
+    }
+
+    // Act
+    await executePipeline({
+      entries: [createEntry({ fetcher })],
+      watermarks: WatermarkStore.empty(),
+      createWriter: { create: vi.fn(() => createMockWriter()) },
+      state: createMockState(),
+      progress,
+      logger: createMockLogger(),
+    })
+
+    // Assert
+    expect(phaseStop).toHaveBeenCalledTimes(1)
+  })
+
+  describe('writer init across groups', () => {
+    const names = ['DS_A', 'DS_B', 'DS_C'] as const
+
+    interface Deferred {
+      readonly promise: Promise<{ chunker: Writable }>
+      readonly resolve: () => void
+    }
+
+    function deferredInit(writer: MockWriter): Deferred {
+      let resolve: () => void = () => undefined
+      const promise = new Promise<{ chunker: Writable }>(res => {
+        resolve = () => res({ chunker: writer._writable })
+      })
+      return { promise, resolve }
+    }
+
+    function threeGroupEntries() {
+      const sharedReader = ReaderKey.forElf(
+        'src',
+        'Login',
+        'Daily',
+        DateBounds.none()
+      )
+      const watermarkKey = WatermarkKey.fromEntry({
+        sourceOrg: 'src',
+        eventLog: 'Login',
+        interval: 'Daily',
+      })
+      const fetcher = mockFetcher(async () => createFetchResult(['"row"']))
+      return names.map((name, index) =>
+        createEntryWithReader(sharedReader, {
+          index,
+          label: name,
+          fetcher,
+          watermarkKey,
+          datasetKey: DatasetKey.fromEntry({
+            targetOrg: 'ana',
+            targetDataset: name,
+          }),
+        })
+      )
+    }
+
+    function createWriterByName(
+      writers: Record<string, MockWriter>
+    ): CreateWriterPort {
+      return {
+        create: vi.fn(dk => {
+          const name = names.find(n => dk.toString().includes(n))
+          return writers[name as string]
+        }),
+      }
+    }
+
+    function run(
+      writers: Record<string, MockWriter>,
+      logger: LoggerPort = createMockLogger(),
+      entries: PipelineEntry[] = threeGroupEntries()
+    ) {
+      return executePipeline({
+        entries,
+        watermarks: WatermarkStore.empty(),
+        createWriter: createWriterByName(writers),
+        state: createMockState(),
+        progress: createMockProgress(),
+        logger,
+      })
+    }
+
+    function entryFor(
+      name: (typeof names)[number],
+      index: number,
+      fetcher: ReaderPort,
+      eventLog = `Log${name}`
+    ): PipelineEntry {
+      return createEntryWithReader(
+        ReaderKey.forElf('src', eventLog, 'Daily', DateBounds.none()),
+        {
+          index,
+          label: name,
+          fetcher,
+          watermarkKey: WatermarkKey.fromEntry({
+            sourceOrg: 'src',
+            eventLog,
+            interval: 'Daily',
+          }),
+          datasetKey: DatasetKey.fromEntry({
+            targetOrg: 'ana',
+            targetDataset: name,
+          }),
+        }
+      )
+    }
+
+    it('given two independent readers and one writer init still pending, when executing, then the ready dataset is read before that init resolves', async () => {
+      // Arrange
+      const writers = { DS_A: createMockWriter(), DS_B: createMockWriter() }
+      const pending = deferredInit(writers.DS_A)
+      writers.DS_A.init = vi.fn(() => pending.promise)
+      const pendingFetcher = mockFetcher(async () => createFetchResult(['"a"']))
+      const readyFetcher = mockFetcher(async () => createFetchResult(['"b"']))
+      const entries = [
+        entryFor('DS_A', 0, pendingFetcher),
+        entryFor('DS_B', 1, readyFetcher),
+      ]
+
+      // Act
+      const sut = run(writers, createMockLogger(), entries)
+      await vi.waitFor(() =>
+        expect(readyFetcher.fetch).toHaveBeenCalledTimes(1)
+      )
+      const pendingReadsBeforeInit = vi.mocked(pendingFetcher.fetch).mock.calls
+        .length
+      pending.resolve()
+      const result = await sut
+
+      // Assert
+      expect(pendingReadsBeforeInit).toBe(0)
+      expect(pendingFetcher.fetch).toHaveBeenCalledTimes(1)
+      expect(result.entriesProcessed).toBe(2)
+    })
+
+    it('given one reader shared by three datasets and one writer init still pending, when executing, then the reader waits for all its datasets', async () => {
+      // Arrange
+      const writers = Object.fromEntries(
+        names.map(name => [name, createMockWriter()])
+      )
+      const pending = deferredInit(writers.DS_C)
+      writers.DS_C.init = vi.fn(() => pending.promise)
+      const entries = threeGroupEntries()
+      const sharedFetcher = entries[0].fetcher
+
+      // Act
+      const sut = run(writers, createMockLogger(), entries)
+      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setImmediate(r))
+      const readsBeforeInit = vi.mocked(sharedFetcher.fetch).mock.calls.length
+      pending.resolve()
+      const result = await sut
+
+      // Assert
+      expect(readsBeforeInit).toBe(0)
+      expect(sharedFetcher.fetch).toHaveBeenCalledTimes(1)
+      expect(result.entriesProcessed).toBe(3)
+    })
+
+    it('given a dataset fed by two readers where one also feeds a dataset whose init is still pending, when executing, then the dataset receives the rows of both readers', async () => {
+      // Arrange
+      const writers = { DS_A: createMockWriter(), DS_B: createMockWriter() }
+      const pending = deferredInit(writers.DS_B)
+      writers.DS_B.init = vi.fn(() => pending.promise)
+      const soloFetcher = mockFetcher(async () => createFetchResult(['"solo"']))
+      const sharedFetcher = mockFetcher(async () =>
+        createFetchResult(['"shared"'])
+      )
+      const entries = [
+        entryFor('DS_A', 0, soloFetcher),
+        entryFor('DS_A', 1, sharedFetcher, 'Shared'),
+        entryFor('DS_B', 2, sharedFetcher, 'Shared'),
+      ]
+
+      // Act
+      const sut = run(writers, createMockLogger(), entries)
+      await vi.waitFor(() =>
+        expect(writers.DS_A._writtenLines).toEqual(['"solo"'])
+      )
+      pending.resolve()
+      const result = await sut
+
+      // Assert
+      expect(writers.DS_A._writtenLines).toEqual(['"solo"', '"shared"'])
+      expect(writers.DS_B._writtenLines).toEqual(['"shared"'])
+      expect(result.entriesProcessed).toBe(3)
+    })
+
+    it('given three groups whose init is deferred, when executing, then all three init calls start before any resolves', async () => {
+      // Arrange
+      const writers = Object.fromEntries(
+        names.map(name => [name, createMockWriter()])
+      )
+      const deferreds = names.map(name => deferredInit(writers[name]))
+      names.forEach((name, i) => {
+        writers[name].init = vi.fn(() => deferreds[i].promise)
+      })
+
+      // Act
+      const sut = run(writers)
+      await new Promise(r => setTimeout(r, 0))
+
+      // Assert
+      for (const name of names) {
+        expect(writers[name].init).toHaveBeenCalledTimes(1)
+      }
+      for (const d of deferreds) d.resolve()
+      await sut
+    })
+
+    it('given inits that resolve in reverse group order, when executing, then finalize is called in group order', async () => {
+      // Arrange
+      const writers = Object.fromEntries(
+        names.map(name => [name, createMockWriter()])
+      )
+      const deferreds = names.map(name => deferredInit(writers[name]))
+      const finalizeOrder: string[] = []
+      names.forEach((name, i) => {
+        writers[name].init = vi.fn(() => deferreds[i].promise)
+        writers[name].finalize = vi.fn(async () => {
+          finalizeOrder.push(name)
+          return { parentId: '06V000000000001', partCount: 1 }
+        })
+      })
+
+      // Act
+      const sut = run(writers)
+      await new Promise(r => setTimeout(r, 0))
+      deferreds[2].resolve()
+      deferreds[1].resolve()
+      deferreds[0].resolve()
+      await sut
+
+      // Assert
+      expect(finalizeOrder).toEqual(['DS_A', 'DS_B', 'DS_C'])
+    })
+
+    it('given group A fails generically, B skips and C succeeds, when executing, then counts are per group and only A is aborted', async () => {
+      // Arrange
+      const writers = {
+        DS_A: createMockWriter({
+          init: vi.fn(async () => {
+            throw new Error('boom')
+          }),
+        }),
+        DS_B: createMockWriter({
+          init: vi.fn(async () => {
+            throw new SkipDatasetError('No metadata for DS_B')
+          }),
+        }),
+        DS_C: createMockWriter(),
+      }
+      const logger = createMockLogger()
+
+      // Act
+      const sut = await run(writers, logger)
+
+      // Assert
+      expect(sut.entriesFailed).toBe(1)
+      expect(sut.entriesSkipped).toBe(1)
+      expect(sut.entriesProcessed).toBe(1)
+      expect(writers.DS_A.abort).toHaveBeenCalledTimes(1)
+      expect(writers.DS_B.abort).not.toHaveBeenCalled()
+      expect(writers.DS_C.abort).not.toHaveBeenCalled()
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Writer init failed for 'DS_A'")
+      )
+      expect(logger.warn).toHaveBeenCalledWith('No metadata for DS_B')
+    })
+  })
+
   it('given two entries sharing reader where one writer init fails, when executing, then surviving entry is still processed (bundle filter is `some`, not `every`)', async () => {
     // Arrange — kills the `bundles.filter(b => b.entries.some(...))` →
     // `bundles.filter(b => b.entries.every(...))` mutation. With `every`,

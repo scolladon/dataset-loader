@@ -1,5 +1,5 @@
 import { finished } from 'node:stream/promises'
-import { type Gzip, gunzipSync, type ZlibOptions } from 'node:zlib'
+import { constants, type Gzip, gunzipSync, type ZlibOptions } from 'node:zlib'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DatasetWriter,
@@ -45,11 +45,59 @@ function makeSfPort(overrides: Partial<SalesforcePort> = {}): SalesforcePort {
     getBlob: vi.fn().mockResolvedValue(''),
     getBlobStream: vi.fn(),
     post: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
+    postMultipart: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
     patch: vi.fn().mockResolvedValue(null),
     del: vi.fn().mockResolvedValue(undefined),
     describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
     ...overrides,
   }
+}
+
+// Bytes of gzip framing (header, final block, trailer) outside the capacity projection.
+const GZIP_FRAMING_SLACK = 32
+const PART_CAPACITY_BYTES = 7_864_317
+const ROUND_TRIP_SEEDS = [1, 42, 20240229]
+const ROUND_TRIP_BUDGETS = [50, 4096, 65536]
+const PRINTABLE_FIRST = 0x21
+const PRINTABLE_SPAN = 0x5e
+const MAX_LINE_LENGTH = 5000
+const LINE_KIND_COUNT = 4
+
+function uploadedParts(sfPort: SalesforcePort): Buffer[] {
+  return vi
+    .mocked(sfPort.postMultipart)
+    .mock.calls.filter(([path]) => path.endsWith('/InsightsExternalDataPart'))
+    .map(([, body]) => body.data)
+}
+
+function decodedParts(sfPort: SalesforcePort): string[] {
+  return uploadedParts(sfPort).map(part => gunzipSync(part).toString('utf8'))
+}
+
+function mulberry32(seed: number): () => number {
+  let state = seed
+  return () => {
+    state = (state + 0x6d2b79f5) | 0
+    let t = Math.imul(state ^ (state >>> 15), 1 | state)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function randomPrintable(rng: () => number, length: number): string {
+  return Array.from({ length }, () =>
+    String.fromCharCode(PRINTABLE_FIRST + Math.floor(rng() * PRINTABLE_SPAN))
+  ).join('')
+}
+
+function randomLine(rng: () => number): string {
+  const length = 1 + Math.floor(rng() * MAX_LINE_LENGTH)
+  const kind = Math.floor(rng() * LINE_KIND_COUNT)
+  if (kind === 0) return 'a'.repeat(length)
+  if (kind === 1) return randomPrintable(rng, length)
+  if (kind === 2)
+    return `${randomPrintable(rng, length)}\n${'b'.repeat(length)}`
+  return randomPrintable(rng, 1 + Math.floor(rng() * 10))
 }
 
 const basePath = '/services/data/v62.0/sobjects'
@@ -82,11 +130,11 @@ describe('GzipChunkingWritable', () => {
     await finished(sut)
 
     // Assert — nothing to upload
-    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sfPort.postMultipart).not.toHaveBeenCalled()
     expect(sut.partCount).toBe(0)
   })
 
-  it('given lines written, when stream ends, then uploads one gzipped base64 part', async () => {
+  it('given lines written, when stream ends, then uploads one gzipped multipart part', async () => {
     // Arrange
     const sfPort = makeSfPort()
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
@@ -97,22 +145,92 @@ describe('GzipChunkingWritable', () => {
     await finished(sut)
 
     // Assert
-    expect(sfPort.post).toHaveBeenCalledTimes(1)
-    expect(sfPort.post).toHaveBeenCalledWith(
+    expect(sfPort.postMultipart).toHaveBeenCalledTimes(1)
+    expect(sfPort.postMultipart).toHaveBeenCalledWith(
       `${basePath}/InsightsExternalDataPart`,
-      expect.objectContaining({
-        InsightsExternalDataId: parentId,
-        PartNumber: 1,
-        DataFile: expect.any(String),
-      })
+      {
+        entityField: 'entity_part',
+        entity: { InsightsExternalDataId: parentId, PartNumber: 1 },
+        fileField: 'DataFile',
+        fileName: 'part.gz',
+        data: expect.any(Buffer),
+      }
     )
+    expect(decodedParts(sfPort)).toEqual(['"001","Acme"\n"002","Beta"\n'])
     expect(sut.partCount).toBe(1)
   })
 
+  it('given three parts, when ending, then PartNumber is 1, 2, 3 in call order', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      undefined,
+      1
+    )
+
+    // Act
+    sut.write(['a', 'b', 'c'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    const partNumbers = vi
+      .mocked(sfPort.postMultipart)
+      .mock.calls.map(([, body]) => body.entity.PartNumber)
+    expect(partNumbers).toEqual([1, 2, 3])
+  })
+
+  it('given parts uploaded, when ending, then post is never called', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
+
+    // Act
+    sut.write(['"a"', '"b"'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sfPort.postMultipart).toHaveBeenCalledTimes(1)
+  })
+
+  it('given a deferred multipart upload, when ending, then onChunkWritten fires only after the upload resolves', async () => {
+    // Arrange
+    let resolveUpload: (value: { id: string }) => void = () => undefined
+    const sfPort = makeSfPort({
+      postMultipart: vi.fn().mockImplementation(
+        () =>
+          new Promise<{ id: string }>(resolve => {
+            resolveUpload = resolve
+          })
+      ),
+    })
+    const listener: ProgressListener = {
+      onSinkReady: vi.fn(),
+      onChunkWritten: vi.fn(),
+      onRowsWritten: vi.fn(),
+    }
+    const sut = new GzipChunkingWritable(sfPort, basePath, parentId, listener)
+
+    // Act
+    sut.write(['"a"'])
+    sut.end()
+    await vi.waitFor(() => expect(sfPort.postMultipart).toHaveBeenCalled())
+
+    // Assert
+    expect(listener.onChunkWritten).not.toHaveBeenCalled()
+    resolveUpload({ id: '06W' })
+    await finished(sut)
+    expect(listener.onChunkWritten).toHaveBeenCalledTimes(1)
+  })
+
   it('given a batch that fits inside the current part, when writing, then the fast path hands a single Buffer to zlib (one gz.write, not per-line)', async () => {
-    // Arrange — kills L95 ConditionalExpression (`if (base64Length(projected)
-    // < partMaxBytes)` → `if (false)`). With the mutation, every batch would
-    // drop to the slow path and gz.write would be called once per line.
+    // Arrange — a batch that fits must not be split: one Buffer, one write.
     const sfPort = makeSfPort()
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
     const writeSpy = vi.spyOn(capturedGzipInstances[0], 'write')
@@ -144,18 +262,14 @@ describe('GzipChunkingWritable', () => {
     sut.end()
     await finished(sut)
 
-    // Assert — decode the uploaded base64 gzip and verify exact content
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    expect(postCalls).toHaveLength(1)
-    const dataFile = postCalls[0][1].DataFile as string
-    const decoded = gunzipSync(Buffer.from(dataFile, 'base64')).toString('utf8')
-    expect(decoded).toBe('"row-1"\n"row-2"\n"row-3"\n')
+    // Assert — decode the uploaded gzip and verify exact content
+    expect(decodedParts(sfPort)).toEqual(['"row-1"\n"row-2"\n"row-3"\n'])
   })
 
   it('given small partMaxBytes forcing slow-path rotation, when stream ends, then decoded gzip across all parts round-trips every line with \\n', async () => {
-    // Arrange — kills L118 (slow-path line + '\n') and L185 (writeLineToGz newline).
-    // Tiny partMaxBytes (50 base64 bytes) forces each batch into the slow path
-    // and rotation across multiple parts.
+    // Arrange — every sliced line keeps its '\n' terminator.
+    // Tiny partMaxBytes (50 base64 bytes) forces each batch across the part
+    // boundary and rotation across multiple parts.
     const sfPort = makeSfPort()
     const sut = new GzipChunkingWritable(
       sfPort,
@@ -180,21 +294,14 @@ describe('GzipChunkingWritable', () => {
     // Assert — concatenating every decoded part reconstructs every line in
     // order with newline separators. Kills any mutation that drops the '\n'
     // inside the slow-path write.
-    const postCalls = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls
-    expect(postCalls.length).toBeGreaterThan(1)
-    const decoded = postCalls
-      .map(c =>
-        gunzipSync(Buffer.from(c[1].DataFile as string, 'base64')).toString(
-          'utf8'
-        )
-      )
-      .join('')
+    expect(uploadedParts(sfPort).length).toBeGreaterThan(1)
+    const decoded = decodedParts(sfPort).join('')
     expect(decoded).toBe(
       '"alpha-row"\n"beta-row"\n"gamma-row"\n"delta-row"\n"epsilon-row"\n'
     )
   })
 
-  it('given data exceeding 10MB base64, when stream ends, then splits into multiple parts', async () => {
+  it('given data over capacity, when stream ends, then splits into multiple parts', async () => {
     // Arrange
     const { randomBytes } = await import('node:crypto')
     const sfPort = makeSfPort()
@@ -209,14 +316,14 @@ describe('GzipChunkingWritable', () => {
     sut.end()
     await finished(sut)
 
-    // Assert — correct number of parts AND an upper bound that kills the L144
-    // mutation (!wouldExceed → false, which would force every line into its
-    // own part and blow partCount past 1000 for 12 000 rows).
+    // Assert — correct number of parts AND an upper bound: rotating on every
+    // line would blow partCount past 1000 for 12 000 rows.
     expect(sut.partCount).toBeGreaterThanOrEqual(2)
     expect(sut.partCount).toBeLessThan(100)
-    const PART_MAX = 10 * 1024 * 1024
-    for (const call of (sfPort.post as ReturnType<typeof vi.fn>).mock.calls) {
-      expect((call[1].DataFile as string).length).toBeLessThanOrEqual(PART_MAX)
+    for (const part of uploadedParts(sfPort)) {
+      expect(part.length).toBeLessThanOrEqual(
+        PART_CAPACITY_BYTES + GZIP_FRAMING_SLACK
+      )
     }
   })
 
@@ -268,14 +375,14 @@ describe('GzipChunkingWritable', () => {
     await finished(sut)
 
     // Assert
-    expect(sfPort.post).not.toHaveBeenCalled()
+    expect(sfPort.postMultipart).not.toHaveBeenCalled()
     expect(sut.partCount).toBe(0)
   })
 
   it('given part upload fails, when stream ends, then error propagates', async () => {
     // Arrange
     const sfPort = makeSfPort({
-      post: vi.fn().mockRejectedValue(new Error('upload failed')),
+      postMultipart: vi.fn().mockRejectedValue(new Error('upload failed')),
     })
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
@@ -290,7 +397,9 @@ describe('GzipChunkingWritable', () => {
   it('given upload fails during part rotation in write, when stream ends, then error propagates', async () => {
     // Arrange
     const sfPort = makeSfPort({
-      post: vi.fn().mockRejectedValue(new Error('upload failed during write')),
+      postMultipart: vi
+        .fn()
+        .mockRejectedValue(new Error('upload failed during write')),
     })
     // Use a 1-byte threshold so the second item in a batch triggers rotation
     const sut = new GzipChunkingWritable(
@@ -311,10 +420,10 @@ describe('GzipChunkingWritable', () => {
     await expect(finished(sut)).rejects.toThrow('upload failed during write')
   })
 
-  it('given post throws synchronously during chunk rotation, when writing, then finishAndRotate catch propagates error', async () => {
+  it('given post throws synchronously during chunk rotation, when writing, then the rotation error propagates', async () => {
     // Arrange
     const sfPort = makeSfPort({
-      post: vi.fn().mockImplementation(() => {
+      postMultipart: vi.fn().mockImplementation(() => {
         throw new Error('sync post failure')
       }),
     })
@@ -356,7 +465,7 @@ describe('GzipChunkingWritable', () => {
     // Arrange
     const { randomBytes } = await import('node:crypto')
     const sfPort = makeSfPort({
-      post: vi.fn().mockResolvedValue({ id: '06W' }),
+      postMultipart: vi.fn().mockResolvedValue({ id: '06W' }),
     })
     const sut = new GzipChunkingWritable(sfPort, basePath, parentId)
 
@@ -372,16 +481,16 @@ describe('GzipChunkingWritable', () => {
     await sut.drainUploads()
 
     // Assert
-    expect(sfPort.post).toHaveBeenCalled()
+    expect(sfPort.postMultipart).toHaveBeenCalled()
     expect(sut.partCount).toBeGreaterThan(0)
-    expect(sfPort.post).toHaveBeenCalledTimes(sut.partCount)
+    expect(sfPort.postMultipart).toHaveBeenCalledTimes(sut.partCount)
   })
 
   it('given upload started during rotation, when drainUploads called, then waits for upload to settle', async () => {
     // Arrange — upload resolves only when manually triggered
     const uploadResolvers: Array<() => void> = []
     const sfPort = makeSfPort({
-      post: vi.fn().mockImplementation(
+      postMultipart: vi.fn().mockImplementation(
         () =>
           new Promise<{ id: string }>(resolve => {
             uploadResolvers.push(() => resolve({ id: '06W' }))
@@ -432,7 +541,7 @@ describe('GzipChunkingWritable', () => {
     let concurrentUploads = 0
     let maxConcurrentUploads = 0
     const sfPort = makeSfPort({
-      post: vi.fn().mockImplementation(
+      postMultipart: vi.fn().mockImplementation(
         () =>
           new Promise<{ id: string }>(resolve => {
             concurrentUploads++
@@ -503,11 +612,74 @@ describe('GzipChunkingWritable', () => {
     expect(batch2Completed).toBe(true)
   })
 
+  it('given an upload that settled, when rotating parts, then it no longer counts toward the upload cap', async () => {
+    // Arrange
+    const unsettled: Array<() => void> = []
+    const postMultipart = vi
+      .fn()
+      .mockResolvedValueOnce({ id: '06W' })
+      .mockImplementation(
+        () =>
+          new Promise<{ id: string }>(resolve => {
+            unsettled.push(() => resolve({ id: '06W' }))
+          })
+      )
+    const sfPort = makeSfPort({ postMultipart })
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      2,
+      1
+    )
+    let writeCompleted = false
+
+    // Act
+    sut.write(['a', 'b', 'c', 'd'], () => {
+      writeCompleted = true
+    })
+    await vi.waitFor(() => expect(postMultipart).toHaveBeenCalledTimes(3))
+    await new Promise(resolve => setImmediate(resolve))
+
+    // Assert
+    expect(writeCompleted).toBe(false)
+    postMultipart.mockResolvedValue({ id: '06W' })
+    for (const release of unsettled) release()
+    sut.end()
+    await finished(sut)
+  })
+
+  it('given only the first part upload fails, when stream ends, then the error propagates', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      postMultipart: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('first part failed'))
+        .mockResolvedValue({ id: '06W' }),
+    })
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      1
+    )
+
+    // Act
+    sut.write(['a', 'b', 'c'])
+    sut.end()
+
+    // Assert
+    await expect(finished(sut)).rejects.toThrow('first part failed')
+  })
+
   it('given pendingUploads reaches HIGH_WATER, when rotation triggers in _write, then write blocks until slot freed', async () => {
     // Arrange — uploads never auto-resolve
     const uploadResolvers: Array<() => void> = []
     const sfPort = makeSfPort({
-      post: vi.fn().mockImplementation(
+      postMultipart: vi.fn().mockImplementation(
         () =>
           new Promise<{ id: string }>(resolve => {
             uploadResolvers.push(() => resolve({ id: '06W' }))
@@ -569,9 +741,7 @@ describe('GzipChunkingWritable', () => {
     await finished(sut)
 
     // Assert
-    const b64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
-      .DataFile as string
-    const compressed = Buffer.from(b64, 'base64')
+    const [compressed] = uploadedParts(sfPort)
     const decompressed = await gunzipAsync(compressed)
     expect(decompressed.toString()).toBe('"line1"\n"line2"\n')
   })
@@ -590,15 +760,325 @@ describe('GzipChunkingWritable', () => {
     await finished(sut)
 
     // Assert
-    const b64 = (sfPort.post as ReturnType<typeof vi.fn>).mock.calls[0][1]
-      .DataFile as string
-    const compressed = Buffer.from(b64, 'base64')
+    const [compressed] = uploadedParts(sfPort)
     const decompressed = await gunzipAsync(compressed)
     const lines = decompressed
       .toString()
       .split('\n')
       .filter(l => l.length > 0)
     expect(lines).toHaveLength(3)
+  })
+
+  it('given a batch crossing the part boundary, when writing, then zlib receives Buffer slices and fewer writes than lines', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      4096
+    )
+    const writeSpy = vi.spyOn(capturedGzipInstances[0], 'write')
+    const batch = Array.from(
+      { length: 200 },
+      (_, i) => `"row-${String(i).padStart(4, '0')}-${'x'.repeat(26)}"`
+    )
+
+    // Act
+    sut.write(batch)
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    const firstArgs = writeSpy.mock.calls.map(([chunk]) => chunk)
+    expect(firstArgs.every(chunk => Buffer.isBuffer(chunk))).toBe(true)
+    expect(writeSpy.mock.calls.length).toBeLessThan(batch.length)
+  })
+
+  it('given pending bytes and a fast-path miss, when writing, then flush uses Z_SYNC_FLUSH', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      50
+    )
+    const flushSpy = vi.spyOn(capturedGzipInstances[0], 'flush')
+
+    // Act
+    sut.write(['"a"'])
+    sut.write(['"b"'.repeat(20)])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(flushSpy).toHaveBeenCalledWith(
+      constants.Z_SYNC_FLUSH,
+      expect.any(Function)
+    )
+  })
+
+  it('given a quoted record with an embedded newline straddling the boundary, when ending, then the cut falls on that newline', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      17
+    )
+
+    // Act
+    sut.write(['id,"line1\nline2"', 'next'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    const parts = decodedParts(sfPort)
+    expect(parts).toEqual(['id,"line1\n', 'line2"\nnext\n'])
+    expect(parts.join('')).toBe('id,"line1\nline2"\nnext\n')
+  })
+
+  it('given a fresh part and a batch larger than capacity, when writing, then no flush precedes the first slice', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      50
+    )
+    const writeSpy = vi.spyOn(capturedGzipInstances[0], 'write')
+    const flushSpy = vi.spyOn(capturedGzipInstances[0], 'flush')
+
+    // Act
+    sut.write(['"a"'.repeat(20)])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    const firstWrite = writeSpy.mock.invocationCallOrder[0]
+    expect(
+      flushSpy.mock.invocationCallOrder.every(order => order > firstWrite)
+    ).toBe(true)
+  })
+
+  it("given partMaxBytes 50 and an incompressible 100-character line followed by 'a', when ending, then the oversized line takes a part alone and 'a' the next", async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      50
+    )
+    const incompressible100 = randomPrintable(mulberry32(7), 100)
+
+    // Act
+    sut.write([incompressible100, 'a'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(decodedParts(sfPort)).toEqual([incompressible100 + '\n', 'a\n'])
+  })
+
+  it('given partMaxBytes 7 (capacity 3), when two 3-byte lines are written together, then each takes its own part', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      7
+    )
+
+    // Act
+    sut.write(['aa', 'bb'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(decodedParts(sfPort)).toEqual(['aa\n', 'bb\n'])
+  })
+
+  it('given a newline sitting just past the room, when writing, then the cut stays on the last newline that fits', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      7
+    )
+
+    // Act
+    sut.write(['a', 'b', 'c'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(decodedParts(sfPort)).toEqual(['a\n', 'b\n', 'c\n'])
+  })
+
+  it('given a capacity of zero, when ending, then each line goes to its own part', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      1
+    )
+
+    // Act
+    sut.write(['a', 'b', 'c'])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(decodedParts(sfPort)).toEqual(['a\n', 'b\n', 'c\n'])
+  })
+
+  it('given the sync flush fails, when writing, then the stream fails with that error', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      50
+    )
+    // The gzip stream itself stays healthy, so only the flush callback's
+    // error can fail the write.
+    vi.spyOn(capturedGzipInstances[0], 'flush').mockImplementation(((
+      _kind: number,
+      cb: (error?: Error | null) => void
+    ) => cb(new Error('zlib flush failed'))) as unknown as Gzip['flush'])
+    sut.write(['"a"'])
+
+    // Act
+    sut.write(['"b"'.repeat(20)])
+    sut.end()
+
+    // Assert
+    await expect(finished(sut)).rejects.toThrow('zlib flush failed')
+  })
+
+  it('given a part with data and a remainder starting with an empty line, when writing, then that newline joins the current part', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      50
+    )
+    const oversized = 'x'.repeat(60)
+    sut.write(['abc'])
+
+    // Act
+    sut.write(['', oversized])
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(decodedParts(sfPort)).toEqual(['abc\n\n', `${oversized}\n`])
+  })
+
+  it.each(
+    ROUND_TRIP_SEEDS.flatMap(seed =>
+      ROUND_TRIP_BUDGETS.map(budget => [seed, budget] as const)
+    )
+  )(
+    'given seeded batches (seed %i, partMaxBytes %i), when ending, then decoded parts round-trip and respect the capacity',
+    async (seed, partMaxBytes) => {
+      // Arrange
+      const sfPort = makeSfPort()
+      const sut = new GzipChunkingWritable(
+        sfPort,
+        basePath,
+        parentId,
+        undefined,
+        UPLOAD_HIGH_WATER,
+        partMaxBytes
+      )
+      const rng = mulberry32(seed)
+      const batches = Array.from({ length: 6 }, () =>
+        Array.from({ length: 20 }, () => randomLine(rng))
+      )
+      const capacity = 3 * Math.floor((partMaxBytes - 1) / 4)
+
+      // Act
+      for (const batch of batches) sut.write(batch)
+      sut.end()
+      await finished(sut)
+
+      // Assert
+      const parts = decodedParts(sfPort)
+      expect(parts.join('')).toBe(
+        batches.map(batch => batch.join('\n') + '\n').join('')
+      )
+      expect(parts.length).toBeGreaterThanOrEqual(2)
+      for (const [index, part] of parts.entries()) {
+        const isSingleOversizedSegment =
+          part.indexOf('\n') === part.length - 1 && part.length > capacity
+        expect(part.endsWith('\n')).toBe(true)
+        if (!isSingleOversizedSegment) {
+          expect(uploadedParts(sfPort)[index].length).toBeLessThanOrEqual(
+            capacity + GZIP_FRAMING_SLACK
+          )
+        }
+      }
+    }
+  )
+
+  it('given pending bytes and a batch exactly the size of the remaining room, when writing, then it takes the fast path without flushing', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const sut = new GzipChunkingWritable(
+      sfPort,
+      basePath,
+      parentId,
+      undefined,
+      UPLOAD_HIGH_WATER,
+      50
+    )
+    const writeSpy = vi.spyOn(capturedGzipInstances[0], 'write')
+    const flushSpy = vi.spyOn(capturedGzipInstances[0], 'flush')
+    sut.write(['a'])
+    const exactRemainingRoom = ['x'.repeat(33)]
+
+    // Act
+    sut.write(exactRemainingRoom)
+    sut.end()
+    await finished(sut)
+
+    // Assert
+    expect(writeSpy).toHaveBeenCalledTimes(2)
+    expect(flushSpy).not.toHaveBeenCalled()
+    expect(sfPort.postMultipart).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -1077,15 +1557,15 @@ describe('DatasetWriter', () => {
     await finished(chunker)
 
     // Assert — both rows uploaded in one part
-    expect(sfPort.post).toHaveBeenCalledWith(
+    expect(sfPort.postMultipart).toHaveBeenCalledWith(
       expect.stringContaining('InsightsExternalDataPart'),
       expect.objectContaining({
-        InsightsExternalDataId: parentId,
-        PartNumber: 1,
+        entity: { InsightsExternalDataId: parentId, PartNumber: 1 },
       })
     )
     // Kills L246:9/L246:24: second write reuses _chunker, so InsightsExternalData created only once
-    expect(sfPort.post).toHaveBeenCalledTimes(2)
+    expect(sfPort.post).toHaveBeenCalledTimes(1)
+    expect(sfPort.postMultipart).toHaveBeenCalledTimes(1)
   })
 
   it('given invalid dataset name, when constructing, then throws', () => {

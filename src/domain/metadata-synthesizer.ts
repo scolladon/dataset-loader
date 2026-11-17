@@ -4,9 +4,9 @@
 // SINGLE place that knows the CRMA wire format.
 //
 // Wire-grounded constants below are anchored to specific probes that
-// exercised CRMA v67.0 in the spike. Re-verify before bumping any default
-// — drift between the comment and CRMA's actual rejection message is the
-// kind of silent gap that loses days.
+// exercised CRMA (v67.0 in the spike, v68.0 for Text). Re-verify before
+// bumping any default — drift between the comment and CRMA's actual
+// rejection message is the kind of silent gap that loses days.
 
 import {
   type CrmaField,
@@ -45,6 +45,16 @@ const CRMA_MAX_PRECISION = 18
 // Malformed Date cells FAIL THE ENTIRE BATCH — no silent-null, no partial
 // success. Downstream features that validate source data may be warranted.
 const DEFAULT_DATETIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
+
+// ── Text ─────────────────────────────────────────────────────────────
+// Without a `precision`, CRM Analytics cuts a Text value at 255 characters
+// and reports no error. A `precision` above 32,000 is refused at parent
+// creation with FIELD_INTEGRITY_EXCEPTION (API v68.0); at 32,000 a
+// 32,000-character value comes back intact. So a Text field declares its
+// source length capped at 32,000, and 32,000 when the source gives no usable
+// length (Describe returns 0 for some types).
+const CRMA_MIN_TEXT_PRECISION = 1
+const CRMA_MAX_TEXT_PRECISION = 32000
 
 export class SynthesizeError extends Error {
   constructor(message: string) {
@@ -103,6 +113,28 @@ function validateSchema(schema: SourceSchema): void {
   }
 }
 
+function textPrecision(length: number | undefined): number {
+  if (length === undefined || length < CRMA_MIN_TEXT_PRECISION) {
+    return CRMA_MAX_TEXT_PRECISION
+  }
+  return Math.min(length, CRMA_MAX_TEXT_PRECISION)
+}
+
+function numericAttributes(
+  f: SourceField
+): Pick<CrmaField, 'precision' | 'scale' | 'defaultValue'> {
+  const precision = numericPrecision(f.precision)
+  const scale = Math.min(f.scale ?? DEFAULT_NUMERIC_SCALE, precision)
+  return { precision, scale, defaultValue: DEFAULT_NUMERIC_DEFAULT_VALUE }
+}
+
+function numericPrecision(precision: number | undefined): number {
+  if (precision === undefined || precision < CRMA_MIN_PRECISION) {
+    return DEFAULT_NUMERIC_PRECISION
+  }
+  return Math.min(precision, CRMA_MAX_PRECISION)
+}
+
 function toCrmaField(f: SourceField): CrmaField {
   const base = {
     name: f.name,
@@ -110,28 +142,9 @@ function toCrmaField(f: SourceField): CrmaField {
     label: f.label,
     type: f.type,
   } as const
-
-  if (f.type === 'Numeric') {
-    const rawPrecision = f.precision ?? DEFAULT_NUMERIC_PRECISION
-    const precision =
-      rawPrecision >= CRMA_MIN_PRECISION && rawPrecision <= CRMA_MAX_PRECISION
-        ? rawPrecision
-        : DEFAULT_NUMERIC_PRECISION
-    const scale = Math.min(f.scale ?? DEFAULT_NUMERIC_SCALE, precision)
-    return {
-      ...base,
-      precision,
-      scale,
-      defaultValue: DEFAULT_NUMERIC_DEFAULT_VALUE,
-    }
-  }
-
+  if (f.type === 'Numeric') return { ...base, ...numericAttributes(f) }
   if (f.type === 'Date') {
-    return {
-      ...base,
-      format: f.format ?? DEFAULT_DATETIME_FORMAT,
-    }
+    return { ...base, format: f.format ?? DEFAULT_DATETIME_FORMAT }
   }
-
-  return base
+  return { ...base, precision: textPrecision(f.length) }
 }

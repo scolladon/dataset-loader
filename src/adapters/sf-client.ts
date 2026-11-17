@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 
 import { type Connection } from '@salesforce/core'
 import pLimit from 'p-limit'
 import {
   type DescribeField,
+  type MultipartBody,
   type QueryResult,
   type SalesforcePort,
   type SObjectDescribe,
@@ -15,7 +17,11 @@ interface SalesforceClientOptions {
 }
 
 export const DEFAULT_CONCURRENCY = 25
+// Slots downloads never take once concurrency exceeds it, so posts and queries always progress.
+const RESERVED_SLOTS = 5
 const MAX_RETRIES = 3
+const CRLF = '\r\n'
+const MULTIPART_BOUNDARY_PREFIX = 'dataset-loader-'
 const DEFAULT_BASE_DELAY_MS = 1000
 
 function isHttpError(err: unknown): err is { statusCode?: number } {
@@ -63,6 +69,40 @@ async function withRetry<T>(
   throw formatError(lastError)
 }
 
+function closed(stream: Readable): Promise<void> {
+  return new Promise<void>(resolve => stream.once('close', () => resolve()))
+}
+
+function multipartHead(boundary: string, body: MultipartBody): string {
+  return [
+    `--${boundary}`,
+    `Content-Disposition: form-data; name="${body.entityField}"`,
+    'Content-Type: application/json',
+    '',
+    JSON.stringify(body.entity),
+    `--${boundary}`,
+    'Content-Type: application/octet-stream',
+    `Content-Disposition: form-data; name="${body.fileField}"; filename="${body.fileName}"`,
+    '',
+    '',
+  ].join(CRLF)
+}
+
+function encodeMultipart(body: MultipartBody): {
+  readonly contentType: string
+  readonly payload: Buffer
+} {
+  const boundary = `${MULTIPART_BOUNDARY_PREFIX}${randomUUID()}`
+  return {
+    contentType: `multipart/form-data; boundary="${boundary}"`,
+    payload: Buffer.concat([
+      Buffer.from(multipartHead(boundary, body)),
+      body.data,
+      Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+    ]),
+  }
+}
+
 // Raw SF Describe response shape — much wider than we consume. We project
 // down to the narrow `DescribeField` at the adapter boundary so the
 // synthesiser never sees attributes it doesn't care about.
@@ -72,6 +112,7 @@ interface RawDescribeField {
   readonly type: string
   readonly precision?: number
   readonly scale?: number
+  readonly length?: number
   readonly referenceTo?: readonly string[]
   readonly relationshipName?: string | null
 }
@@ -84,6 +125,7 @@ interface RawSObjectDescribe {
 export class SalesforceClient implements SalesforcePort {
   readonly apiVersion: string
   private readonly limiter: ReturnType<typeof pLimit>
+  private readonly downloadLimiter: ReturnType<typeof pLimit>
   private readonly baseDelay: number
   // Promise-valued cache so concurrent callers share one in-flight request.
   // Failures evict their slot to avoid memoising transient errors.
@@ -94,7 +136,10 @@ export class SalesforceClient implements SalesforcePort {
     options: SalesforceClientOptions = {}
   ) {
     this.apiVersion = connection.version
-    this.limiter = pLimit(options.concurrency ?? DEFAULT_CONCURRENCY)
+    const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
+    this.limiter = pLimit(concurrency)
+    // Below RESERVED_SLOTS + 1 the reserve shrinks instead of failing: only tests build such clients.
+    this.downloadLimiter = pLimit(Math.max(1, concurrency - RESERVED_SLOTS))
     this.baseDelay = options.retryBaseDelayMs ?? DEFAULT_BASE_DELAY_MS
   }
 
@@ -202,23 +247,39 @@ export class SalesforceClient implements SalesforcePort {
   }
 
   getBlobStream(path: string): Promise<Readable> {
-    return this.limiter(() =>
-      withRetry(async () => {
-        let res = await this.fetchStream(path)
-        if (res.status === 401) {
-          await this.connection.refreshAuth()
-          res = await this.fetchStream(path)
-        }
-        if (!res.ok) {
-          throw Object.assign(new Error(`HTTP ${res.status}`), {
-            statusCode: res.status,
-          })
-        }
-        return Readable.fromWeb(
-          res.body as Parameters<typeof Readable.fromWeb>[0]
-        )
-      }, this.baseDelay)
-    )
+    return new Promise<Readable>((resolve, reject) => {
+      this.downloadLimiter(() =>
+        this.limiter(() => this.holdUntilClosed(path, resolve))
+      ).catch(reject)
+    })
+  }
+
+  // The slot outlives the returned promise: resolved at headers, released at 'close'.
+  private async holdUntilClosed(
+    path: string,
+    resolve: (stream: Readable) => void
+  ): Promise<void> {
+    const stream = await this.openBlobStream(path)
+    resolve(stream)
+    await closed(stream)
+  }
+
+  private openBlobStream(path: string): Promise<Readable> {
+    return withRetry(async () => {
+      let res = await this.fetchStream(path)
+      if (res.status === 401) {
+        await this.connection.refreshAuth()
+        res = await this.fetchStream(path)
+      }
+      if (!res.ok) {
+        throw Object.assign(new Error(`HTTP ${res.status}`), {
+          statusCode: res.status,
+        })
+      }
+      return Readable.fromWeb(
+        res.body as Parameters<typeof Readable.fromWeb>[0]
+      )
+    }, this.baseDelay)
   }
 
   private fetchStream(path: string): Promise<Response> {
@@ -248,6 +309,25 @@ export class SalesforceClient implements SalesforcePort {
               'Accept-Encoding': 'gzip',
             },
             body: JSON.stringify(body),
+          }),
+        this.baseDelay
+      )
+    )
+  }
+
+  postMultipart<T>(path: string, body: MultipartBody): Promise<T> {
+    const { contentType, payload } = encodeMultipart(body)
+    return this.limiter(() =>
+      withRetry(
+        () =>
+          this.connection.request<T>({
+            method: 'POST',
+            url: path,
+            headers: {
+              'Content-Type': contentType,
+              'Accept-Encoding': 'gzip',
+            },
+            body: payload,
           }),
         this.baseDelay
       )
@@ -301,6 +381,7 @@ function projectField(raw: RawDescribeField): DescribeField {
     type: raw.type,
     precision: raw.precision,
     scale: raw.scale,
+    length: raw.length,
     referenceTo: raw.referenceTo,
     relationshipName: raw.relationshipName,
   }

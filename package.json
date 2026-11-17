@@ -262,7 +262,7 @@
       "files": [
         "src/**/*.ts",
         "test/unit/**/*.test.ts",
-        "vitest.config.ts",
+        "vitest.config.mutation.ts",
         "stryker.config.mjs",
         "tsconfig.json"
       ],
@@ -271,14 +271,15 @@
       ]
     },
     "test:mutation:incremental": {
-      "command": "FILES=$(git --no-pager diff --name-only --diff-filter=AM --merge-base origin/main src | grep '.ts$' | paste -sd ',' -) && [ -n \"$FILES\" ] && stryker run --mutate \"$FILES\" || echo 'No source files changed — skipping mutation testing'",
+      "command": "RANGES=$(node test/mutation/changedRanges.mjs) || exit 1; if [ -n \"$RANGES\" ]; then stryker run --mutate \"$RANGES\"; else echo 'No source lines changed — skipping mutation testing'; fi",
       "dependencies": [
         "lint"
       ],
       "files": [
         "src/**/*.ts",
+        "test/mutation/**/*.mjs",
         "test/unit/**/*.test.ts",
-        "vitest.config.ts",
+        "vitest.config.mutation.ts",
         "stryker.config.mjs",
         "tsconfig.json"
       ],

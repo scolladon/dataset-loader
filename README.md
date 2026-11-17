@@ -122,6 +122,15 @@ from the source schema:
 | ELF     | `LogFileFieldNames` from the latest `EventLogFile` row in the source org | All `Text` (matches the ELF wire format)                           |
 | CSV     | First-line header parse                                                  | All `Text` (CSV type inference is not safe for arbitrary sources)  |
 
+Text columns declare a length: the SObject field's own length, capped at
+32,000 (the CRM Analytics maximum), and 32,000 for ELF and CSV columns.
+The loader never shortens a value: every cell is sent as it is, and what
+CRM Analytics keeps is the platform's rule. As of API v68.0 a text value
+longer than 32,000 characters is not stored — the cell comes back empty,
+with no error. A dataset created without declared text lengths keeps its
+metadata and is cut at 255 characters by the platform until it is
+re-bootstrapped (see below).
+
 Dry-run output flags entries that would create a new dataset with
 a `[BOOTSTRAP]` prefix:
 
@@ -455,7 +464,7 @@ See [RUN_BOOK.md](RUN_BOOK.md) for operational recipes: scheduling with cron, re
 2. **Resolve** — authenticate orgs, resolve mustache tokens in augmentColumns
 3. **Audit** (optional) — verify connectivity, EventLogFile access, InsightsExternalData write access, and dataset **schema alignment** (source columns match the target dataset's metadata)
 4. **Execute pipeline** — group entries by dataset, stream through Reader → Projection (SObject, reorders to dataset column order) → Augment (ELF/CSV) → Writer. A per-dataset progress sub-bar tracks the reader's natural workload unit (ELF: files, CSV: bytes, SObject: rows) live as data flows. See [RUN_BOOK.md](RUN_BOOK.md#progress-bars) for the display format.
-5. **Write** — CRM Analytics: gzip-compress, base64-encode, split into 10 MB parts, upload via InsightsExternalData API. File: stream rows directly to a local CSV
+5. **Write** — CRM Analytics: gzip-compress, split into parts of at most 7.8 MB, upload as multipart binary via InsightsExternalData API. File: stream rows directly to a local CSV
 6. **Update watermarks** — only for entries whose group uploaded successfully
 
 </details>
