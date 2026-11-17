@@ -3,7 +3,7 @@ const config = {
   packageManager: 'npm',
   reporters: ['html', 'clear-text', 'progress', 'json'],
   testRunner: 'vitest',
-  testRunner_options: {
+  vitest: {
     configFile: 'vitest.config.ts',
   },
   coverageAnalysis: 'perTest',
