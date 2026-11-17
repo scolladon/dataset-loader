@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [2.0.2](https://github.com/scolladon/dataset-loader/compare/v2.0.1...v2.0.2) (2026-11-17)
+
+
+### Performance Improvements
+
+* slice dataset parts in bulk, upload them as binary and hold 25 requests per org ([#72](https://github.com/scolladon/dataset-loader/issues/72)) ([11ddaa4](https://github.com/scolladon/dataset-loader/commit/11ddaa4899e6acd61955286d4833c0f06d1d70e7))
+
 ## [2.0.1](https://github.com/scolladon/dataset-loader/compare/v2.0.0...v2.0.1) (2026-07-30)
 
 
