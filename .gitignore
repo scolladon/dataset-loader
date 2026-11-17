@@ -19,3 +19,4 @@ perf-runtime.json
 perf-memory.json
 .vscode/
 reports/
+.stryker-tmp/
