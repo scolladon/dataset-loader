@@ -176,6 +176,7 @@ Tests mock port interfaces via Vitest. No external processes or network calls:
 const sfPort: SalesforcePort = {
   apiVersion: '62.0',
   query: vi.fn().mockResolvedValue({ totalSize: 0, done: true, records: [] }),
+  queryAll: vi.fn().mockResolvedValue({ totalSize: 0, done: true, records: [] }),
   queryMore: vi.fn(),
   getBlob: vi.fn().mockResolvedValue(''),
   getBlobStream: vi.fn(),
@@ -183,6 +184,7 @@ const sfPort: SalesforcePort = {
   postMultipart: vi.fn().mockResolvedValue({ id: '06W000000000001' }),
   patch: vi.fn().mockResolvedValue(null),
   del: vi.fn().mockResolvedValue(undefined),
+  describe: vi.fn().mockResolvedValue({ name: 'Unknown', fields: [] }),
 }
 ```
 
