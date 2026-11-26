@@ -23,13 +23,36 @@ describe('ReaderKey', () => {
       'LastModifiedDate',
       undefined,
       undefined,
-      none()
+      none(),
+      'query'
     )
 
     // Assert
     expect(sut.toString()).toBe(
-      `sobject\x00prod\x00User\x00Id,Name\x00LastModifiedDate\x00\x000${INF_SUFFIX}`
+      `sobject\x00prod\x00User\x00Id,Name\x00LastModifiedDate\x00\x000${INF_SUFFIX}\x00query`
     )
+  })
+
+  it('given two SObject keys differing only by soql resource, when comparing, then they differ', () => {
+    // Arrange
+    const make = (resource: 'query' | 'queryAll') =>
+      ReaderKey.forSObject(
+        'prod',
+        'User',
+        ['Id'],
+        'CreatedDate',
+        undefined,
+        undefined,
+        none(),
+        resource
+      )
+
+    // Act
+    const sut = make('query')
+    const other = make('queryAll')
+
+    // Assert
+    expect(sut.toString()).not.toBe(other.toString())
   })
 
   it('given SObject config with where and limit, when creating key, then includes them', () => {
@@ -41,12 +64,13 @@ describe('ReaderKey', () => {
       'CreatedDate',
       'IsActive = true',
       1000,
-      none()
+      none(),
+      'query'
     )
 
     // Assert
     expect(sut.toString()).toBe(
-      `sobject\x00prod\x00User\x00Id\x00CreatedDate\x00IsActive = true\x001000${INF_SUFFIX}`
+      `sobject\x00prod\x00User\x00Id\x00CreatedDate\x00IsActive = true\x001000${INF_SUFFIX}\x00query`
     )
   })
 

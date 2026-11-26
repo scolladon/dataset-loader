@@ -7,6 +7,9 @@ export function makeSfPort(
   return {
     apiVersion: '62.0',
     query: vi.fn().mockResolvedValue({ totalSize: 0, done: true, records: [] }),
+    queryAll: vi
+      .fn()
+      .mockResolvedValue({ totalSize: 0, done: true, records: [] }),
     queryMore: vi
       .fn()
       .mockResolvedValue({ totalSize: 0, done: true, records: [] }),

@@ -871,6 +871,123 @@ describe('SObjectReader', () => {
       expect(lines[0]).toContain(expected)
     }
   )
+
+  it('given no resource, when fetching, then the first page goes through query with the unchanged SOQL and queryAll is not called', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
+    })
+    await sut.fetch()
+
+    // Assert
+    expect(sfPort.query).toHaveBeenCalledTimes(1)
+    expect(sfPort.query).toHaveBeenCalledWith(
+      'SELECT Id, LastModifiedDate FROM Account ORDER BY LastModifiedDate ASC'
+    )
+    expect(sfPort.queryAll).not.toHaveBeenCalled()
+  })
+
+  it('given the queryAll resource, when fetching, then the first page goes through queryAll and query is not called', async () => {
+    // Arrange
+    const sfPort = makeSfPort({
+      queryAll: vi.fn().mockResolvedValue({
+        totalSize: 1,
+        done: true,
+        records: [
+          {
+            Id: '001',
+            IsDeleted: true,
+            LastModifiedDate: '2026-03-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'IsDeleted', 'LastModifiedDate'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
+      resource: 'queryAll',
+    })
+    const result = await sut.fetch()
+    const lines = await collectLines(result.lines)
+
+    // Assert
+    expect(lines).toEqual(['"001","true","2026-03-01T00:00:00.000Z"'])
+    expect(sfPort.queryAll).toHaveBeenCalledTimes(1)
+    expect(sfPort.query).not.toHaveBeenCalled()
+  })
+
+  it('given the same config with and without the queryAll resource, when fetching with a watermark, then both resources receive the identical SOQL', async () => {
+    // Arrange
+    const sfPort = makeSfPort()
+    const config = {
+      sobject: 'Account',
+      fields: ['Id'],
+      dateField: 'LastModifiedDate',
+      where: 'Industry != null',
+      queryLimit: 10,
+      bounds: DateBounds.none(),
+    }
+    const watermark = Watermark.fromString('2026-01-01T00:00:00.000Z')
+
+    // Act
+    const viaQuery = new SObjectReader(sfPort, config)
+    const viaQueryAll = new SObjectReader(sfPort, {
+      ...config,
+      resource: 'queryAll',
+    })
+    await viaQuery.fetch(watermark)
+    await viaQueryAll.fetch(watermark)
+
+    // Assert
+    expect(vi.mocked(sfPort.queryAll).mock.calls[0][0]).toBe(
+      vi.mocked(sfPort.query).mock.calls[0][0]
+    )
+  })
+
+  it('given the queryAll resource and a query-shaped nextRecordsUrl, when fetching, then queryMore receives that exact URL and both pages are yielded', async () => {
+    // Arrange
+    const nextRecordsUrl = '/services/data/v62.0/query/01gX-2000'
+    const sfPort = makeSfPort({
+      queryAll: vi.fn().mockResolvedValue({
+        totalSize: 2,
+        done: false,
+        nextRecordsUrl,
+        records: [{ Id: '001', LastModifiedDate: '2026-01-01T00:00:00.000Z' }],
+      }),
+      queryMore: vi.fn().mockResolvedValue({
+        totalSize: 2,
+        done: true,
+        records: [{ Id: '002', LastModifiedDate: '2026-01-02T00:00:00.000Z' }],
+      }),
+    })
+
+    // Act
+    const sut = new SObjectReader(sfPort, {
+      sobject: 'Account',
+      fields: ['Id', 'LastModifiedDate'],
+      dateField: 'LastModifiedDate',
+      bounds: DateBounds.none(),
+      resource: 'queryAll',
+    })
+    const result = await sut.fetch()
+    const lines = await collectLines(result.lines)
+
+    // Assert
+    expect(sfPort.queryMore).toHaveBeenCalledTimes(1)
+    expect(sfPort.queryMore).toHaveBeenCalledWith(nextRecordsUrl)
+    expect(lines).toHaveLength(2)
+    expect(result.fileCount()).toBe(2)
+  })
 })
 
 describe('SObjectReader.project', () => {

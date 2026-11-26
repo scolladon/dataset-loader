@@ -209,9 +209,13 @@ export interface MultipartBody {
   readonly data: Buffer
 }
 
+// SOQL REST resource an SObject read goes through; queryAll also returns soft-deleted and archived rows.
+export type SoqlResource = 'query' | 'queryAll'
+
 export interface SalesforcePort {
   readonly apiVersion: string
   query<T>(soql: string): Promise<QueryResult<T>>
+  queryAll<T>(soql: string): Promise<QueryResult<T>>
   queryMore<T>(nextRecordsUrl: string): Promise<QueryResult<T>>
   getBlob(path: string): Promise<unknown>
   // The caller must consume or destroy the stream: the client holds a request slot until it closes.

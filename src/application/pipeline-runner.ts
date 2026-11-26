@@ -8,6 +8,7 @@ import {
   isSObjectEntry,
   type ResolvedEntry,
   type SObjectEntry,
+  soqlResourceOf,
 } from '../adapters/config-loader.js'
 import { buildAugmentHeaderSuffix } from '../adapters/pipeline/augment-transform.js'
 import { CsvBootstrapProvider } from '../adapters/readers/csv-bootstrap-provider.js'
@@ -298,7 +299,8 @@ export class PipelineRunner {
       entry.dateField,
       entry.where,
       entry.limit,
-      bounds
+      bounds,
+      soqlResourceOf(entry)
     )
   }
 
@@ -317,6 +319,7 @@ export class PipelineRunner {
       where: entry.where,
       queryLimit: entry.limit,
       bounds,
+      resource: soqlResourceOf(entry),
     })
   }
 }

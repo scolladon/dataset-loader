@@ -215,6 +215,27 @@ issuing any SF calls.
 | `dateField` | no       | Field used for watermarking (default: `LastModifiedDate`)  |
 | `where`     | no       | Additional SOQL WHERE clause                               |
 | `limit`     | no       | Max number of records to fetch (appends `LIMIT n` to SOQL) |
+| `queryAll`  | no       | `true` reads through `/queryAll`: soft-deleted rows (still in the Recycle Bin) and archived Task/Event rows are included. Default `false`. |
+
+#### Deleted and archived rows (`queryAll`)
+
+```json
+{
+  "sourceOrg": "source-org-alias",
+  "targetOrg": "analytic-org-alias",
+  "targetDataset": "AccountsWithDeleted",
+  "sObject": "Account",
+  "fields": ["Id", "Name", "IsDeleted", "SystemModstamp"],
+  "dateField": "SystemModstamp",
+  "queryAll": true
+}
+```
+
+1. Add `IsDeleted` to `fields` to tell deleted rows apart; it is never added for you.
+2. Watermark: a soft delete moved `LastModifiedDate` (and `SystemModstamp`) in a live sandbox check on Task, so the default `dateField` picks deletions up there. When unsure for an object, use `SystemModstamp`, the safest choice.
+3. Append duplicates: with `operation: "Append"` (the default), a row loaded while live and loaded again after its deletion appears twice with the same `Id`. Use `"Overwrite"` for snapshots or dedupe downstream.
+4. Best effort: rows purged from the Recycle Bin or hard-deleted never come back.
+5. No backfill: turning `queryAll` on for an existing entry keeps its watermark, so deletions older than the watermark are not reloaded. Use `--start-date` (see [Safe past-window backfill](#safe-past-window-backfill)) or give the entry a new `name` to start a fresh watermark.
 
 ### CSV Entry
 
