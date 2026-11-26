@@ -9,6 +9,7 @@ import {
   type QueryResult,
   type SalesforcePort,
   type SObjectDescribe,
+  type SoqlResource,
 } from '../ports/types.js'
 
 interface SalesforceClientOptions {
@@ -169,27 +170,29 @@ export class SalesforceClient implements SalesforcePort {
   }
 
   query<T>(soql: string): Promise<QueryResult<T>> {
-    return this.limiter(() =>
-      withRetry(
-        () =>
-          this.connection.request<QueryResult<T>>({
-            method: 'GET',
-            url: `/services/data/v${this.connection.version}/query?q=${encodeURIComponent(soql)}`,
-            headers: { 'Accept-Encoding': 'gzip' },
-          }),
-        this.baseDelay
-      )
-    )
+    return this.getQueryPage<T>(this.soqlUrl('query', soql))
+  }
+
+  queryAll<T>(soql: string): Promise<QueryResult<T>> {
+    return this.getQueryPage<T>(this.soqlUrl('queryAll', soql))
   }
 
   queryMore<T>(nextRecordsUrl: string): Promise<QueryResult<T>> {
     this.assertSameOrigin(nextRecordsUrl)
+    return this.getQueryPage<T>(nextRecordsUrl)
+  }
+
+  private soqlUrl(resource: SoqlResource, soql: string): string {
+    return `/services/data/v${this.connection.version}/${resource}?q=${encodeURIComponent(soql)}`
+  }
+
+  private getQueryPage<T>(url: string): Promise<QueryResult<T>> {
     return this.limiter(() =>
       withRetry(
         () =>
           this.connection.request<QueryResult<T>>({
             method: 'GET',
-            url: nextRecordsUrl,
+            url,
             headers: { 'Accept-Encoding': 'gzip' },
           }),
         this.baseDelay

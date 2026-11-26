@@ -63,7 +63,92 @@ describe('SalesforceClient', () => {
     })
   })
 
+  describe('queryAll', () => {
+    const expected: QueryResult<{ Id: string }> = {
+      totalSize: 1,
+      done: true,
+      records: [{ Id: '001' }],
+    }
+
+    it('given a SOQL string, when querying all, then sends GET to the queryAll resource with encoded SOQL and gzip header', async () => {
+      // Arrange
+      requestSpy.mockResolvedValue(expected)
+
+      // Act
+      const result = await sut.queryAll('SELECT Id FROM Account')
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledWith({
+        method: 'GET',
+        url: '/services/data/v62.0/queryAll?q=SELECT%20Id%20FROM%20Account',
+        headers: { 'Accept-Encoding': 'gzip' },
+      })
+      expect(result).toEqual(expected)
+    })
+
+    it('given HTTP 429 then success, when querying all, then retries and resolves', async () => {
+      // Arrange
+      const error429 = Object.assign(new Error('Too Many Requests'), {
+        statusCode: 429,
+      })
+      requestSpy.mockRejectedValueOnce(error429).mockResolvedValueOnce(expected)
+
+      // Act
+      const result = await sut.queryAll('SELECT Id FROM Account')
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(2)
+      expect(result).toEqual(expected)
+    })
+
+    it('given concurrency 1 and a pending query, when querying all, then its request waits for the free slot', async () => {
+      // Arrange
+      let release!: (value: unknown) => void
+      requestSpy.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            release = resolve
+          })
+      )
+      requestSpy.mockResolvedValueOnce(expected)
+      sut = new SalesforceClient(
+        mockConnection({ request: requestSpy }) as never,
+        { concurrency: 1, retryBaseDelayMs: 0 }
+      )
+
+      // Act
+      const first = sut.query('SELECT Id FROM A')
+      const second = sut.queryAll('SELECT Id FROM B')
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledTimes(1)
+      release(expected)
+      await Promise.all([first, second])
+      expect(requestSpy).toHaveBeenCalledTimes(2)
+      expect(requestSpy.mock.calls[1][0].url).toBe(
+        '/services/data/v62.0/queryAll?q=SELECT%20Id%20FROM%20B'
+      )
+    })
+  })
+
   describe('queryMore', () => {
+    it('given a queryAll-shaped nextRecordsUrl, when querying more, then sends GET to that URL untouched', async () => {
+      // Arrange
+      requestSpy.mockResolvedValue({ totalSize: 0, done: true, records: [] })
+      const nextUrl = '/services/data/v62.0/queryAll/01gX-2000'
+
+      // Act
+      await sut.queryMore(nextUrl)
+
+      // Assert
+      expect(requestSpy).toHaveBeenCalledWith({
+        method: 'GET',
+        url: nextUrl,
+        headers: { 'Accept-Encoding': 'gzip' },
+      })
+    })
+
     it('given a nextRecordsUrl, when querying more, then sends GET to that URL', async () => {
       // Arrange
       const expected: QueryResult<{ Id: string }> = {
