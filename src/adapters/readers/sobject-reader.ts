@@ -91,6 +91,7 @@ function layoutRowEncoder(
 ): RowEncoder {
   const { augmentSlots, outputIndex } = layout
   return record => {
+    // Size hint only: join renders unassigned slots as empty, same as the preallocated holes.
     const out = new Array<string>(layout.targetSize)
     for (let i = 0; i < augmentSlots.length; i++) {
       out[augmentSlots[i].pos] = augmentSlots[i].quoted
@@ -106,6 +107,7 @@ function readerOrderRowEncoder(
   accessors: readonly FieldAccessor[]
 ): RowEncoder {
   return record => {
+    // Size hint only: every index is assigned before join, so an empty literal is observably identical.
     const cells = new Array<string>(accessors.length)
     for (let c = 0; c < accessors.length; c++) {
       cells[c] = formatFieldValue(accessors[c](record))
@@ -165,6 +167,7 @@ class SObjectPageStream {
   }
 
   private encodePage(records: Record<string, unknown>[]): string[] {
+    // Size hint only: every index is assigned before return, so an empty literal is observably identical.
     const batch = new Array<string>(records.length)
     for (let r = 0; r < records.length; r++) {
       batch[r] = this.source.encodeRow(records[r])
