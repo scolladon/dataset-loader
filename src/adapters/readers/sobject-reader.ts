@@ -9,6 +9,7 @@ import {
   type SalesforcePort,
   SF_IDENTIFIER_PATTERN,
   SOQL_RELATIONSHIP_PATH_PATTERN,
+  type SoqlResource,
 } from '../../ports/types.js'
 
 interface SObjectReaderConfig {
@@ -18,6 +19,20 @@ interface SObjectReaderConfig {
   readonly where?: string
   readonly queryLimit?: number
   readonly bounds: DateBounds
+  readonly resource?: SoqlResource
+}
+
+type FirstPageQuery = (
+  soql: string
+) => Promise<QueryResult<Record<string, unknown>>>
+
+const DEFAULT_SOQL_RESOURCE: SoqlResource = 'query'
+
+const FIRST_PAGE_QUERY: Readonly<
+  Record<SoqlResource, (port: SalesforcePort) => FirstPageQuery>
+> = {
+  query: port => soql => port.query(soql),
+  queryAll: port => soql => port.queryAll(soql),
 }
 
 type FieldAccessor = (record: Record<string, unknown>) => unknown
@@ -167,6 +182,7 @@ export class SObjectReader implements ReaderPort {
   private readonly where?: string
   private readonly queryLimit?: number
   private readonly bounds: DateBounds
+  private readonly firstPageQuery: FirstPageQuery
   private layout?: ProjectionLayout
 
   constructor(
@@ -182,6 +198,8 @@ export class SObjectReader implements ReaderPort {
     this.queryLimit = config.queryLimit
     this.bounds = config.bounds
     this.queryFields = queryFieldsOf(config.fields, config.dateField)
+    this.firstPageQuery =
+      FIRST_PAGE_QUERY[config.resource ?? DEFAULT_SOQL_RESOURCE](sfPort)
   }
 
   async header(): Promise<string> {
@@ -202,7 +220,7 @@ export class SObjectReader implements ReaderPort {
 
   async fetch(watermark?: Watermark): Promise<FetchResult> {
     const firstPage: QueryResult<Record<string, unknown>> =
-      await this.sfPort.query(this.buildSoql(watermark))
+      await this.firstPageQuery(this.buildSoql(watermark))
     const stream = new SObjectPageStream({
       sfPort: this.sfPort,
       firstPage,
