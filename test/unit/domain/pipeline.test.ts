@@ -3016,7 +3016,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       'LastModifiedDate',
       undefined,
       undefined,
-      DateBounds.none()
+      DateBounds.none(),
+      'query'
     )
     const projectFn = vi.fn()
     const fetcher: ReaderPort = {
@@ -3133,7 +3134,8 @@ describe('executePipeline — fan-out constraint regression', () => {
         'LastModifiedDate',
         undefined,
         undefined,
-        DateBounds.none()
+        DateBounds.none(),
+        'query'
       ),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
@@ -3242,7 +3244,8 @@ describe('executePipeline — fan-out constraint regression', () => {
         'LastModifiedDate',
         undefined,
         undefined,
-        DateBounds.none()
+        DateBounds.none(),
+        'query'
       ),
       watermarkKey: WatermarkKey.fromEntry({
         sourceOrg: 'src',
@@ -3296,7 +3299,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       'LastModifiedDate',
       undefined,
       undefined,
-      DateBounds.none()
+      DateBounds.none(),
+      'query'
     )
     const fetcher: ReaderPort = {
       fetch: vi.fn(async () => createFetchResult(['"v1","v2"'])),
@@ -3383,7 +3387,8 @@ describe('executePipeline — fan-out constraint regression', () => {
       'LastModifiedDate',
       undefined,
       undefined,
-      DateBounds.none()
+      DateBounds.none(),
+      'query'
     )
     const projectFn = vi.fn()
     const fetcher: ReaderPort = {
