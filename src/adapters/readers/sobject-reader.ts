@@ -91,7 +91,7 @@ function layoutRowEncoder(
 ): RowEncoder {
   const { augmentSlots, outputIndex } = layout
   return record => {
-    // Size hint only: join renders unassigned slots as empty, same as the preallocated holes.
+    // Size hint only: the projection rejects any unprovided dataset field, so every slot is assigned before join.
     const out = new Array<string>(layout.targetSize)
     for (let i = 0; i < augmentSlots.length; i++) {
       out[augmentSlots[i].pos] = augmentSlots[i].quoted
