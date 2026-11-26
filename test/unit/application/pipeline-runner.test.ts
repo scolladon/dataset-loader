@@ -246,6 +246,75 @@ describe('PipelineRunner', () => {
     expect(entries[0].fetcher).toBe(entries[1].fetcher)
   })
 
+  it('given two SObject entries differing only by queryAll, when running, then each gets its own fetcher', async () => {
+    // Arrange
+    const { runner } = makeRunner()
+
+    // Act
+    await runner.run(
+      [resolved(sobject, 0), resolved({ ...sobject, queryAll: true }, 1)],
+      new Map([['src', makeSfPort()]]),
+      WatermarkStore.empty(),
+      state,
+      DateBounds.none()
+    )
+
+    // Assert
+    const call = vi.mocked(executePipeline).mock.calls[0][0]
+    const entries = call.entries as readonly PipelineEntry[]
+    expect(entries[0].fetcher).not.toBe(entries[1].fetcher)
+  })
+
+  it('given an SObject entry with queryAll, when its fetcher fetches, then the first page goes through queryAll', async () => {
+    // Arrange
+    const { runner } = makeRunner()
+    const sfPort = makeSfPort()
+
+    // Act
+    await runner.run(
+      [resolved({ ...sobject, queryAll: true })],
+      new Map([['src', sfPort]]),
+      WatermarkStore.empty(),
+      state,
+      DateBounds.none()
+    )
+    const call = vi.mocked(executePipeline).mock.calls[0][0]
+    const entries = call.entries as readonly PipelineEntry[]
+    await entries[0].fetcher.fetch()
+
+    // Assert
+    expect(sfPort.queryAll).toHaveBeenCalledWith(
+      expect.stringContaining('FROM Account')
+    )
+    expect(sfPort.query).not.toHaveBeenCalledWith(
+      expect.stringContaining('FROM Account')
+    )
+  })
+
+  it('given an SObject entry without queryAll, when its fetcher fetches, then the first page goes through query', async () => {
+    // Arrange
+    const { runner } = makeRunner()
+    const sfPort = makeSfPort()
+
+    // Act
+    await runner.run(
+      [resolved(sobject)],
+      new Map([['src', sfPort]]),
+      WatermarkStore.empty(),
+      state,
+      DateBounds.none()
+    )
+    const call = vi.mocked(executePipeline).mock.calls[0][0]
+    const entries = call.entries as readonly PipelineEntry[]
+    await entries[0].fetcher.fetch()
+
+    // Assert
+    expect(sfPort.query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM Account')
+    )
+    expect(sfPort.queryAll).not.toHaveBeenCalled()
+  })
+
   it('given SObject entry, when running, then readerKey is an sobject-kind key (not elf-kind)', async () => {
     // Arrange — kills the ConditionalExpression mutant in createReaderKey
     // (`if (isElfEntry(entry))` → `if (true)`) by asserting that an SObject

@@ -1625,6 +1625,74 @@ describe('DatasetLoad NUT', () => {
       expect(written).toContain('Id,Name')
       expect(written).toContain('Acme')
     })
+
+    it('given file-target SObject entry with queryAll and a second page, when running pipeline, then reads through queryAll, follows the returned URL and writes the deleted row', async () => {
+      // Arrange
+      const liveRow = {
+        Id: '001000000000001',
+        Name: 'Acme',
+        IsDeleted: false,
+        LastModifiedDate: LOG_DATE_MAR_01,
+      }
+      const deletedRow = {
+        Id: '001000000000002',
+        Name: 'Beta',
+        IsDeleted: true,
+        LastModifiedDate: LOG_DATE_MAR_02,
+      }
+      const sourceUrls: string[] = []
+      const outputPath = join(
+        os.tmpdir(),
+        `nut-file-queryall-${Date.now()}.csv`
+      )
+      tmp = createTempFiles(
+        makeConfigJson([
+          fileSObjectEntry(outputPath, {
+            fields: ['Id', 'Name', 'IsDeleted'],
+            queryAll: true,
+          }),
+        ])
+      )
+      applyConnection(
+        new FakeConnectionBuilder()
+          .onQuery('Organization')
+          .returns(defaultOrgResponse())
+          .onQuery('Account')
+          .including('/queryAll')
+          .calls(url => {
+            sourceUrls.push(url)
+            return defaultSObjectQueryResponse(
+              [liveRow],
+              false,
+              '/services/data/v65.0/query/01g000000000002-2000'
+            )
+          })
+          .onGet('query/01g000000000002-2000')
+          .returns(defaultSObjectQueryResponse([deletedRow], true))
+          .build()
+      )
+
+      // Act
+      const sut = await runCommand([
+        '--config-file',
+        tmp.configPath,
+        '--state-file',
+        tmp.statePath,
+      ])
+
+      // Assert
+      expect(sut).toEqual({
+        entriesProcessed: 1,
+        entriesSkipped: 0,
+        entriesFailed: 0,
+        groupsUploaded: 1,
+      })
+      expect(sourceUrls).toHaveLength(1)
+      expect(sourceUrls[0]).toContain('/queryAll?q=')
+      const written = readFileSync(outputPath, 'utf-8')
+      expect(written).toContain('Id,Name,IsDeleted')
+      expect(written).toContain('"true"')
+    })
   })
 
   describe('e2e pipeline - reader fan-out', () => {

@@ -1,3 +1,4 @@
+import { type SoqlResource } from '../ports/types.js'
 import { type DateBounds } from './date-bounds.js'
 
 // NUL (\0) separates key components so no component value can collide with
@@ -30,7 +31,8 @@ export class ReaderKey {
     dateField: string,
     where: string | undefined,
     queryLimit: number | undefined,
-    bounds: DateBounds
+    bounds: DateBounds,
+    resource: SoqlResource
   ): ReaderKey {
     return new ReaderKey(
       [
@@ -42,6 +44,7 @@ export class ReaderKey {
         where ?? '',
         String(queryLimit ?? 0),
         bounds.toString(),
+        resource,
       ].join(KEY_SEPARATOR)
     )
   }
