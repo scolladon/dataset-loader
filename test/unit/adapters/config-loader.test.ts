@@ -5,8 +5,11 @@ import {
   parseConfig,
   type ResolvedEntry,
   resolveConfig,
+  type SObjectEntry,
+  soqlResourceOf,
 } from '../../../src/adapters/config-loader.js'
 import { type SalesforcePort } from '../../../src/ports/types.js'
+import { sobjectEntry } from '../../fixtures/application.js'
 
 vi.mock('node:fs/promises')
 
@@ -1298,6 +1301,116 @@ describe('ConfigLoader', () => {
 
       // Act & Assert
       await expect(parseConfig('config.json')).rejects.toThrow('Unrecognized')
+    })
+
+    describe('queryAll', () => {
+      const sobject = {
+        sObject: 'Account',
+        fields: ['Id'],
+        sourceOrg: 'src',
+        targetOrg: 'ana',
+        targetDataset: 'DS',
+      }
+      const parseEntry = async (entry: object) => {
+        vi.mocked(fs.readFile).mockResolvedValue(
+          JSON.stringify({ entries: [entry] })
+        )
+        return parseConfig('config.json')
+      }
+
+      it('given an SObject entry with queryAll true, when parsing, then the entry carries queryAll true', async () => {
+        // Arrange
+        const entry = { ...sobject, queryAll: true }
+
+        // Act
+        const result = await parseEntry(entry)
+
+        // Assert
+        expect(result.entries[0]).toHaveProperty('queryAll', true)
+      })
+
+      it('given an SObject entry with a non-boolean queryAll, when parsing, then rejects with an expected-boolean error', async () => {
+        // Arrange
+        const entry = { ...sobject, queryAll: 'yes' }
+
+        // Act & Assert
+        await expect(parseEntry(entry)).rejects.toThrow('expected boolean')
+      })
+
+      it('given an SObject entry without queryAll, when parsing, then the parsed entry has no queryAll property', async () => {
+        // Arrange
+        const entry = { ...sobject }
+
+        // Act
+        const result = await parseEntry(entry)
+
+        // Assert
+        expect('queryAll' in result.entries[0]).toBe(false)
+      })
+
+      it('given an ELF entry with queryAll, when parsing, then rejects with unrecognized key', async () => {
+        // Arrange
+        const entry = {
+          eventLog: 'Login',
+          interval: 'Daily',
+          sourceOrg: 'src',
+          targetOrg: 'ana',
+          targetDataset: 'DS',
+          queryAll: true,
+        }
+
+        // Act & Assert
+        await expect(parseEntry(entry)).rejects.toThrow('Unrecognized')
+      })
+
+      it('given a CSV entry with queryAll, when parsing, then rejects with unrecognized key', async () => {
+        // Arrange
+        const entry = {
+          csvFile: './data/login.csv',
+          targetFile: './out/login.csv',
+          queryAll: true,
+        }
+
+        // Act & Assert
+        await expect(parseEntry(entry)).rejects.toThrow('Unrecognized')
+      })
+    })
+
+    describe('soqlResourceOf', () => {
+      const entry: SObjectEntry = sobjectEntry
+
+      it('given queryAll true, when resolving the soql resource, then returns queryAll', () => {
+        // Arrange
+        const sut = { ...entry, queryAll: true }
+
+        // Act
+        const result = soqlResourceOf(sut)
+
+        // Assert
+        expect(result).toBe('queryAll')
+      })
+
+      it('given no queryAll, when resolving the soql resource, then returns query', () => {
+        // Arrange
+        const sut = { ...entry }
+
+        // Act
+        const result = soqlResourceOf(sut)
+
+        // Assert
+        expect(result).toBe('query')
+      })
+
+      it('given queryAll false, when resolving the soql resource, then returns query', () => {
+        // Arrange
+        const sut = { ...entry, queryAll: false }
+
+        // Act
+        const result = soqlResourceOf(sut)
+
+        // Assert
+        expect(result).toBe('query')
+      })
     })
 
     it('given CSV config with explicit operation Append, when parsing, then accepts it', async () => {

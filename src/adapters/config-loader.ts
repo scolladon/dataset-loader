@@ -13,6 +13,7 @@ import {
   SF_IDENTIFIER_PATTERN,
   type SObjectShape,
   SOQL_RELATIONSHIP_PATH_PATTERN,
+  type SoqlResource,
 } from '../ports/types.js'
 
 interface BaseEntry {
@@ -35,6 +36,7 @@ export interface SObjectEntry extends BaseEntry, SObjectShape {
   dateField: string
   where?: string
   limit?: number
+  queryAll?: boolean
 }
 
 export interface CsvEntry extends CsvShape {
@@ -286,6 +288,7 @@ const sobjectEntrySchema = baseEntrySchema
     // and comment markers; config file is still a trusted input.
     where: whereClause.optional(),
     limit: z.number().int().positive().optional(),
+    queryAll: z.boolean().optional(),
   })
   .strict()
 
@@ -584,4 +587,8 @@ export function entryKind(entry: ConfigEntry): 'csv' | 'elf' | 'sobject' {
   if (isCsvEntry(entry)) return 'csv'
   if (isElfEntry(entry)) return 'elf'
   return 'sobject'
+}
+
+export function soqlResourceOf(entry: SObjectEntry): SoqlResource {
+  return entry.queryAll ? 'queryAll' : 'query'
 }
