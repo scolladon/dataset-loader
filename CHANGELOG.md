@@ -1,6 +1,13 @@
 <!-- markdownlint-disable MD013 MD024 -- release-please emits "Features" headings per version and long commit-message lines -->
 # Changelog
 
+## [2.1.0](https://github.com/scolladon/dataset-loader/compare/v2.0.2...v2.1.0) (2026-11-26)
+
+
+### Features
+
+* add opt-in queryAll support to sobject entries ([#74](https://github.com/scolladon/dataset-loader/issues/74)) ([5ced71e](https://github.com/scolladon/dataset-loader/commit/5ced71e134a66d2720930a876a9f96265468ed80))
+
 ## [2.0.2](https://github.com/scolladon/dataset-loader/compare/v2.0.1...v2.0.2) (2026-11-17)
 
 
